@@ -22,7 +22,8 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
   const plan = deps.plan ?? planInterior();
   const shell = buildShell(plan, ext, deps);
   const t0 = performance.now();
-  const cut = carve(Object.values(ext.bins), shell.carve);
+  // the courtyard paving is ground, not shell: the plinth and doorway carves stop at the walls' faces
+  const cut = carve(Object.entries(ext.bins).filter(([k]) => k !== 'pave').map(([, b]) => b), shell.carve);
   // the real-stone layer (src/castle/stones) must not lay stones where rooms and doorways now are
   for (const v of shell.carve) ext.exclude(v.pts);
   const carveMs = performance.now() - t0;

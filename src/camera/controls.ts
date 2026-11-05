@@ -39,6 +39,13 @@ export const VIEWS: View[] = [
   // walk views of the moat edge: by the bridge looking along it, and along the revetment
   { name: 'bridge', label: 'Bridge', mode: 'walk', pos: [20.7, 0, 53.4], target: [14.5, 1.2, 67.8] },
   { name: 'rim', label: 'Moat edge', mode: 'walk', pos: [48.4, 0, 32.0], target: [59.5, 1.2, 13.5] },
+  // courtyard paving: on foot looking at the ground 1.5 m ahead (by the flag path), 0.5 m over the cobbles at
+  // the S wing's foot, and from the gate passage out into the courtyard
+  { name: 'court-ground', label: 'Courtyard ground', mode: 'walk', pos: [2.6, 0, 3.4], target: [3.8, GROUND, 2.5] },
+  { name: 'court-close', label: 'Cobbles 0.5 m', mode: 'fly', pos: [7.5, GROUND + 0.52, 5.6], target: [8.0, GROUND, 6.9], clamp: false },
+  { name: 'gatepass-court', label: 'Passage to courtyard', mode: 'walk', pos: [4.1, 0, 12.8], target: [5.0, GROUND + 0.8, -2] },
+  // the stair tower's foot where the N and E wings meet it (the plinth that leaned there, Anders' 2026-11-05 capture)
+  { name: 'court-stair', label: 'Stair tower foot', mode: 'walk', pos: [-1.0, 0, -1.0], target: [11.0, GROUND + 1.6, -9.5] },
 ];
 
 /** Where play starts: on the lawn just south of the gate, facing it. Not a bookmark (trees avoid those). */
@@ -153,6 +160,11 @@ export class CameraRig {
     this.camera.lookAt(target);
     this.orbit.target.copy(target);
     this.setMode(v.mode);
+    if (v.mode === 'fly') {
+      // leaving walk mode hands the fly camera the player's look and clamp; a fly bookmark keeps its own
+      const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+      this.yaw = e.y; this.pitch = e.x; this.clampFly = v.clamp !== false;
+    }
     // only orbit views go through the orbit control: its update pushes a close bookmark out to
     // minDistance and clamps the polar angle, which lifted walk views looking up at the walls to the
     // target's height (the courtyard view ended up inside the west wing)

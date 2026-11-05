@@ -1,7 +1,7 @@
 // Shared fixtures for tests that walk the real island: placeholder materials and a coarse stand-in for
 // the render terrain (the same grid as buildTerrain's near grid, plus one near and one far rock).
 import * as THREE from 'three/webgpu';
-import type { MatKey } from '../src/castle/builder';
+import type { BinKey } from '../src/castle/builder';
 import { ISLAND, MOAT_OUTER, heightAt } from '../src/world/terrain';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { buildCastle } from '../src/castle/castle';
@@ -20,7 +20,7 @@ export function islandCastle() {
   return { builder, plan, bridge: bridgeInfo(plan.walkable, plan.d) };
 }
 
-export const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, m])) as unknown as Record<MatKey, THREE.Material>; };
+export const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'pave'] as BinKey[]).map((k) => [k, m])) as unknown as Record<BinKey, THREE.Material>; };
 export const doorMats = () => ({ wood: new THREE.MeshBasicMaterial(), iron: new THREE.MeshBasicMaterial(), trim: new THREE.MeshBasicMaterial() });
 
 /** Where the test terrain's near rock sits (12 m in from an island outline vertex). */

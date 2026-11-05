@@ -6,6 +6,7 @@ import {
   masonry, layCourses, masonryLayout, masonryWarp, stoneDistance, stoneDetail, voronoi, encodeId, lithOf, TileNoise,
   RUBBLE, ASHLAR, DRESSED, LITHS, LITH_COL, LITH_DETAIL, DETAIL_TILE, rubbleSet, ashlarSet, dressedSet,
   slate, planks, macroNoise, waterNormals, groundLayers, STONE_GREYS, PIN_COL, type MasonryOpts, type TexSet,
+  cobbles, cobbleSet, flagSet, COBBLES, FLAGS,
 } from '../src/render/texgen';
 
 // 1 m tiles at 256 px: 3.9 mm texels, so joints are several texels wide like the real 2048 px / 4 m set
@@ -247,5 +248,54 @@ describe('other generated sets', () => {
     const n = new TileNoise(5);
     expect(n.n(0.25, 0.5, 8)).toBeCloseTo(n.n(1.25, -0.5, 8), 9);
     expect(Math.abs(n.fbm(0.1, 0.2, 4, 3))).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('courtyard paving textures', () => {
+  // 1 m at 256 px (3.9 mm texels) as above: cobbles about 36 px across
+  const o = { ...COBBLES, size: 256, tile: 1 }, c = cobbles(o, mulberry32(5)), N = 256;
+  const sdf = (i: number) => (c.data[i * 4 + 3] / 255 - 0.5) * 2 * o.sdfRange; // metres, + inside a cobble
+  it('is a pure function of its rng and noise', () => {
+    const again = cobbles(o, mulberry32(5)), other = cobbles(o, mulberry32(6));
+    expect(same(again.data, c.data) && same(again.albedo, c.albedo) && same(again.normal, c.normal)).toBe(true);
+    expect(same(other.data, c.data)).toBe(false);
+    expect(cobbleSet(32).size).toBe(32);
+  });
+  it('packs the cobbles with earth joints between them: mostly stone, joints from the SDF', () => {
+    let joint = 0;
+    for (let i = 0; i < N * N; i++) {
+      const isJoint = c.data[i * 4 + 1] === 255;
+      if (isJoint) joint++;
+      const q = (2 * o.sdfRange) / 255; // one byte of the SDF
+      if (isJoint) expect(sdf(i)).toBeLessThanOrEqual(q); else expect(sdf(i)).toBeGreaterThanOrEqual(-q);
+    }
+    expect(joint / (N * N)).toBeGreaterThan(0.08);
+    expect(joint / (N * N)).toBeLessThan(0.35);
+  });
+  it('domes each cobble above the bed, with ids of the cobble lithologies', () => {
+    let crown = 0, bed = 1;
+    const ids = new Set<number>();
+    for (let i = 0; i < N * N; i++) {
+      const h = c.data[i * 4] / 255;
+      if (sdf(i) > 0.02) { crown = Math.max(crown, h); ids.add(c.data[i * 4 + 2]); } else if (sdf(i) < -0.004) bed = Math.min(bed, h);
+    }
+    expect(crown - bed).toBeGreaterThan(0.35);
+    expect([...ids].every((id) => id % 51 < 50 && Math.floor(id / 51) < LITHS.length)).toBe(true);
+    expect(new Set([...ids].map((id) => Math.floor(id / 51))).size).toBeGreaterThan(3);
+  });
+  it('tiles: the first and last rows and columns continue each other', () => {
+    const h = (x: number, y: number) => c.data[(((y + N) % N) * N + ((x + N) % N)) * 4];
+    let seamR = 0, seamC = 0, all = 0;
+    for (let k = 0; k < N; k++) { seamR += Math.abs(h(k, 0) - h(k, -1)); seamC += Math.abs(h(0, k) - h(-1, k)); }
+    for (let y = 1; y < N; y++) for (let x = 0; x < N; x++) all += Math.abs(h(x, y) - h(x, y - 1));
+    const mean = all / (N - 1);
+    expect(seamR).toBeLessThan(mean * 2); expect(seamC).toBeLessThan(mean * 2);
+  });
+  it('lays the path flags in courses along the path, with a joint on both edges', () => {
+    const f = masonry({ ...FLAGS, size: 128 }, mulberry32(3));
+    let edge = 0;
+    for (let x = 0; x < 128; x++) if (f.data[x * 4 + 1] === 255 || f.data[(127 * 128 + x) * 4 + 1] === 255) edge++;
+    expect(edge / 128).toBeGreaterThan(0.9);
+    expect(flagSet(32).size).toBe(32);
   });
 });

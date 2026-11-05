@@ -9,6 +9,7 @@ async function inline(jobs: string[]): Promise<Record<string, Out>> {
     detail: () => ({ data: T.stoneDetail() }),
     slate: () => ({ ...T.slate() }), planks: () => ({ ...T.planks() }), macro: () => ({ data: T.macroNoise() }),
     ground: () => ({ ...T.groundLayers() }), water: () => ({ data: T.waterNormals() }),
+    cobbles: () => ({ ...T.cobbleSet() }), flags: () => ({ ...T.flagSet() }),
   };
   const out: Record<string, Out> = {};
   for (const j of jobs) out[j] = run[j]();

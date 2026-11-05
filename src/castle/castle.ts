@@ -1,11 +1,12 @@
 // The castle exterior, generated from spec.ts + layout.ts (plan → layout → geometry → dressing).
 // Exterior only for now: walls with real window openings, buttresses and blind arches, corbel tables
 // with machicolations, crenellations, roofs, chimneys, towers, gatehouse, stair tower.
-import { rngFor, range, type Rng } from '../core/rng';
+import { rngFor, type Rng } from '../core/rng';
 import { type V2, add, scale, sub, norm, lerp2, len } from '../core/math2d';
 import { Builder, offsetPoly, pointedArch, roundArch, rect, at, wallFrame, type MatKey, type Opening, type Frame } from './builder';
 import { GROUND, floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, type TowerSpec } from './spec';
-import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, stairTowerPoly, courtyard, type WingQuad } from './layout';
+import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, stairTowerPoly, type WingQuad } from './layout';
+import { buildPaving, wellCentre } from './paving';
 import { OPEN_W, OPEN_H, dressed, boxOf, fitOpening, masses, type Box, type Dressed, type Face, type Mass } from './openings';
 
 const G0 = GROUND - 1.6; // walls start below the ground so the terrain never shows a gap
@@ -28,7 +29,7 @@ export function buildCastle(r: Rng = rngFor('castle')) {
   gatehouse(B, r, lights, ctx);
   eastTurret(B, r, lights, ctx);
   stairTower(B, r);
-  courtyardDressing(B, r);
+  courtyardDressing(B);
   B.stoneFloor = -0.35;
   return { builder: B, lights, openings: ctx.log };
 }
@@ -304,9 +305,11 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[], ctx: Ctx) 
   B.cap('lead', [a, b, ib, ia], w.top - 0.3, true);
   for (const p of plans) windowDressing(B, r, p.f, p.kind, p.s, p.y, w.phase, lights);
 
-  // battered plinth
-  B.loft(mat, offsetPoly(w.quad, 1.1), G0, offsetPoly(w.quad, 0.0), BATTER_TOP);
-  B.prism('trim', offsetPoly(w.quad, 0.08), BATTER_TOP - 0.05, BATTER_TOP + 0.2);
+  // battered plinth on the outer face and the (buried) ends; the courtyard face (edge 2, ib → ia) rises
+  // straight from the paving: a batter there was carved away along the faces but left a leaning slab
+  // where the carve stops short of the stair tower. Its plinth course stays inside the wall there too.
+  B.loft(mat, offsetPoly(w.quad, [1.1, 1.1, 0, 1.1]), G0, w.quad, BATTER_TOP, [2]);
+  B.prism('trim', offsetPoly(w.quad, [0.08, 0.08, -0.2, 0.08]), BATTER_TOP - 0.05, BATTER_TOP + 0.2);
   // string courses over the undercroft and under the top floor
   stringCourse(B, w.quad, floorBase(1) - 0.2);
   if (w.phase === 'new') stringCourse(B, w.quad, floorBase(4) - 0.15, 0.1);
@@ -660,15 +663,25 @@ function stairTower(B: Builder, r: Rng) {
   void r;
 }
 
-function courtyardDressing(B: Builder, r: Rng) {
-  const ct = courtyard();
-  const m: V2 = [(ct[0][0] + ct[2][0]) / 2, (ct[0][1] + ct[2][1]) / 2];
-  const wc = add(m, [-3.5 + r(), 2 + r()]);
-  B.cyl('trim', wc[0], wc[1], 1.0, 1.0, GROUND - 0.5, GROUND + 0.85, 20, { top: null });
-  B.cyl('trim', wc[0], wc[1], 0.72, 0.72, GROUND - 0.5, GROUND + 0.85, 20, { top: null, inward: true });
-  B.cap('void', Array.from({ length: 16 }, (_, i) => [wc[0] + Math.cos((i / 16) * Math.PI * 2) * 0.75, wc[1] + Math.sin((i / 16) * Math.PI * 2) * 0.75] as V2), GROUND + 0.5, true);
-  B.ringPrism('trim', Array.from({ length: 20 }, (_, i) => [wc[0] + Math.cos((i / 20) * Math.PI * 2) * 1.05, wc[1] + Math.sin((i / 20) * Math.PI * 2) * 1.05] as V2), Array.from({ length: 20 }, (_, i) => [wc[0] + Math.cos((i / 20) * Math.PI * 2) * 0.7, wc[1] + Math.sin((i / 20) * Math.PI * 2) * 0.7] as V2), GROUND + 0.85, GROUND + 1.0, false);
-  for (const s of [-1, 1]) B.box('wood', [wc[0] + s * 0.95, GROUND + 1.9, wc[1]], [0.14, 2.2, 0.14]);
-  B.box('wood', [wc[0], GROUND + 2.9, wc[1]], [2.2, 0.16, 0.16]);
-  void range;
+function courtyardDressing(B: Builder) {
+  buildPaving(B);
+  const wc = wellCentre(), y = GROUND;
+  B.cyl('trim', wc[0], wc[1], 1.0, 1.0, y - 0.5, y + 0.85, 20, { top: null });
+  B.cyl('trim', wc[0], wc[1], 0.72, 0.72, y - 0.5, y + 0.85, 20, { top: null, inward: true });
+  B.cap('void', Array.from({ length: 16 }, (_, i) => [wc[0] + Math.cos((i / 16) * Math.PI * 2) * 0.75, wc[1] + Math.sin((i / 16) * Math.PI * 2) * 0.75] as V2), y + 0.5, true);
+  B.ringPrism('trim', Array.from({ length: 20 }, (_, i) => [wc[0] + Math.cos((i / 20) * Math.PI * 2) * 1.05, wc[1] + Math.sin((i / 20) * Math.PI * 2) * 1.05] as V2), Array.from({ length: 20 }, (_, i) => [wc[0] + Math.cos((i / 20) * Math.PI * 2) * 0.7, wc[1] + Math.sin((i / 20) * Math.PI * 2) * 0.7] as V2), y + 0.85, y + 1.0, false);
+  for (const s of [-1, 1]) B.box('wood', [wc[0] + s * 0.95, y + 1.9, wc[1]], [0.14, 2.2, 0.14]);
+  B.box('wood', [wc[0], y + 2.9, wc[1]], [2.2, 0.16, 0.16]);
+  // the windlass between the posts: an oak roller with a few turns of rope on it, the rope down to a
+  // hooped bucket hanging over the shaft, and an iron crank through the east post
+  B.box('wood', [wc[0], y + 2.15, wc[1]], [1.76, 0.2, 0.2]);
+  B.box('wood', [wc[0] - 0.1, y + 2.15, wc[1]], [0.5, 0.235, 0.235]);
+  B.box('wood', [wc[0] + 0.05, y + 1.69, wc[1] + 0.11], [0.035, 0.9, 0.035]);
+  B.cyl('wood', wc[0] + 0.05, wc[1] + 0.11, 0.15, 0.17, y + 0.98, y + 1.26, 12, { top: null });
+  B.cyl('wood', wc[0] + 0.05, wc[1] + 0.11, 0.135, 0.135, y + 1.0, y + 1.02, 12);
+  for (const h of [1.04, 1.21]) B.cyl('iron', wc[0] + 0.05, wc[1] + 0.11, 0.155 + (h - 0.98) * 0.07, 0.157 + (h - 0.98) * 0.07, y + h, y + h + 0.025, 12, { top: null });
+  B.box('iron', [wc[0] + 0.05, y + 1.32, wc[1] + 0.11], [0.3, 0.02, 0.02]);
+  B.box('iron', [wc[0] + 1.1, y + 2.15, wc[1]], [0.18, 0.04, 0.04]);
+  B.box('iron', [wc[0] + 1.17, y + 1.98, wc[1]], [0.04, 0.38, 0.04]);
+  B.box('iron', [wc[0] + 1.26, y + 1.8, wc[1]], [0.22, 0.04, 0.04]);
 }

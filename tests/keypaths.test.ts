@@ -10,7 +10,7 @@ import type { V3 } from '../src/castle/interior/types';
 import { heightAt } from '../src/world/terrain';
 import { pointInPoly } from '../src/core/math2d';
 import { courtyard } from '../src/castle/layout';
-import { GROUND } from '../src/castle/spec';
+import { PAVE_Y } from '../src/castle/paving';
 import { MOAT_TUNNEL_Y } from '../src/castle/interior/plan';
 import { setupPlay, playDoors } from '../src/player/setup';
 import { ScriptedInput } from '../src/player/input';
@@ -125,7 +125,9 @@ describe('key paths', { timeout: 120_000 }, () => {
     const w = follow(pts.slice(shut.reached));
     expect(w.reached, JSON.stringify(w)).toBe(w.of);
     expect(pointInPoly(courtyard(), w.feet[0], w.feet[2])).toBe(true);
-    expect(w.feet[1]).toBeCloseTo(GROUND, 0);
+    expect(w.feet[1]).toBeCloseTo(PAVE_Y, 1); // standing on the paving, not the earth under it
+    expect(play.player.surfaceTag).toBe('castle-pave'); // the last footsteps were on the cobbles…
+    expect(play.player.surface).toBe('stone'); // …and sounded like stone
     expect(shut.minY).toBeGreaterThan(1.5); // down the bridge-head steps to the lawn, never into the moat
   });
 
