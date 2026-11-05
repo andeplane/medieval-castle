@@ -1,8 +1,10 @@
 // Sky, sun, image-based light and aerial-perspective fog (game-materials-shaders/water-sky-fog.md).
 import * as THREE from 'three/webgpu';
-import { fog, densityFogFactor, uniform, mix, positionWorld, smoothstep, float } from 'three/tsl';
+import { fog, densityFogFactor, uniform, mix, positionWorld, smoothstep, float, vec3, vec4, luminance } from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { castleCentre } from '../castle/layout';
+import { sunDirection } from '../render/materials';
+import { NearFarShadowNode } from '../render/shadows';
 
 export interface SkyRig {
   sky: SkyMesh; sun: THREE.DirectionalLight; sunDir: THREE.Vector3;
@@ -21,25 +23,37 @@ export function makeSky(renderer: THREE.WebGPURenderer, scene: THREE.Scene): Sky
   envSky.scale.setScalar(80);
   for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG'] as const) envSky[k].value = sky[k].value;
   envSky.cloudCoverage.value = 0; envSky.showSunDisc.value = 0;
+  // The ambient light is the sky seen through a grey filter: a clear blue sky would turn every shaded
+  // wall cyan (STYLE.md: shade stays grey-green). Keep 30 % of the sky's saturation, lean it neutral.
+  {
+    const mat = envSky.material as unknown as THREE.NodeMaterial;
+    const sky0 = mat.colorNode as unknown as THREE.Node<'vec4'>;
+    const rgb = sky0.xyz, l = luminance(rgb);
+    mat.colorNode = vec4(mix(vec3(l), rgb, 0.3).mul(vec3(1.04, 1.02, 0.95)), 1);
+  }
   const envScene = new THREE.Scene();
   envScene.add(envSky);
   // a dull ground hemisphere so reflections and ambient from below are earthy, not sky blue
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 32), new THREE.MeshBasicNodeMaterial({ color: 0x2d3320 }));
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 32), new THREE.MeshBasicNodeMaterial({ color: 0x353a27 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -2;
   envScene.add(ground);
   const pmrem = new THREE.PMREMGenerator(renderer);
 
   const sun = new THREE.DirectionalLight(0xfff1df, 3.4);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(4096, 4096);
-  const sc = sun.shadow.camera;
-  sc.left = -82; sc.right = 82; sc.top = 82; sc.bottom = -82; sc.near = 10; sc.far = 600;
   sun.shadow.bias = -0.0002; sun.shadow.normalBias = 0.04;
   const c = castleCentre();
   sun.target.position.set(c[0], 10, c[1]);
   scene.add(sun, sun.target);
-  // warm bounce from the ground so shaded stone is not sky-blue
-  const bounce = new THREE.HemisphereLight(0xc9d2dc, 0x6b6248, 0.55);
+  // shadows: a static 4k map over the island (re-rendered when the sun moves) plus a 2k map
+  // that follows the camera for crisp shadows within ~25 m (render/shadows.ts)
+  const shadowNode = new NearFarShadowNode(sun, {
+    centre: new THREE.Vector3(c[0], 10, c[1]), farHalf: 105, farMap: 4096, farRadius: 2.5,
+    nearHalf: 24, nearMap: 2048, nearRadius: 1.5, nearAhead: 14, nearMaxHeight: 70,
+  });
+  (sun.shadow as unknown as { shadowNode: unknown }).shadowNode = shadowNode;
+  // bounce: neutral sky above, grass-green ground below, so shaded stone reads grey-green
+  const bounce = new THREE.HemisphereLight(0xcfd0cb, 0x5d6446, 0.75);
   scene.add(bounce);
 
   // fog: thin everywhere, a bit denser low down (valley haze); colour follows the horizon
@@ -60,6 +74,7 @@ export function makeSky(renderer: THREE.WebGPURenderer, scene: THREE.Scene): Sky
       const elR = THREE.MathUtils.degToRad(el), azR = THREE.MathUtils.degToRad(az);
       sunDir.set(Math.sin(azR) * Math.cos(elR), Math.sin(elR), -Math.cos(azR) * Math.cos(elR)).normalize();
       sky.sunPosition.value.copy(sunDir);
+      sunDirection.value.copy(sunDir);
       envSky.sunPosition.value.copy(sunDir);
       sun.position.set(c[0] + sunDir.x * 300, 10 + sunDir.y * 300, c[1] + sunDir.z * 300);
       const warm = 1 - Math.min(1, el / 25);
@@ -68,7 +83,7 @@ export function makeSky(renderer: THREE.WebGPURenderer, scene: THREE.Scene): Sky
       fogColor.value.setRGB(0.62 + 0.18 * warm, 0.68 + 0.02 * warm, 0.76 - 0.2 * warm);
       if (scene.environment) (scene.environment as THREE.Texture).dispose();
       scene.environment = pmrem.fromScene(envScene as unknown as THREE.Scene, 0, 0.1, 200).texture;
-      scene.environmentIntensity = 0.32;
+      scene.environmentIntensity = 0.5;
     },
   };
   rig.setTime(rig.hours);

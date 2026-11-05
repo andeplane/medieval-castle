@@ -31,9 +31,10 @@ describe('interior plan', () => {
     expect(P.unplaced).toEqual([]);
   });
 
-  it('holds for 64 seeds', () => {
+  // 64 seeds, in four batches so each stays well inside the test timeout on a loaded CI machine
+  it.each([0, 16, 32, 48])('holds for seeds %i…+15', (from) => {
     const bad: string[] = [];
-    for (let s = 0; s < 64; s++) {
+    for (let s = from; s < from + 16; s++) {
       const Q = planInterior(s * 7919 + 1);
       const rep = validatePlan(Q);
       if (!rep.ok || Q.unplaced.length) bad.push(`seed ${s}: ${[...rep.errors, ...Q.unplaced].slice(0, 3).join('; ')}`);
@@ -294,5 +295,26 @@ describe('interior camera bookmarks', () => {
     for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar']) expect(names).toContain(n);
     for (const x of v) { expect(x.mode).toBe('fly'); expect(x.clamp).toBe(false); expect(x.pos.every(Number.isFinite)).toBe(true); }
     expect(interiorViews({ ...P, rooms: [], doors: [], sallyPort: null })).toEqual([]);
+  });
+});
+
+describe('navigation on stairs', () => {
+  it('follows each stair walking line from landing to landing', () => {
+    const G = navGraph(P);
+    for (const s of P.stairs) {
+      const flights = G.edges.filter((e) => e.stair === s.id && e.line);
+      expect(flights.length, s.id).toBe(s.landings.length - 1);
+      for (const e of flights) {
+        const a = G.nodes.get(e.a)!, b = G.nodes.get(e.b)!;
+        expect(e.line!.length).toBeGreaterThanOrEqual(2);
+        expect(e.line![0][1]).toBeCloseTo(a.pos[1], 1);
+        expect(e.line![e.line!.length - 1][1]).toBeCloseTo(b.pos[1], 1);
+        expect(e.cost).toBeGreaterThan(Math.abs(b.pos[1] - a.pos[1]));
+      }
+    }
+    // landings without doors still link up
+    const bare = { ...P, stairs: P.stairs.map((s) => ({ ...s, landings: s.landings.map((L) => ({ ...L })) })) };
+    bare.stairs[0].landings.forEach((L) => { L.door = undefined; });
+    expect(navGraph(bare).nodes.size).toBeGreaterThan(P.rooms.length);
   });
 });

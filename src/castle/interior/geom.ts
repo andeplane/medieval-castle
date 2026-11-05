@@ -5,7 +5,6 @@ import { type V2, add, sub, scale, dot, norm, signedArea } from '../../core/math
 /** Half-plane: keep points p with dot(n, p) >= c. */
 export interface Half { n: V2; c: number }
 
-export const halfFrom = (p: V2, n: V2): Half => ({ n, c: dot(n, p) });
 
 /** Sutherland–Hodgman clip of a convex polygon (any winding is preserved). */
 export function clip(poly: V2[], h: Half): V2[] {
@@ -98,5 +97,4 @@ export function headRise(head: Head, w: number) {
   return head === 'round' ? w / 2 : head === 'pointed' ? w * 0.62 : head === 'segmental' ? w * 0.22 : 0;
 }
 
-export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 export { add, sub, scale, dot, norm };

@@ -8,7 +8,7 @@ import type { V2 } from '../../core/math2d';
 import { pointInPoly } from '../../core/math2d';
 import { Builder, wallFrame, type Frame, type MatKey, type Opening, type WallRecord, type CurvedRecord, at } from '../builder';
 import type { DoorSpec, RoomSpec } from './types';
-import { ceilingAt, type PlanX } from './plan';
+import { ceilingAt, stairOpts, type PlanX } from './plan';
 import { orient, leftN, clip, archOutline, headRise, convexOverlap, type Head, add, sub, scale, dot, norm } from './geom';
 import { prismVolume, extrudeVolume, type Volume } from './carve';
 import { buildTunnel } from './tunnel';
@@ -117,7 +117,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     cell(g.B, r);
     carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.02, r.y1 + (P.vault[r.id] ? 0.02 : 0.02)));
   }
-  for (const s of P.stairs) { const r = room.get(s.id); buildStair(r ? groupOf(r).B : groupOf(room.get(s.spaces[0])!).B, s); }
+  for (const s of P.stairs) { const r = room.get(s.id); buildStair(r ? groupOf(r).B : groupOf(room.get(s.spaces[0])!).B, s, stairOpts(P, s)); }
 
   // ------------------------------------------------ exterior clean-up volumes
   courtyardPlinth(carveVols);

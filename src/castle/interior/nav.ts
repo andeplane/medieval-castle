@@ -6,10 +6,16 @@ import type { InteriorPlan, SpaceId, V3 } from './types';
 import { courtyard } from '../layout';
 import { GROUND } from '../spec';
 import { orient } from './geom';
+import { stairNavPath } from './stairs';
+import { stairOpts } from './plan';
 
 export type NavKind = 'room' | 'door' | 'landing';
 export interface NavNode { id: string; kind: NavKind; space: SpaceId; pos: V3 }
-export interface NavEdge { a: string; b: string; cost: number; door?: string; stair?: string; locked?: boolean }
+export interface NavEdge {
+  a: string; b: string; cost: number; door?: string; stair?: string; locked?: boolean;
+  /** Walking line from a to b where it is not straight (stair flights, from stairNavPath). */
+  line?: V3[];
+}
 export interface NavGraph { nodes: Map<string, NavNode>; edges: NavEdge[]; adj: Map<string, NavEdge[]> }
 export interface NavPath { nodes: string[]; doors: string[]; cost: number }
 
@@ -28,7 +34,7 @@ export function navGraph(P: InteriorPlan): NavGraph {
   const nodes = new Map<string, NavNode>(), edges: NavEdge[] = [], adj = new Map<string, NavEdge[]>();
   const node = (n: NavNode) => { nodes.set(n.id, n); adj.set(n.id, []); };
   const edge = (e: NavEdge) => { edges.push(e); adj.get(e.a)!.push(e); adj.get(e.b)!.push(e); };
-  const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+  const rooms = new Map(P.rooms.map((r) => [r.id, r])), doorById = new Map(P.doors.map((d) => [d.id, d]));
   for (const r of P.rooms) { const c = centroid(r.poly); node({ id: `room:${r.id}`, kind: 'room', space: r.id, pos: [c[0], r.y0, c[1]] }); }
   const cy = centroid(courtyard());
   node({ id: 'room:courtyard', kind: 'room', space: 'courtyard', pos: [cy[0], GROUND, cy[1]] });
@@ -49,21 +55,31 @@ export function navGraph(P: InteriorPlan): NavGraph {
       edge({ a: rn.id, b: id, cost: Math.max(0.05, dist3(rn.pos, d.centre)), door: d.id, locked });
     });
   }
-  const doorById = new Map(P.doors.map((d) => [d.id, d]));
-  for (const s of P.stairs) {
+    for (const s of P.stairs) {
     const room = nodes.get(`room:${s.id}`);
-    s.landings.forEach((L, i) => {
+    // the stair's own walking line, split at its landings (each landing is a vertex at its height)
+    const line = stairNavPath(s, stairOpts(P, s));
+    const order = s.landings.map((L, i) => ({ L, i })).sort((a, b) => a.L.y - b.L.y);
+    const cut: number[] = [];
+    let from = 0;
+    for (const { L } of order) {
+      let k = line.findIndex((p, j) => j >= from && Math.abs(p[1] - L.y) < 0.02);
+      if (k < 0) k = from;
+      cut.push(k); from = k;
+    }
+    order.forEach(({ L, i }, n) => {
       const d = L.door ? doorById.get(L.door) : undefined;
-      const pos: V3 = L.at ?? (d ? [d.centre[0], L.y, d.centre[2]] : room ? [room.pos[0], L.y, room.pos[2]] : [0, L.y, 0]);
+      const pos: V3 = line[cut[n]] ?? L.at ?? (d ? [d.centre[0], L.y, d.centre[2]] : [room!.pos[0], L.y, room!.pos[2]]);
       const id = `landing:${s.id}:${i}`;
       node({ id, kind: 'landing', space: s.id, pos });
       if (d) edge({ a: id, b: `door:${d.id}`, cost: Math.max(0.05, dist3(pos, d.centre)), door: d.id, stair: s.id, locked: d.kind === 'grille' || undefined });
-      if (i > 0) {
-        const prev = nodes.get(`landing:${s.id}:${i - 1}`)!;
-        const dy = Math.abs(pos[1] - prev.pos[1]), run = Math.hypot(pos[0] - prev.pos[0], pos[2] - prev.pos[2]);
-        edge({ a: prev.id, b: id, cost: Math.max(0.05, run + dy * CLIMB), stair: s.id });
-      }
-      if (i === 0 && room) edge({ a: room.id, b: id, cost: Math.max(0.05, dist3(room.pos, pos)), stair: s.id });
+      if (n > 0) {
+        const prev = nodes.get(`landing:${s.id}:${order[n - 1].i}`)!;
+        const seg = line.length ? line.slice(cut[n - 1], cut[n] + 1) : [prev.pos, pos];
+        let run = 0;
+        for (let j = 1; j < seg.length; j++) run += Math.hypot(seg[j][0] - seg[j - 1][0], seg[j][2] - seg[j - 1][2]);
+        edge({ a: prev.id, b: id, cost: Math.max(0.05, run + Math.abs(pos[1] - prev.pos[1]) * CLIMB), stair: s.id, line: seg });
+      } else if (room) edge({ a: room.id, b: id, cost: Math.max(0.05, dist3(room.pos, pos)), stair: s.id });
     });
   }
   return { nodes, edges, adj };

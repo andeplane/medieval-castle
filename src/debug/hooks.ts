@@ -28,6 +28,8 @@ export function installHooks(d: HookDeps) {
     }),
     views: () => VIEWS.map((v) => v.name),
     setCamera: (name: string) => { const v = VIEWS.find((x) => x.name === name); if (v) d.rig.go(v); return !!v; },
+    /** free camera pose for close-up material checks: setPose([x,y,z],[tx,ty,tz]) */
+    setPose: (pos: [number, number, number], target: [number, number, number]) => d.rig.go({ name: 'pose', label: 'pose', mode: 'fly', pos, target }),
     setTime: (h: number) => d.setTime(h),
     step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); await d.renderNow(); } },
   };

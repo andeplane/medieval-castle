@@ -5,6 +5,7 @@ import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { heightAt, islandWalkable } from '../world/terrain';
 import { castleCentre } from '../castle/layout';
+import { MouseLook } from './mouseLook';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
 export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number]; clamp?: boolean }
@@ -27,7 +28,6 @@ export class CameraRig {
   orbit: OrbitControls;
   private keys = new Set<string>();
   private yaw = 0; private pitch = 0;
-  private dragging = false;
   /** Keep the fly camera above the terrain (off for interior bookmarks: cellars and tunnels lie below it). */
   clampFly = true;
   speed = { fly: 22, walk: 4.2 };
@@ -39,18 +39,24 @@ export class CameraRig {
     addEventListener('keydown', (e) => { if ((e.target as HTMLElement)?.tagName === 'INPUT') return; this.keys.add(e.code); });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
-    dom.addEventListener('pointerdown', (e) => { if (this.mode !== 'orbit') { this.dragging = true; dom.setPointerCapture(e.pointerId); } });
-    dom.addEventListener('pointerup', () => { this.dragging = false; });
-    dom.addEventListener('pointermove', (e) => {
-      if (this.mode === 'orbit') return;
-      if (!this.dragging && document.pointerLockElement !== dom) return;
-      this.yaw -= e.movementX * 0.0025; this.pitch = THREE.MathUtils.clamp(this.pitch - e.movementY * 0.0025, -1.45, 1.45);
+    this.look = new MouseLook({
+      el: dom, doc: document,
+      enabled: () => this.mode !== 'orbit',
+      get: () => ({ yaw: this.yaw, pitch: this.pitch }),
+      set: (l) => { this.yaw = l.yaw; this.pitch = l.pitch; },
+      // clear held keys on release so the player does not keep walking after Esc
+      onLockChange: (locked) => { if (!locked) this.keys.clear(); this.onLockChange?.(locked); },
     });
-    dom.addEventListener('dblclick', () => { if (this.mode !== 'orbit') dom.requestPointerLock?.(); });
   }
+
+  look: MouseLook;
+  /** True while the pointer is captured for mouse look. */
+  get locked() { return this.look.locked; }
+  onLockChange?: (locked: boolean) => void;
 
   setMode(m: Mode) {
     this.mode = m;
+    if (m === 'orbit') this.look.release();
     this.orbit.enabled = m === 'orbit';
     if (m !== 'orbit') {
       const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');

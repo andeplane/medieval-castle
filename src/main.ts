@@ -1,29 +1,36 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
+// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, builtinAOContext, screenUV } from 'three/tsl';
+import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
-import { buildTrees } from './world/trees';
+import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
+import type { LoadingScreen } from './loading/tunnel';
+import { stepProgress, textureProgress } from './loading/model';
+import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
-const loading = document.getElementById('loading')!;
-const say = (s: string) => { loading.textContent = s; return new Promise((r) => setTimeout(r, 0)); };
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
+// texture jobs fill CUTTING → RAISING.
+let screen: LoadingScreen;
+const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -31,7 +38,7 @@ async function main() {
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // soft PCF; PCFSoftShadowMap is deprecated in r187
   document.body.appendChild(renderer.domElement);
   if (params.has('debug')) {
     const { Inspector } = await import('three/addons/inspector/Inspector.js');
@@ -45,42 +52,74 @@ async function main() {
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
+  await terrainReady;
 
   await say('RAISING THE WALLS…');
-  const { builder, lights } = buildCastle();
-  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
-  buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  const test = params.get('test');
+  let builder, lights: unknown[];
+  if (test === 'stairs') {
+    const { buildStairTest } = await import('./debug/stairtest');
+    const t = buildStairTest(params.has('cut'));
+    builder = t.builder; lights = t.lights;
+    for (const l of t.lights) scene.add(l);
+    VIEWS.splice(0, VIEWS.length, ...t.views);
+  } else {
+    ({ builder, lights } = buildCastle());
+    const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
+    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
-  const interior = params.get('interior') === '0' ? null : buildInterior(mats, builder, { heightAt });
+  const interior = params.get('interior') === '0' || test ? null : buildInterior(mats, builder, { heightAt });
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
-  scene.add(buildTerrain(M.terrain));
+  const terrain = buildTerrain(M.terrain);
+  scene.add(terrain);
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
   await say('PLANTING TREES…');
-  let trees: THREE.Group | null = null;
-  try { trees = buildTrees(VIEWS.map((v) => [v.pos[0], v.pos[2]])); scene.add(trees); } catch (e) { console.error('trees failed', e); }
+  let veg: Vegetation | null = null;
+  if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
-  // post: GTAO from a single-sampled normal pre-pass, then the main pass (threejs-postprocessing)
+  // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
+  // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
   const pipeline = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
+  let aoTex: THREE.Node | null = null;
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
-    scenePass.contextNode = builtinAOContext(aoPass.getTextureNode().sample(screenUV).r);
+    // metre-scale occlusion so window reveals, corbels and machicolations read with depth
+    aoPass.radius.value = 1.1; aoPass.thickness.value = 1.5; aoPass.scale.value = 1.2; aoPass.distanceExponent.value = 1.3;
+    const aoNode = aoPass.getTextureNode();
+    aoTex = aoNode;
+    // half-res AO turns to noise far away; fade it out with distance (the textures carry their own AO)
+    const aoFar = smoothstep(110, 260, positionView.z.negate());
+    scenePass.contextNode = builtinAOContext(mix(aoNode.sample(screenUV).r, float(1), aoFar));
   }
-  pipeline.outputNode = scenePass;
+  if (params.get('grade') !== '0') {
+    // after tone mapping: a touch less saturation (candy greens and blues read as CG), a gentle
+    // S-curve, warm highlights and neutral shadows (STYLE.md light)
+    pipeline.outputColorTransform = false;
+    const c = renderOutput(scenePass).rgb, l = luminance(c);
+    let g = mix(vec3(l), c, 0.88);
+    g = g.sub(0.5).mul(1.07).add(0.5);
+    g = g.mul(mix(vec3(0.995, 1.0, 1.01), vec3(1.025, 1.0, 0.965), smoothstep(0.35, 0.9, l)));
+    pipeline.outputNode = vec4(clamp(g, 0, 1), 1);
+  } else pipeline.outputNode = scenePass;
+  if (params.has('aoview') && aoTex) { pipeline.outputColorTransform = true; pipeline.outputNode = aoTex; }
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
+  // the stair bookmarks are close, upward-looking fly views: lift the orbit clamps that go() applies
+  if (test) { rig.orbit.minDistance = 0.01; rig.orbit.maxPolarAngle = Math.PI; }
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
@@ -94,10 +133,17 @@ async function main() {
   const help = document.getElementById('help')!;
   const helpText: Record<Mode, string> = {
     orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'WASD move · E/Q up/down · Shift fast · drag (or double-click to lock) to look',
-    walk: 'WASD walk · Shift run · drag (or double-click to lock) to look',
+    fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
+    walk: 'Click to look with the mouse · WASD walk · Shift run · Esc releases',
   };
-  const syncMode = () => { for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode); help.textContent = helpText[rig.mode]; };
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: 'WASD walk · Shift run · Esc to release mouse' };
+  const crosshair = document.getElementById('crosshair')!;
+  const syncMode = () => {
+    for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
+    help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
+    crosshair.hidden = !rig.locked;
+  };
+  rig.onLockChange = syncMode;
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
     const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
     b.onclick = () => { rig.setMode(m); if (m === 'walk') { const p = camera.position; if (p.y > 30) rig.go(VIEWS.find((v) => v.name === 'gate')!); } syncMode(); };
@@ -120,9 +166,9 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { pipeline.render(); },
+    renderNow: async () => { veg?.update(camera); pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
@@ -132,7 +178,7 @@ async function main() {
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
-    loading.remove();
+    screen.dispose();
     hooks.ready = true;
     return;
   }
@@ -145,13 +191,18 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    veg?.update(camera);
     pipeline.render();
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  loading.style.opacity = '0';
-  setTimeout(() => loading.remove(), 700);
   hooks.ready = true;
+  await screen.finish();
 }
 
-main().catch((e) => { console.error(e); loading.textContent = 'Something went wrong: ' + (e?.message ?? e); });
+/** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
+export function boot(loading: LoadingScreen) {
+  screen = loading;
+  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
+  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+}

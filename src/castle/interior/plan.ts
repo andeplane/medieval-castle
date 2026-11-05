@@ -20,6 +20,7 @@ import { pointInPoly } from '../../core/math2d';
 import { floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND, type Phase, type TowerSpec } from '../spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, castleCentre, islandOutline, moatOuter, outerPoly, type WingQuad } from '../layout';
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
+import { spiralStartFor, validateStair, type StairOpts } from './stairs';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -35,6 +36,12 @@ const TOWER_MARGIN = 0.4;          // wing rooms keep this far from a tower's ou
 const DIAG_INSET = 0.35;           // half the partition on the diagonal joint between two wings
 export const TUNNEL_W = 1.9, TUNNEL_CROWN = 2.7;
 export const MOAT_TUNNEL_Y = -6.5;
+/** Radius of the tower spirals: from 1.75 m a spiral climbs a 4.4–6 m storey in whole turns with 2 m headroom, so every door can sit on the same side of the drum. */
+export const SPIRAL_R = 1.9;
+/** Clear width of the doors that open off a spiral's landings (the stair plans its landings for this). */
+export const STAIR_DOOR_W = 1.0;
+/** Distance from a shaft's centre to the flat it gets where its doors open (keeps a 1.6 m chord). */
+const chordH = (r: number) => r * Math.cos(Math.asin(Math.min(0.95, 0.8 / r)));
 export const GATE = { width: 3.8, spring: 4.0, rise: 1.6, wall: 2.6, sill: GROUND - 0.1 };
 
 export type ZoneId = string;
@@ -361,11 +368,11 @@ export function planInterior(seed = WORLD_SEED): PlanX {
       const cc = castleCentre();
       let oi = 0; P.forEach((p, i) => { if (Math.hypot(p[0] - cc[0], p[1] - cc[1]) > Math.hypot(P[oi][0] - cc[0], P[oi][1] - cc[1])) oi = i; });
       const O = P[oi], u1 = norm(sub(P[(oi + 1) % 4], O)), u2 = norm(sub(P[(oi + 3) % 4], O));
-      stairR = t.id === 'great' ? 1.15 : 1.0;
+      stairR = SPIRAL_R;
       const cdist = stairR + 0.6;
       stairC = add(O, scale(add(u1, u2), cdist));
       const diag = norm(add(u1, u2));
-      const Dch = tw * Math.SQRT2 + 0.8;
+      const Dch = Math.max(tw * Math.SQRT2 + 0.8, cdist * Math.SQRT2 + chordH(stairR) + 0.5);
       clipH = { n: diag, c: dot(diag, O) + Dch };
       stairDoorDir = diag;
     } else {
@@ -379,12 +386,14 @@ export function planInterior(seed = WORLD_SEED): PlanX {
       }
       round[`${t.id}`] = { c, r: rin };
       // shaft in the wall thickness, in the widest gap between doors, away from the outward windows
-      stairR = t.id === 'ne' ? 1.1 : 1.0;
+      stairR = SPIRAL_R;
       const out = angOf(sub(c, castleCentre()));
+      // keep clear of every wing the tower joins (door facets, or the wing's direction)
+      const toWings = wingsHere.map((W) => angOf(sub(centroidOf(W.band), c)));
       let bestA = 0, bestS = -1;
       for (let i = 0; i < 180; i++) {
         const a = (i / 180) * Math.PI * 2;
-        let s = Math.min(...facets.map((f) => angDist(a, angOf(f.n))));
+        let s = Math.min(...facets.map((f) => angDist(a, angOf(f.n))), ...toWings.map((w) => angDist(a, w)));
         s = Math.min(s, angDist(a, out) + 0.25);
         s += rS() * 0.02;
         if (s > bestS) { bestS = s; bestA = a; }
@@ -414,14 +423,15 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     towerRooms[t.id] = ids;
     // spiral stair shaft
     const sid = `${t.id}-stair`;
-    const shaftPoly = clip(circlePoly(stairC, stairR, 32), { n: scale(stairDoorDir, -1), c: -(dot(stairDoorDir, stairC) + stairR * Math.cos(Math.asin(Math.min(0.95, 0.8 / stairR)))) });
+    const shaftPoly = clip(circlePoly(stairC, stairR, 32), { n: scale(stairDoorDir, -1), c: -(dot(stairDoorDir, stairC) + chordH(stairR)) });
     const yb = withCellar ? CELLAR_Y : ys[0], yt = ys[ys.length - 1];
     addRoom({ id: sid, zone: t.id, floor: -1, kind: 'stair', poly: shaftPoly, y0: yb, y1: yt + 2.6 }, ph, 'flag');
     round[sid] = { c: stairC, r: stairR };
-    const st: StairSpec = { id: sid, kind: 'spiral', zone: t.id, spaces: [], centre: stairC, radius: stairR, newel: 0.18, turn: rS() < 0.5 ? 1 : -1, startAngle: angOf(stairDoorDir), width: stairR - 0.18, landings: [] };
+    const turn: 1 | -1 = rS() < 0.5 ? 1 : -1;
+    const st: StairSpec = { id: sid, kind: 'spiral', zone: t.id, spaces: [], centre: stairC, radius: stairR, newel: 0.18, turn, startAngle: spiralStartFor(angOf(stairDoorDir), stairR, turn, STAIR_DOOR_W), width: stairR - 0.18, landings: [] };
     for (const rid of ids) {
       const rr = byId.get(rid)!;
-      const d = connect(`${sid}>${rid}`, sid, rid, { w: 0.95, h: 2.05, pref: add(stairC, scale(stairDoorDir, 1.5)), head: ph === 'old' ? 'round' : 'pointed' });
+      const d = connect(`${sid}>${rid}`, sid, rid, { w: STAIR_DOOR_W, h: 2.05, pref: add(stairC, scale(stairDoorDir, stairR + 0.3)), head: ph === 'old' ? 'round' : 'pointed' });
       if (d) { st.spaces.push(rid); st.landings.push({ y: rr.y0, angle: angOf(stairDoorDir), at: [stairC[0] + stairDoorDir[0] * stairR * 0.6, rr.y0, stairC[1] + stairDoorDir[1] * stairR * 0.6], door: d.id }); }
     }
     stairs.push(st);
@@ -457,19 +467,22 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     for (const d of dirs) poly = clip(poly, { n: scale(d, -1), c: -(dot(d, shaftC) + shaftR * Math.cos(Math.asin(0.8 / shaftR))) });
     addRoom({ id: 'stairtower', zone: 'stairtower', floor: -1, kind: 'stair', poly, y0: CELLAR_Y, y1: floorBase(6) + 3.0 }, 'new', 'flag');
     round['stairtower'] = { c: shaftC, r: shaftR };
-    const st: StairSpec = { id: 'stairtower', kind: 'spiral', zone: 'stairtower', spaces: [], centre: shaftC, radius: shaftR, newel: 0.25, turn: 1, startAngle: angOf(tunnelDir), width: shaftR - 0.25, landings: [] };
+    const st: StairSpec = { id: 'stairtower', kind: 'spiral', zone: 'stairtower', spaces: [], centre: shaftC, radius: shaftR, newel: 0.25, turn: 1, startAngle: spiralStartFor(angOf(tunnelDir), shaftR, 1, STAIR_DOOR_W), width: shaftR - 0.25, landings: [] };
     const land = (d: DoorSpec | null, room: SpaceId, y: number, dir: V2) => { if (!d) return; st.spaces.push(room); st.landings.push({ y, angle: angOf(dir), at: [shaftC[0] + dir[0] * shaftR * 0.55, y, shaftC[1] + dir[1] * shaftR * 0.55], door: d.id }); };
     // courtyard door (the octagon's face 3, as castle.ts cuts it)
     const h = shaftR * Math.cos(Math.asin(0.8 / shaftR));
     const wall = stOct.apothem - h;
-    const cd = exteriorDoor('court>stairtower', 'stairtower', 'courtyard', add(shaftC, scale(stOct.doorDir, h + wall / 2)), GROUND, stOct.doorDir, 1.15, 2.0, wall, 'pointed');
+    const cd = exteriorDoor('court>stairtower', 'stairtower', 'courtyard', add(shaftC, scale(stOct.doorDir, h + wall / 2)), GROUND, stOct.doorDir, STAIR_DOOR_W, 2.0, wall, 'pointed');
     rise['court>stairtower'] = 0.5;
-    for (let f = 0; f <= 6; f++) for (const id of ['N', 'E']) {
+    // one landing per floor (a spiral lands one door at a time): the courtyard door on the ground
+    // floor, then the N wing, or the E wing where the N wing has no room against the tower
+    land(cd, 'courtyard', GROUND, stOct.doorDir);
+    for (let f = 1; f <= 6; f++) for (const id of ['N', 'E']) {
       const W = wings[id], dir = scale(W.v, -1);
       const target = wingRooms[id][f].find((k) => facings(byId.get('stairtower')!.poly, byId.get(k)!.poly).some((fc) => dot(fc.n, dir) > 0.97));
       if (!target) continue;
-      land(connect(`stairtower>${target}`, 'stairtower', target, { w: 0.95, h: 2.05, pref: add(shaftC, scale(dir, 2.5)), head: 'pointed' }), target, floorBase(f), dir);
-      if (f === 0 && id === 'N') land(cd, 'courtyard', GROUND, stOct.doorDir);
+      const d = connect(`stairtower>${target}`, 'stairtower', target, { w: STAIR_DOOR_W, h: 2.05, pref: add(shaftC, scale(dir, 2.5)), head: 'pointed' });
+      if (d) { land(d, target, floorBase(f), dir); break; }
     }
     stairs.push(st);
     stairTowerTunnel = tunnelDir;
@@ -532,15 +545,6 @@ export function planInterior(seed = WORLD_SEED): PlanX {
       id: 'N-cellarstair', kind: 'straight', zone: 'N', spaces: [nc1, 'N0-3'], start: [p0[0], CELLAR_Y, p0[1]], end: [p1[0], GROUND, p1[1]], width: stripW,
       landings: [{ y: CELLAR_Y, at: [...(local(N.o, N.u, N.v, lo, dMid))].splice(0, 1).concat([CELLAR_Y]).concat([local(N.o, N.u, N.v, lo, dMid)[1]]) as V3, door: bot?.id }, { y: GROUND, at: [local(N.o, N.u, N.v, hi, dMid)[0], GROUND, local(N.o, N.u, N.v, hi, dMid)[1]], door: top?.id }],
     });
-  }
-  // the stair tower reaches the N cellar
-  {
-    const dir = scale(N.v, -1);
-    const target = [nc2, nc1].find((k) => facings(byId.get('stairtower')!.poly, byId.get(k)!.poly).some((fc) => dot(fc.n, dir) > 0.97));
-    if (target) {
-      const d = connect(`stairtower>${target}`, 'stairtower', target, { w: 0.95, h: 2.05, pref: add(shaftC, scale(dir, 2.5)), head: 'round' });
-      if (d) { stairSpec.spaces.unshift(target); stairSpec.landings.unshift({ y: CELLAR_Y, angle: angOf(dir), door: d.id }); }
-    }
   }
 
   let tn = 0;
@@ -658,12 +662,20 @@ export function ceilingAt(P: Pick<PlanX, 'vault' | 'phase'>, r: RoomSpec): (q: V
   };
 }
 
+const roomIndexCache = new WeakMap<RoomSpec[], Map<SpaceId, RoomSpec>>();
+/** Rooms by id (memoised per rooms array; rebuilt when the array grows). */
+function roomIndex(rooms: RoomSpec[]): Map<SpaceId, RoomSpec> {
+  let m = roomIndexCache.get(rooms);
+  if (!m || m.size !== rooms.length) { m = new Map(rooms.map((r) => [r.id, r])); roomIndexCache.set(rooms, m); }
+  return m;
+}
+
 /** Whether a door's outline (with `rise`) stays HEAD_CLEAR below the ceiling of both rooms at their faces. */
 export function doorHeadFits(P: PlanX, d: DoorSpec, rise = P.rise[d.id] ?? headRise(d.head, d.width)): boolean {
   const c: V2 = [d.centre[0], d.centre[2]];
   const tops: ((u: number) => number)[] = [];
   d.spaces.forEach((sp, k) => {
-    const r = P.rooms.find((x) => x.id === sp); if (!r) return;
+    const r = roomIndex(P.rooms).get(sp); if (!r) return;
     // sample the face and a little into the room: skewed doors meet the room's face deeper on one side
     const f = ceilingAt(P, r);
     for (const extra of [0, 0.3, 0.6]) {
@@ -672,6 +684,12 @@ export function doorHeadFits(P: PlanX, d: DoorSpec, rise = P.rise[d.id] ?? headR
     }
   });
   return archOutline(0, d.centre[1], d.width, d.height, d.head, rise).every(([u, y]) => tops.every((t) => y <= t(u) - HEAD_CLEAR + 1e-9));
+}
+
+/** Options the shell builds a plan's stair with (and the validator checks it with). */
+export function stairOpts(P: InteriorPlan, s: StairSpec): StairOpts {
+  const r = P.rooms.find((x) => x.id === s.id);
+  return { doorWidth: STAIR_DOOR_W, drumPoly: s.kind === 'spiral' ? r?.poly : undefined, ceiling: r ? r.y1 : undefined, mural: false };
 }
 
 /** Clearance kept between a door's head (incl. its rebate) and the ceiling or vault of either room. */
@@ -753,9 +771,11 @@ export function validatePlan(P: PlanX): PlanReport {
     if (r.y1 - r.y0 < 2.0) errors.push(`room ${r.id} too low (${(r.y1 - r.y0).toFixed(2)})`);
     if (r.zone !== 'tunnel') for (const p of r.poly) if (!foot.some((f) => pointInPoly(f, p[0], p[1]))) { errors.push(`room ${r.id} leaves the footprint`); break; }
   }
+  const box = P.rooms.map((r) => { const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]); return [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)]; });
   for (let i = 0; i < P.rooms.length; i++) for (let j = i + 1; j < P.rooms.length; j++) {
-    const a = P.rooms[i], b = P.rooms[j];
+    const a = P.rooms[i], b = P.rooms[j], A = box[i], Bb = box[j];
     if (a.y1 <= b.y0 + 0.05 || b.y1 <= a.y0 + 0.05) continue;
+    if (A[1] < Bb[0] || Bb[1] < A[0] || A[3] < Bb[2] || Bb[3] < A[2]) continue;
     if (convexOverlap(a.poly, b.poly, 0.05)) errors.push(`rooms ${a.id} and ${b.id} overlap`);
   }
   // stairs: every landing matches the floor of the space its door opens into
@@ -766,6 +786,11 @@ export function validatePlan(P: PlanX): PlanReport {
     if (!d) { errors.push(`stair ${s.id} landing without door`); continue; }
     if (Math.abs(d.centre[1] - L.y) > 0.06) errors.push(`stair ${s.id} landing ${L.y} vs door ${d.id} at ${d.centre[1]}`);
     for (const sp of d.spaces) { const r = room.get(sp); if (r && r.kind !== 'stair' && r.zone !== 'tunnel' && Math.abs(r.y0 - L.y) > 0.06) errors.push(`stair ${s.id} landing ${L.y} vs room ${sp} floor ${r.y0}`); }
+  }
+  // and every stair is buildable: rises, goings and headroom (see stairs.ts)
+  for (const s of P.stairs) {
+    const st = validateStair(s, stairOpts(P, s));
+    if (!st.ok) errors.push(`stair ${s.id}: ${st.problems.slice(0, 2).join('; ')}`);
   }
   return { ok: errors.length === 0, errors, reachable: seen };
 }
