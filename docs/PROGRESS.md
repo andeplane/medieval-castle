@@ -110,42 +110,57 @@ Measured after deploy (`?bench`, Anders' M4, Chrome WebGPU, 1200×897 CSS px, de
 - Per-pass GPU timestamps on the M4 (WebGPU, retina 2×): the GTAO normal pre-pass redrew the whole scene at full size for AO that is computed at half size. It cost ~7 ms of the 20 ms door-gate frame (`?ao=0`: 20 → 12.8 ms, 45 → 70 fps). It now renders at half size (`pre.setResolutionScale(0.5)`).
 - **Dynamic resolution** (`src/render/resolution.ts`): every quarter second the render pixel ratio is checked against the GPU time per frame. It steps 0.25 down (at most once a second) while a frame costs more than 15 ms, and back up (at most every 3 s) when the bigger frame would still fit in 12 ms. It ranges from 1 to the screen's ratio (capped at 2). `?scale=` fixes the ratio, `?dynres=0` turns it off. Without GPU timestamps it only steps down, on frames slower than 57 fps. The stats overlay shows the current ratio under "size".
 - GPU time on Apple GPUs: their passes overlap, and each pass's timestamps span most of the frame, so the sum of passes read 5–8× too high (150 ms for a 22 ms frame). The overlay now takes the longest pass per frame on Apple and the sum elsewhere (`gpuFrameTimes`). It also reads one resolve per frame batch; before, a resolve could count several frames.
-## 2026-11-05: door prompt and door clipping (branch `door-prompt-clipping`)
+## 2026-11-05: one owner per wall opening; door prompt and door clipping (branch `door-prompt-clipping`)
 
-Anders: "what door?" (`castle-plan/feedback/door-prompt-floor.png`: "Open door" while looking at the floor) and "some clipping error on doors, please fix". The coordinator added `courtyard-door-cut.png` and `CLIPPING.md`.
+Anders: "what door?" (`castle-plan/feedback/door-prompt-floor.png`: "Open door" while looking at the floor), "some clipping error on doors, please fix", then "rethink and redo. do better". The coordinator added `courtyard-door-cut.png` and `CLIPPING.md`.
 
-Causes and fixes
-- **"Open door" at the floor.** `rayBox` returns 0 when the ray starts inside the box. A fly camera inside a shut leaf (no collision, and the 0.25 m near plane hides the leaf) was "aiming" at it whatever it looked at. The windlass's one coarse box did the same to anyone standing inside it. Now `rayEnters` (doors.ts) ignores a box the eye is inside: leaves, the grille and the windlass. The windlass is hit only on its drum, frames and capstans (`winchBoxes`).
-- **Leaf, rebate and exterior opening disagreed.** The leaf was 3 to 7 cm smaller than the clear opening. The rebate was a different, flatter arch (8 cm higher at the springing). The stop stood 8 cm off the leaf's back. The exterior was carved with the rebated outline through the whole wall. From the courtyard that showed the leaf top above the arch, a dark arc over round heads, and slots round the leaf. Now doorGeom owns all of them:
-  - The leaf is the clear outline grown by `GROW` 5 cm, so it laps the stop all round.
-  - The rebate is the clear outline grown by `LIP` 8 cm, with the same arc centres, point for point.
-  - The stop is 5 mm behind the shut leaf.
-  - shell.ts carves the clear outline from the non-swing face to the stop and the rebated one from there on.
-  - Leaf size classes bin by 2 cm, not 4.
-- **The stair tower door had two openings.** castle.ts cut its own pointed arch (with a wood fill) and the plan's `court>stairtower` door cut another, which left a notch at the head. The castle.ts arch is gone; the DoorSpec cuts, reveals and hangs it. With `?interior=0` the stair tower has no door, like the wings.
-- **Doors cut by a junction.** The courtyard doors into the wings are placed by the windows' rule (`fits()` in openings.ts): the opening and a 10 cm rebate on the wing's courtyard face, 0.8 m from its ends, with nothing within 1.5 m in front. `court>N0-4` moves 0.75 m west (x 6.58 → 5.83), clear of the stair tower. E and W did not move.
-- **Leaves swinging into a side wall.** With the wider leaf, two doors near a room corner (`N0-2>N0-3`, `gate4>S4-1`) swung into the side wall at 100°. `fitHinges` hangs such a leaf on its other jamb. `maxSwing` now stops at the wall face past the rebate jamb.
+Root cause of the clipping: two systems cut the same walls. The exterior (castle.ts + openings.ts) placed windows, the gate arch and the stair-tower door; the interior plan placed every door and carved it through the castle again. Nothing checked one against the other.
 
-Tests
-- doors.test:
-  - No prompt for a ray at the floor by a doorway, leaf open or shut, from inside the leaf or 0.4 m out, on both hands and swing sides, and for every plan door.
-  - Leaves lap the stop by at least 3 cm (grilles 5 mm), keep at least 2 cm off the rebate, and stand `STOP_GAP` in front of the stop.
-- interior.test:
-  - No door is cut by a junction: both jambs plus the rebate open into the room on each side.
-  - Courtyard and outside doors keep `FRONT` clear of other masses.
-  - The courtyard doors stay `CLEAR` from the face ends.
-  - Every leaf's whole swing stays in its doorway or the room it opens into, under the ceiling. `fitHinges` has its own test.
-- portcullis.test: standing by the windlass and looking at the floor gives no prompt; aiming at the drum or a frame does.
-- A scratch walk (not committed) walked into every leaved door with the same physics motor as the player: 1,440 walks from both sides, with the leaf toggled mid-walk. The eye never came closer than 0.32 m to a leaf.
+Who owns what now
+- **Doors (and the gate):** the interior plan. Each DoorSpec has one outline (`doorOutlines` in doorGeom.ts), clear from the non-swing face to the stop and rebated beyond. The leaf, the rebate, the shell reveal and the cut through the castle all come from it. The cut is the shell's carve volume, the only thing that removes castle geometry for a door. castle.ts no longer cuts the gate arch or the stair-tower door; the gate's voussoirs and passage take `GATE` from the plan.
+- **Windows and slits:** openings.ts, as before. They are placed after the door holes of their face (`doorHoles(plan)` → `doorBox`), with the same `fits()` rule, so a window never lands on a door.
+- **Courtyard doors:** placed by the same `fits()` rule: on one face, 0.8 m from its ends, nothing within 1.5 m in front.
+- **Stone keep-outs:** `Builder.doorHoles`; the stone layer leaves the door holes free.
+- Why the carve and not the wall records: 29 doors pass through castle geometry that is not a `Builder.wall` face (round-tower drums, batters, string courses). Cutting door holes into wall faces and deleting the carve left those doors blocked (three key paths failed), so the carve stays as the single door cut and the castle's own door cuts went.
+
+Other fixes
+- **"Open door" at the floor.** `rayBox` returned 0 when the ray started inside the box, so a fly camera inside a shut leaf "aimed" at it whatever it looked at; the windlass's coarse box did the same. `rayEnters` ignores a box the eye is in, and the windlass has precise boxes.
+- **Leaf and rebate.** The leaf is the clear outline grown by 5 cm and laps the stop all round. The rebate is the outline grown by 8 cm with the same arc centres. The stop is 5 mm behind the shut leaf.
+- **Leaves that hit something** when they swing (walls, steps, another leaf) are hung on the other jamb, or opened into the other room (`fitHinges`).
+- **Door heads under spiral steps:** a door whose head would cut the steps above takes a lower head (`doorUnderSteps`).
+
+Whole-castle invariant (`tests/world.test.ts`): the island castle and the interior built and carved as `main.ts` does, then every opening checked.
+- No two castle openings overlap on a face, and no hole is cut twice: by a castle opening and a door, or by two doors.
+- No castle surface is left in a doorway (rays 1 cm inside the outline go through). For outdoor doors, the hole is not bigger than the outline (rays 1 cm outside hit the face). This is the "exterior hole matches the reveal within 1 cm" check.
+- Every jamb plus its rebate opens into a room on each side.
+- Each outdoor door has exactly one outdoor face, is 0.8 m from that face's ends, and has nothing within 1.5 m in front.
+- No leaf swings through a wall, above the ceiling, into spiral steps, or into another leaf's sweep.
+- A second test mutates the plan and the geometry and checks that each kind of fault is reported.
+
+On main before this branch the test lists 16 faults:
+- cut twice: the gate, `court>stairtower` and `stairtower>N1-5`;
+- `court>N0-4`: castle surface in the doorway, a hole bigger than its outline, and jammed against the stair tower;
+- the holes of `court>E0-2`, `court>W0-2` and `court>stairtower` are bigger than their outlines;
+- seven leaves swing into other leaves (N4/N5/N6 stair-tower doors, `E0-1>E0-2` with `court>E0-2`).
+On the branch it passes.
+
+Other tests
+- doors.test: no prompt for a floor ray by any door, leaf open or shut, from inside the leaf or 0.4 m out. Leaves lap the stop and clear the rebate.
+- portcullis.test: no prompt looking at the floor by the windlass.
+- island.test: the camera keeps 0.3 m from the gate jambs and the batter, with the interior carving the gate as in the game.
+- A scratch walk (not committed) walked into every leaved door with the player's motor: 1,440 walks from both sides, leaf toggled mid-walk. The eye never came closer than 0.32 m to a leaf.
 
 Assumptions (visible, for Anders to veto)
-- The leaf laps the stop by 5 cm, and the rebate stands 3 cm round it.
 - `court>N0-4` sits 0.75 m further west on the north courtyard face.
-- Two leaves hang on the other jamb.
+- Five stair doors take a segmental head 2.0 m high: `court>stairtower` (was pointed), `great-stair>great-1`, `ne-stair>ne-1`, `se-stair>se-1`, `sw-stair>sw-1` (were round or pointed, 2.05 m).
+- Seven leaves hang on the other jamb: `N0-2>N0-3`, `N4-4>N4-5`, `N5-4>N5-5`, `N6-4>N6-5`, `E0-1>E0-2`, `stairtower>N1-5` and `gate4>S4-1`. `N6-4>N6-5` also opens into the other room.
+- The stair tower loses the slits on the facets buried in the N wing.
+- The leaf laps the stop by 5 cm, and the rebate stands 3 cm round it.
+- With `?interior=0` the castle has no doorways at all, because doors are cut only by the interior.
 
 Still open
-- Closed leaves, and doorways seen from the courtyard, are dark. Leaves use the interior materials (`IM.adopt`, so they don't glow white indoors), and the room behind a doorway is not drawn from outside. Fixing that belongs to the interior light / visibility work.
-- A battered plinth strip still leans out beside the stair tower at the N wing junction. It is the castle wall's batter, which the courtyard plinth carve stops short of. It is not a door.
+- Closed leaves, and doorways seen from the courtyard, are dark: the interior materials and the room behind not being drawn from outside. This is the interior light's area.
+- A battered plinth strip still leans out beside the stair tower at the N wing junction. It is not a door.
 - The SE spiral's light slits were not touched.
 
 ## 2026-11-05: frame-rate measurement (stats overlay + benchmark)
