@@ -14,14 +14,14 @@ describe('wireGameHud', () => {
     const rig = fakeRig('walk');
     const ui = wireGameHud(hud, { rig, views: VIEWS });
     expect(hud.toolsOpen).toBe(false);
-    expect(keys()).toEqual(['Click', 'WASD', 'Shift', 'E', 'H', '`']);
+    expect(keys()).toEqual(['Click', 'WASD', 'Shift', 'Space', 'C', 'E', 'H', '`']);
     expect(pressed()).toBe('Walk');
     expect(document.querySelector('.tools h2')?.textContent).toBe('Tools');
     expect(document.querySelector('input[type=range]')).toBeNull(); // no time given
     rig.locked = true;
     ui.sync();
     expect(hud.locked).toBe(true);
-    expect(document.querySelectorAll('.hud-card li')).toHaveLength(4);
+    expect(document.querySelectorAll('.hud-card li')).toHaveLength(6);
     ui.sync(); // unchanged: cheap no-op
     ui.setFps(59.6);
     expect(document.querySelector('.tools-stat')?.textContent).toBe('60 fps');
