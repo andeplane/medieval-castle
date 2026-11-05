@@ -51,8 +51,8 @@ let r = await run(['KeyW'], 5000);
 check('lowered portcullis stops you on the sill', into(r) > 0.5 && into(r) < 2.1 && Math.abs(r.y - sill) < 0.1, `into the gatehouse ${into(r).toFixed(2)} m, y ${r.y.toFixed(2)} (sill ${sill.toFixed(2)})`);
 const used = await page.evaluate(() => window.__game.use());
 await run([], 8000);
-const st = await page.evaluate(() => window.__game.doors.state()['gate-main']);
-check('E on the grille raises the portcullis', used && st === 1, `use ${used}, raised ${st}`);
+const raised = await page.evaluate(() => window.__game.doors.state()['gate-main']);
+check('E on the grille raises the portcullis', used && raised === 1, `use ${used}, raised ${raised}`);
 r = await run(['KeyW'], 3000);
 check('raised: walk in to the end of the passage', into(r) > 4.5 && Math.abs(r.y - sill) < 0.1, `into the gatehouse ${into(r).toFixed(2)} m`);
 // 1b. on through the gate passage (the shell's colliders) and out of its courtyard arch

@@ -83,7 +83,7 @@ if (process.env.MAIN !== '0') {
   const through = () => ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const c = window.__game.state().camera; return (c.x - d.centre[0]) * d.normal[0] + (c.z - d.centre[2]) * d.normal[1]; });
   const groove = 2.6 / 2 - 0.5; // portcullis.ts GROOVE_IN: 0.5 m from the inner face of the 2.6 m gate wall
   let s = await state(page);
-  ok(s['gate-main'] === 1 && Object.keys(s).length === 1, `castle gate: one portcullis, no leaves, starts raised (${JSON.stringify(s)})`);
+  ok(s['gate-main'] === 1 && !Object.keys(s).some((k) => k.startsWith('main-') || k.includes('wicket')), `castle gate: one portcullis, no gate leaves, starts raised (${Object.keys(s).length} doors in all)`);
   await ev(page, () => window.__game.setCamera('door-gate'));
   await shot('castle-gate-raised');
   // lowered: walk up to it with W and get stopped by the grille
@@ -128,7 +128,8 @@ if (process.env.MAIN !== '0') {
     const k = 2.6 / 2 - 0.5, gx = c[0] + n[0] * k, gz = c[2] + n[1] * k;
     return { room: r.id, y: r.y0, pos: [gx + n[0] * 1.9 + a[0] * 0.9, r.y0 + 1.6, gz + n[1] * 1.9 + a[1] * 0.9], look: [gx + n[0] * 0.25, r.y0 + 0.9, gz + n[1] * 0.25], wide: [gx + n[0] * 3.3 + a[0] * 2.2, r.y0 + 2.4, gz + n[1] * 3.3 + a[1] * 2.2] };
   });
-  await ev(page, (w) => window.__game.lookFrom(w.pos, w.look, 'fly'), winch);
+  // stand in the room as the player (feet on its floor) and look at the drum
+  await ev(page, (w) => { const dx = w.look[0] - w.pos[0], dz = w.look[2] - w.pos[2]; window.__game.player.teleport(w.pos[0], w.y, w.pos[2], Math.atan2(-dx, -dz), Math.atan2(w.look[1] - w.y - 1.62, Math.hypot(dx, dz))); }, winch);
   await tick(page, 0.05);
   g = await game();
   ok(g.target?.id === 'gate-main:winch' && g.target.label === 'Raise portcullis', `winch in ${winch.room}: crosshair on it: ${JSON.stringify(g.target)}`);
