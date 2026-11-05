@@ -23,6 +23,8 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
   const shell = buildShell(plan, ext, deps);
   const t0 = performance.now();
   const cut = carve(Object.values(ext.bins), shell.carve);
+  // the real-stone layer (src/castle/stones) must not lay stones where rooms and doorways now are
+  for (const v of shell.carve) ext.exclude(v.pts);
   const carveMs = performance.now() - t0;
   const groups: InteriorGroup[] = [], collision: THREE.BufferGeometry[] = [];
   let triangles = 0;

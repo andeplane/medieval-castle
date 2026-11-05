@@ -93,8 +93,13 @@ export function archOutline(cx: number, y0: number, w: number, h: number, head: 
   pts.push([cx - w / 2, y0 + h]);
   return pts;
 }
+/**
+ * Rise of a door head above its springing, as implied by DoorSpec.head (same convention as the door
+ * leaves in doorGeom.ts: round w/2, pointed 0.42 w, segmental 0.2 w, flat 0). Leaved doors always use
+ * it; open arches may override it (PlanX.rise).
+ */
 export function headRise(head: Head, w: number) {
-  return head === 'round' ? w / 2 : head === 'pointed' ? w * 0.62 : head === 'segmental' ? w * 0.22 : 0;
+  return head === 'round' ? w / 2 : head === 'pointed' ? 0.42 * w : head === 'segmental' ? 0.2 * w : 0;
 }
 
 export { add, sub, scale, dot, norm };

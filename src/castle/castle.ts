@@ -13,22 +13,40 @@ type V3 = [number, number, number];
 
 export interface WindowLight { p: V3; n: V3; w: number; h: number }
 
-export function buildCastle() {
+export function buildCastle(r: Rng = rngFor('castle')) {
   const B = new Builder();
-  const r = rngFor('castle');
   const lights: WindowLight[] = [];
+  B.stoneFloor = GROUND - 0.5; // walls run 1.6 m into the ground; no stones where nobody can see them
   for (const w of wingQuads()) wing(B, r, w, lights);
   for (const t of TOWERS) t.kind === 'square' ? squareTower(B, r, t, lights) : roundTower(B, r, t, lights);
   gatehouse(B, r, lights);
   eastTurret(B, r, lights);
   stairTower(B, r);
   courtyardDressing(B, r);
+  B.stoneFloor = -0.35;
   return { builder: B, lights };
 }
 
 // ---------------------------------------------------------------- helpers
 
 const dir2 = (f: Frame): V2 => [f.r[0], f.r[2]];
+
+/** Faces made inside fn are silhouette elements: their real stones are kept further from the camera. */
+function sil(B: Builder, fn: () => void) {
+  const was = B.stoneSil; B.stoneSil = true;
+  try { fn(); } finally { B.stoneSil = was; }
+}
+
+/** A coping or capping course as separate dressed stones (real joints along the skyline). */
+function copingOn(B: Builder, r: Rng, f: Frame, s0: number, s1: number, y: number, d: number, h: number, depth: number) {
+  let s = s0;
+  while (s < s1 - 0.05) {
+    let L = 0.6 + r() * 0.45; if (s1 - s - L < 0.35) L = s1 - s;
+    const hh = h + (r() - 0.5) * 0.025;
+    boxOn(B, 'trim', f, s + L / 2, y + (hh - h) / 2, d + (r() - 0.5) * 0.02, L - 0.018, hh, depth);
+    s += L;
+  }
+}
 
 /** Box placed on a wall frame: s along, y up, d out from the face (centre), sizes along/up/out. */
 function boxOn(B: Builder, mat: MatKey, f: Frame, s: number, y: number, d: number, sx: number, sy: number, sz: number) {
@@ -62,7 +80,7 @@ function windowDressing(B: Builder, r: Rng, f: Frame, kind: string, s: number, y
     lights.push({ p: at(f, s, y + h / 2, -0.5), n: f.n, w, h });
   }
   // jamb stones (alternating long and short), proud of rubble walls, flush-ish on ashlar
-  const proud = phase === 'old' ? 0.05 : 0.025;
+  const proud = phase === 'old' ? 0.11 : 0.085; // proud of the real stones (rubble 5–9 cm, ashlar 4–6.5 cm)
   let yy = y, k = 0;
   const top = y + (kind === 'twin' || kind === 'lancet' ? h - 0.6 : h);
   while (yy < top - 0.05) {
@@ -102,6 +120,7 @@ function voussoir(B: Builder, c: V3, along: V3, n: V3, L: number, H: number, D: 
   const bin = B.bins.trim;
   const quad = (p: V3[], nn: V3) => { bin.tri(p[0], p[1], p[2], nn, [0, 0], [L / 2, 0], [L / 2, H / 2]); bin.tri(p[0], p[2], p[3], nn, [0, 0], [L / 2, H / 2], [0, H / 2]); };
   const hs = L / 2, ht = H / 2, hd = D / 2;
+  B.exclude([P(-hs, -ht, -hd), P(hs, -ht, -hd), P(hs, ht, -hd), P(-hs, ht, -hd), P(-hs, -ht, hd), P(hs, -ht, hd), P(hs, ht, hd), P(-hs, ht, hd)]);
   quad([P(-hs, -ht, hd), P(hs, -ht, hd), P(hs, ht, hd), P(-hs, ht, hd)], n);
   quad([P(-hs, ht, -hd), P(hs, ht, -hd), P(hs, ht, hd), P(-hs, ht, hd)], up);
   quad([P(-hs, -ht, -hd), P(hs, -ht, -hd), P(hs, -ht, hd), P(-hs, -ht, hd)], [-up[0], -up[1], -up[2]]);
@@ -111,6 +130,9 @@ function voussoir(B: Builder, c: V3, along: V3, n: V3, L: number, H: number, D: 
 
 /** Corbel table + machicolated, crenellated parapet along a straight wall top. */
 function corbelParapet(B: Builder, r: Rng, f: Frame, L: number, top: number, mat: MatKey, opts: { overhang?: number; merlon?: [number, number]; ext?: [number, number]; corbels?: boolean } = {}) {
+  sil(B, () => corbelParapetInner(B, r, f, L, top, mat, opts));
+}
+function corbelParapetInner(B: Builder, r: Rng, f: Frame, L: number, top: number, mat: MatKey, opts: { overhang?: number; merlon?: [number, number]; ext?: [number, number]; corbels?: boolean }) {
   const oh = opts.overhang ?? 0.8, [mw, gap] = opts.merlon ?? [1.15, 0.72];
   const [e0, e1] = opts.ext ?? [0.6, 0.6];
   const s0 = -e0, s1 = L + e1, LL = s1 - s0;
@@ -131,7 +153,7 @@ function corbelParapet(B: Builder, r: Rng, f: Frame, L: number, top: number, mat
   boxOn(B, mat, f, (s0 + s1) / 2, (yb + top + 1.05) / 2, oh - thick / 2 + 0.02, LL, top + 1.05 - yb, thick);
   if (oh > thick) boxOn(B, mat, f, (s0 + s1) / 2, yb + 0.06, (oh - thick) / 2, LL, 0.12, oh - thick + 0.02);
   // coping and merlons
-  boxOn(B, 'trim', f, (s0 + s1) / 2, top + 1.1, oh - thick / 2 + 0.02, LL + 0.05, 0.1, thick + 0.1);
+  copingOn(B, r, f, s0 - 0.025, s1 + 0.025, top + 1.1, oh - thick / 2 + 0.02, 0.1, thick + 0.1);
   const m = Math.floor((LL + gap) / (mw + gap)), off = (LL - (m * (mw + gap) - gap)) / 2;
   for (let i = 0; i < m; i++) {
     if (r() < 0.035) continue; // a lost merlon here and there
@@ -145,6 +167,9 @@ function corbelParapet(B: Builder, r: Rng, f: Frame, L: number, top: number, mat
 
 /** Corbelled, crenellated parapet ring for a round tower. */
 function roundParapet(B: Builder, r: Rng, cx: number, cz: number, R: number, top: number, mat: MatKey, oh = 0.8) {
+  sil(B, () => roundParapetInner(B, r, cx, cz, R, top, mat, oh));
+}
+function roundParapetInner(B: Builder, r: Rng, cx: number, cz: number, R: number, top: number, mat: MatKey, oh: number) {
   const n = Math.max(12, Math.round((2 * Math.PI * R) / 0.95));
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2, d: V2 = [Math.cos(a), Math.sin(a)];
@@ -194,9 +219,9 @@ function quoins(B: Builder, r: Rng, corner: V2, d1: V2, d2: V2, y0: number, y1: 
     const l1 = long ? 0.75 : 0.42, l2 = long ? 0.42 : 0.75;
     const c1 = add(corner, scale(d1, l1 / 2)), c2 = add(corner, scale(d2, l2 / 2));
     const n1: V2 = [d1[1], -d1[0]], n2: V2 = [-d2[1], d2[0]];
-    const o1 = scale(n1, 0.03), o2 = scale(n2, 0.03);
-    B.box('trim', [c1[0] + o1[0], y + h / 2, c1[1] + o1[1]], [l1, h - 0.012, 0.06], d1);
-    B.box('trim', [c2[0] + o2[0], y + h / 2, c2[1] + o2[1]], [l2, h - 0.012, 0.06], d2);
+    const o1 = scale(n1, 0.055), o2 = scale(n2, 0.055);
+    B.box('trim', [c1[0] + o1[0], y + h / 2, c1[1] + o1[1]], [l1, h - 0.012, 0.11], d1);
+    B.box('trim', [c2[0] + o2[0], y + h / 2, c2[1] + o2[1]], [l2, h - 0.012, 0.11], d2);
     y += h; k++;
   }
 }
@@ -232,7 +257,7 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
       if (r() < 0.06 && fl > 1) { // blocked-up window: frame survives, filled with newer stone
         plans.push({ f: outerF, kind, s, y: yb });
         const ww = OPEN_W[kind], hh = OPEN_H[kind];
-        boxOn(B, old ? 'new' : 'old', outerF, s, yb + hh / 2 - 0.1, 0.02, ww, hh - 0.2, 0.04);
+        boxOn(B, old ? 'new' : 'old', outerF, s, yb + hh / 2 - 0.1, 0.015, ww, hh - 0.2, 0.03);
         continue;
       }
       outerOpen.push(...windowOpenings(kind as never, s, yb));
@@ -266,7 +291,7 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
   if (w.phase === 'new') stringCourse(B, w.quad, floorBase(4) - 0.15, 0.1);
 
   // buttresses with set-offs and blind pointed arches between their heads (Gravensteen)
-  if (w.buttresses) {
+  if (w.buttresses) sil(B, () => {
     const headY = w.top - 3.2;
     for (const s of buttress) {
       const bw = 1.5 + r() * 0.2;
@@ -286,12 +311,12 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
       // spandrel infill above the arch, flush with buttress faces
       boxOn(B, mat, outerF, cx, headY + (w.top - 0.4 - headY) / 2 + 0.25, 0.4, span + 1.6, w.top - 0.4 - headY - 0.5, 0.8);
     }
-  }
+  });
 
   corbelParapet(B, r, outerF, L, w.top, mat, { ext: [0.8, 0.8] });
   // courtyard side: plain parapet on the wall head
-  boxOn(B, mat, courtF, cL / 2, w.top + 0.55, -0.3, cL, 1.1, 0.55);
-  boxOn(B, 'trim', courtF, cL / 2, w.top + 1.15, -0.3, cL + 0.05, 0.1, 0.65);
+  sil(B, () => boxOn(B, mat, courtF, cL / 2, w.top + 0.55, -0.3, cL, 1.1, 0.55));
+  copingOn(B, r, courtF, -0.025, cL + 0.025, w.top + 1.15, -0.3, 0.1, 0.65);
 
   // roofs
   if (w.roof === 'gable') hipRoof(B, r, w);
@@ -356,7 +381,7 @@ function chimneys(B: Builder, r: Rng, w: WingQuad) {
     const h = (w.roof === 'gable' ? w.depth * 0.5 * 1.28 + 2 : 3.5) + r() * 2.2;
     const wv: V2 = w.dir;
     const mat: MatKey = w.phase;
-    B.box(mat, [p[0], w.top + h / 2 - 0.5, p[1]], [1.5, h + 1, 1.0], wv);
+    sil(B, () => B.box(mat, [p[0], w.top + h / 2 - 0.5, p[1]], [1.5, h + 1, 1.0], wv));
     B.box('trim', [p[0], w.top + h + 0.1, p[1]], [1.75, 0.22, 1.25], wv);
     for (const s of [-0.38, 0.38]) B.cyl('trim', p[0] + wv[0] * s, p[1] + wv[1] * s, 0.17, 0.14, w.top + h + 0.2, w.top + h + 0.75, 10, { top: 'void' });
   }
@@ -402,7 +427,7 @@ function squareTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'square' 
   stringCourse(B, p, floorBase(7) - 0.2);
 
   const c = towerCentre(t);
-  if (t.bartizans) {
+  if (t.bartizans) sil(B, () => {
     const oc = offsetPoly(p, 0.85);
     for (const q of oc) {
       const dd = norm(sub(q, c)), bc = add(q, scale(dd, 0.35));
@@ -412,12 +437,12 @@ function squareTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'square' 
       B.cone('slate', bc[0], bc[1], 1.55, t.top + 3.4, 3.8, 20, 0.12);
       for (let k = 0; k < 2; k++) { const aa = Math.atan2(dd[1], dd[0]) + (k - 0.5) * 1.3; curvedOpening(B, bc[0], bc[1], 1.3, aa, t.top + 0.8, 0.12, 1.0, false, lights); }
     }
-  }
+  });
   if (t.capHouse) {
     const hw = 2.4, hd = 2.0, cy = t.top;
     const ax = norm([Math.cos(t.rot), Math.sin(t.rot)]);
     const hc = add(c, scale(ax, 1.5));
-    B.box(mat, [hc[0], cy + 2.2, hc[1]], [hw * 2, 4.4, hd * 2], ax);
+    sil(B, () => B.box(mat, [hc[0], cy + 2.2, hc[1]], [hw * 2, 4.4, hd * 2], ax));
     const v = (pp: V2, yy: number): V3 => [pp[0], yy, pp[1]];
     const nx: V2 = [ax[1], -ax[0]];
     const e = (sx: number, sz: number) => add(hc, add(scale(ax, sx), scale(nx, sz)));
@@ -462,7 +487,7 @@ function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>
     const sa = Math.atan2(-cz, -cx) + 0.9; // toward the castle centre, rotated
     const sc: V2 = [cx + Math.cos(sa) * (R - 0.6), cz + Math.sin(sa) * (R - 0.6)];
     const top2 = t.top + 5.2;
-    B.cyl(mat, sc[0], sc[1], 2.1, 2.1, t.top - 6, top2 - 0.3, 28, { top: 'lead' });
+    sil(B, () => B.cyl(mat, sc[0], sc[1], 2.1, 2.1, t.top - 6, top2 - 0.3, 28, { top: 'lead' }));
     roundParapet(B, r, sc[0], sc[1], 2.1, top2, mat, 0.55);
     for (let y = t.top - 3; y < top2 - 2; y += 2.4) curvedOpening(B, sc[0], sc[1], 2.1, sa + (y % 3), y, 0.12, 1.0, false, lights);
     B.cyl('wood', sc[0], sc[1], 0.09, 0.06, top2, top2 + 8, 8, { top: null });
@@ -483,7 +508,7 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   const gateW = 3.8, gateY = GROUND - 0.1, archH = 4.0;
   const gate = pointedArch(hw, gateY, gateW, archH, 1.6, 8);
   B.wall('new', fa, fb, g.out, G0, top, [
-    { pts: gate, depth: 2.6, fill: 'wood', reveal: 'trim' },
+    { pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }, // leaves + portcullis: interior/doors.ts
     ...windowOpenings('twin', hw, floorBase(2) + 1.2), ...windowOpenings('rect', hw, floorBase(4) + 1.0), ...windowOpenings('small', hw, floorBase(6) + 1.1),
     ...windowOpenings('slit', hw - 3.3, GROUND + 5.2), ...windowOpenings('slit', hw + 3.3, GROUND + 5.2),
   ]);
@@ -500,27 +525,21 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
     const c = add(m, scale(nrm, -0.32));
     voussoir(B, at(f, c[0], c[1], 0.05), [f.r[0] * d[0], d[1], f.r[2] * d[0]], f.n, len(sub(b, a)) - 0.025, 0.66, 0.1);
   }
-  for (let x = -gateW / 2 + 0.15; x <= gateW / 2 - 0.1; x += 0.32) {
-    // bars stop under the arch outline; portcullis raised to 2.7 m
-    const s = hw + x, ah = archH + Math.sqrt(Math.max(0, 1 - Math.pow((2 * x) / gateW, 2))) * 1.5;
-    const y0 = gateY + 2.7, y1 = gateY + ah;
-    if (y1 > y0) boxOn(B, 'iron', f, s, (y0 + y1) / 2, -0.7, 0.07, y1 - y0, 0.07);
-    boxOn(B, 'iron', f, s, y0 - 0.12, -0.7, 0.05, 0.24, 0.05);
-  }
-  for (let y = gateY + 2.8; y < gateY + archH + 1.3; y += 0.45) boxOn(B, 'iron', f, hw, y, -0.72, gateW - 0.1, 0.06, 0.06);
+  // portcullis grooves in the reveals (the grid itself moves: interior/doors.ts)
+  for (const sg of [-1, 1]) boxOn(B, 'void', f, hw + sg * (gateW / 2 - 0.02), gateY + archH / 2, -0.7, 0.05, archH, 0.12);
   // heraldic panel and bretèche (box machicolation) over the gate
   boxOn(B, 'trim', f, hw, gateY + archH + 2.9, 0.05, 1.5, 1.9, 0.1);
   for (const s of [hw - 1.2, hw, hw + 1.2]) for (let k = 0; k < 3; k++) boxOn(B, 'trim', f, s, floorBase(2) - 2.4 + k * 0.38, 0.2 * (k + 1), 0.4, 0.37, 0.4 * (k + 1));
   // gatehouse top
   corbelParapet(B, r, f, 2 * hw, top, 'new', { ext: [0.6, 0.6] });
-  B.loft('new', offsetPoly(p, 1.2), G0, p, BATTER_TOP);
+  gatehouseBatter(B, g, p, P, gateW);
   stringCourse(B, p, floorBase(1) + 1.6);
   // corbelled corner turrets on the gatehouse front (Gravensteen-style), no full-height drums
   for (const sgn of [-1, 1]) {
     const c = add(at2(sgn * (hw + 0.2), P + 0.2), [0, 0]);
     B.cyl('trim', c[0], c[1], 0.5, 1.55, top - 3.6, top - 1.4, 20, { top: null });
     for (let k = 0; k < 3; k++) B.cyl('trim', c[0], c[1], 0.62 + k * 0.3, 0.62 + k * 0.3, top - 3.5 + k * 0.7, top - 3.25 + k * 0.7, 20);
-    B.cyl('new', c[0], c[1], 1.5, 1.5, top - 1.4, top + 3.6, 20, { top: null });
+    sil(B, () => B.cyl('new', c[0], c[1], 1.5, 1.5, top - 1.4, top + 3.6, 20, { top: null }));
     B.cyl('trim', c[0], c[1], 1.62, 1.62, top + 3.6, top + 3.85, 20, { top: null });
     B.cone('slate', c[0], c[1], 1.75, top + 3.8, 4.6, 20, 0.12);
     const oa = Math.atan2(g.out[1], g.out[0]) + sgn * 0.6;
@@ -528,6 +547,34 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   }
   // steps down from the gate threshold
   for (let k = 0; k < 3; k++) { const c = at2(hw - hw, P + 0.5 + k * 0.45); B.box('trim', [c[0], GROUND - 0.15 - k * 0.17, c[1]], [gateW + 1.6 + k * 0.6, 0.3, 0.5], g.dir); }
+}
+
+/** The gatehouse's battered plinth, with the gate passage cut through it so you can walk in. */
+function gatehouseBatter(B: Builder, g: ReturnType<typeof gatehouseFrame>, p: V2[], P: number, gateW: number) {
+  const sd = (q: V2) => { const d = sub(q, g.base); return [d[0] * g.dir[0] + d[1] * g.dir[1], d[0] * g.out[0] + d[1] * g.out[1]]; };
+  const pt = (s: number, d: number): V2 => add(add(g.base, scale(g.dir, s)), scale(g.out, d));
+  // split the front edge at the gate jambs so the gap is its own quad
+  const inner: V2[] = [];
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i], b = p[(i + 1) % p.length];
+    inner.push(a);
+    const [sa, da] = sd(a), [sb, db] = sd(b);
+    if (Math.abs(da - P) < 1e-6 && Math.abs(db - P) < 1e-6) for (const s of sa < sb ? [-gateW / 2, gateW / 2] : [gateW / 2, -gateW / 2]) inner.push(pt(s, P));
+  }
+  const T = new Builder();
+  T.loft('new', offsetPoly(inner, 1.2), G0, inner, BATTER_TOP);
+  const src = T.bins.new, dst = B.bins.new;
+  for (let i = 0; i < src.pos.length; i += 9) {
+    const c: V2 = [(src.pos[i] + src.pos[i + 3] + src.pos[i + 6]) / 3, (src.pos[i + 2] + src.pos[i + 5] + src.pos[i + 8]) / 3];
+    const [s, d] = sd(c);
+    if (Math.abs(s) < gateW / 2 - 1e-3 && d > P - 0.01) continue; // the gap
+    dst.pos.push(...src.pos.slice(i, i + 9)); dst.nor.push(...src.nor.slice(i, i + 9)); dst.uv.push(...src.uv.slice((i / 9) * 6, (i / 9) * 6 + 6));
+  }
+  // cheeks closing the plinth either side of the gap
+  for (const sg of [-1, 1]) {
+    const s = (sg * gateW) / 2, o = pt(s, P + 1.2), q = pt(s, P);
+    dst.tri([o[0], G0, o[1]], [q[0], BATTER_TOP, q[1]], [q[0], G0, q[1]], [-sg * g.dir[0], 0, -sg * g.dir[1]], [0, G0 / 4], [1.2 / 4, BATTER_TOP / 4], [1.2 / 4, G0 / 4]);
+  }
 }
 
 function eastTurret(B: Builder, r: Rng, lights: WindowLight[]) {
@@ -546,7 +593,7 @@ function eastTurret(B: Builder, r: Rng, lights: WindowLight[]) {
   const q = offsetPoly(p, 0.45);
   B.prism('trim', offsetPoly(p, 0.2), top - 3.6, top - 3.3);
   B.prism('trim', q, top - 3.3, top - 3.0);
-  B.prism('new', q, top - 3.0, top + 0.6, { top: 'lead' });
+  sil(B, () => B.prism('new', q, top - 3.0, top + 0.6, { top: 'lead' }));
   const cc: V2 = [(q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2];
   const v = (pp: V2, yy: number): V3 => [pp[0], yy, pp[1]];
   const eave = offsetPoly(q, 0.3);
@@ -568,7 +615,7 @@ function stairTower(B: Builder, r: Rng) {
   }
   const op = offsetPoly(p, 0.45);
   B.prism('trim', offsetPoly(p, 0.2), top - 0.6, top - 0.3);
-  B.prism('new', op, top - 0.3, top + 1.0);
+  sil(B, () => B.prism('new', op, top - 0.3, top + 1.0));
   const v = (pp: V2, yy: number): V3 => [pp[0], yy, pp[1]];
   const eave = offsetPoly(op, 0.25);
   for (let i = 0; i < n; i++) B.roofPlane('slate', [v(eave[i], top + 1.0), v(eave[(i + 1) % n], top + 1.0), v(c, top + 9.5)]);

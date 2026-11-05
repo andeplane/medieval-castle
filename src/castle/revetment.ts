@@ -1,11 +1,10 @@
 // Stone revetment around the island: the bank is faced with old rubble masonry rising from the moat
 // (as at Gravensteen), with a coping course, a few slumped stretches and fallen stones.
-import { rngFor } from '../core/rng';
+import { rngFor, type Rng } from '../core/rng';
 import { type V2, len, sub } from '../core/math2d';
 import { Builder, offsetPoly, wallFrame } from './builder';
 
-export function buildRevetment(B: Builder, island: V2[], groundAt: (x: number, z: number) => number, skip: (x: number, z: number) => boolean) {
-  const r = rngFor('revetment');
+export function buildRevetment(B: Builder, island: V2[], groundAt: (x: number, z: number) => number, skip: (x: number, z: number) => boolean, r: Rng = rngFor('revetment')) {
   const ring = offsetPoly(island, -0.35);
   const inner = offsetPoly(island, -1.6);
   const n = ring.length;
@@ -23,10 +22,15 @@ export function buildRevetment(B: Builder, island: V2[], groundAt: (x: number, z
     if (broken[i]) {
       const h = -0.6 + r() * 0.8;
       B.planar('old', f, [[0, -2], [L, -2], [L, h + r() * 0.4], [0, h]]);
+      B.stoneOn = false;
       for (let k = 0; k < 4; k++) { const t = r() * L, p: V2 = [a[0] + d[0] * t + out[0] * (0.4 + r() * 1.6), a[1] + d[1] * t + out[1] * (0.4 + r() * 1.6)], s = 0.35 + r() * 0.45; B.box('old', [p[0], -0.3 + r() * 0.5, p[1]], [s * 1.3, s, s], [r() - 0.5, r() - 0.5]); }
+      B.stoneOn = true;
       continue;
     }
     B.planar('old', f, [[0, -2], [L, -2], [L, tb], [0, ta]]);
+    B.stoneSil = true; // its top edge is a skyline against the lawn from across the moat
+    B.stoneFace('old', f, 0, L, -0.35, Math.min(ta, tb) - 0.02);
+    B.stoneSil = false;
     // coping stones, slightly proud, following the top
     const cy = (ta + tb) / 2;
     B.box('trim', [m[0] - out[0] * 0.15, cy + 0.08, m[1] - out[1] * 0.15], [L + 0.04, 0.2, 0.75], d);

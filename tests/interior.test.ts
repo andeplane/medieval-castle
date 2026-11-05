@@ -270,8 +270,10 @@ describe('buildInterior', () => {
   it('makes one mesh per material per group, colliders, and stays inside the budget', () => {
     const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
     const ext = buildCastle().builder;
+    const excl0 = ext.stoneExcl.length;
     const res = buildInterior(mats, ext, { plan: P, heightAt: () => 2.6 });
     expect(res.plan).toBe(P);
+    expect(ext.stoneExcl.length).toBeGreaterThan(excl0 + P.rooms.length); // no real stones inside rooms or doorways
     expect(res.triangles).toBeGreaterThan(20_000);
     expect(res.triangles).toBeLessThan(400_000);
     const meshes = res.groups.reduce((s, g) => s + g.object.children.length, 0);
@@ -295,6 +297,24 @@ describe('interior camera bookmarks', () => {
     for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar']) expect(names).toContain(n);
     for (const x of v) { expect(x.mode).toBe('fly'); expect(x.clamp).toBe(false); expect(x.pos.every(Number.isFinite)).toBe(true); }
     expect(interiorViews({ ...P, rooms: [], doors: [], sallyPort: null })).toEqual([]);
+  });
+});
+
+describe('door heads agree with the door leaves', () => {
+  it('uses the leaf convention for every leaved door', async () => {
+    const { headRise: leafRise } = await import('../src/castle/interior/doorGeom');
+    const { headRise } = await import('../src/castle/interior/geom');
+    for (const h of ['round', 'pointed', 'segmental', 'flat'] as const) expect(headRise(h, 1.3)).toBeCloseTo(leafRise(h, 1.3));
+    for (const d of P.doors.filter((x) => x.leaf)) expect(P.rise[d.id], d.id).toBeUndefined();
+    const Q = clone(P), d = Q.doors.find((x) => x.leaf)!;
+    Q.rise[d.id] = 0.3;
+    expect(validatePlan(Q).errors.some((e) => e.includes('override'))).toBe(true);
+    // a leaved door that is too tall gets a flatter head, never a rise override
+    const t = Q.doors.find((x) => x.leaf && x.spaces.includes('tunnel-x'))!;
+    delete Q.rise[t.id]; t.height = 3.0; t.head = 'round';
+    fitDoorHeads(Q);
+    expect(doorHeadFits(Q, t)).toBe(true);
+    expect(Q.rise[t.id]).toBeUndefined();
   });
 });
 

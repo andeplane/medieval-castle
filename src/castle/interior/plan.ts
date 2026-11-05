@@ -329,7 +329,7 @@ export function planInterior(seed = WORLD_SEED): PlanX {
   {
     const gc = add(g.base, scale(g.out, GATEHOUSE.project - GATE.wall / 2));
     const d = exteriorDoor('gate-main', 'gate-0', 'outside', gc, GATE.sill, g.out, GATE.width, GATE.spring, GATE.wall, 'pointed', true, 'gate');
-    d.swingInto = 1; d.rebate = 1.5; rise['gate-main'] = GATE.rise;
+    d.swingInto = 1; d.rebate = 1.5; // head: pointed, 0.42 × 3.8 = 1.6 m rise like the exterior arch
     const inner = mkDoor('gate-inner', ['gate-0', 'gate-1'], add(g.base, scale(sP.v, sP.tOut / 2)), GATE.sill, sP.v, 3.4, 2.8, sP.tOut, 'pointed', false, 'plank');
     doors.push(inner); rise['gate-inner'] = 1.4;
     const court = mkDoor('gate-court', ['gate-1', 'courtyard'], local(sP.o, sP.u, sP.v, sGate, sP.dIn + T_COURT / 2), GATE.sill, sP.v, 3.4, 2.8, T_COURT, 'pointed', false, 'plank');
@@ -473,7 +473,6 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     const h = shaftR * Math.cos(Math.asin(0.8 / shaftR));
     const wall = stOct.apothem - h;
     const cd = exteriorDoor('court>stairtower', 'stairtower', 'courtyard', add(shaftC, scale(stOct.doorDir, h + wall / 2)), GROUND, stOct.doorDir, STAIR_DOOR_W, 2.0, wall, 'pointed');
-    rise['court>stairtower'] = 0.5;
     // one landing per floor (a spiral lands one door at a time): the courtyard door on the ground
     // floor, then the N wing, or the E wing where the N wing has no room against the tower
     land(cd, 'courtyard', GROUND, stOct.doorDir);
@@ -699,18 +698,22 @@ export const HEAD_CLEAR = 0.15;
 
 /**
  * Lower door heads that would cut into a ceiling or vault: first the jamb height (down to 2.0 m),
- * then the head's rise (stored in `P.rise`). Doors still too tall are left for validatePlan to report.
+ * then the head: a flatter head type for leaved doors, a lower rise (stored in `P.rise`) for open
+ * arches. Doors still too tall are left for validatePlan to report.
  */
 export function fitDoorHeads(P: PlanX): void {
+  const flatter: Record<Head, Head | null> = { round: 'segmental', pointed: 'segmental', segmental: 'flat', flat: null };
   for (const d of P.doors) {
     let rise = P.rise[d.id] ?? headRise(d.head, d.width);
-    const fits = () => doorHeadFits(P, d, rise);
     let changed = false;
-    for (let it = 0; it < 200 && !fits(); it++) {
+    for (let it = 0; it < 200 && !doorHeadFits(P, d, rise); it++) {
       if (d.height > 2.0 + 1e-6) d.height = Math.max(2.0, d.height - 0.05);
-      else if (rise > 0.1 + 1e-6) rise = Math.max(0.1, rise - 0.05);
+      else if (d.leaf) {
+        // leaves take their head shape from DoorSpec.head alone, so flatten the head type instead
+        const next = flatter[d.head]; if (!next) break;
+        d.head = next; rise = headRise(next, d.width); delete P.rise[d.id];
+      } else if (rise > 0.1 + 1e-6) { rise = Math.max(0.1, rise - 0.05); changed = true; }
       else break;
-      changed = true;
     }
     if (changed) P.rise[d.id] = rise;
   }
@@ -749,6 +752,7 @@ export function validatePlan(P: PlanX): PlanReport {
     for (const s of d.spaces) if (s !== 'outside' && s !== 'courtyard' && s !== 'farbank' && !ids.has(s)) errors.push(`door ${d.id} names unknown space ${s}`);
     if (d.width < 0.9 - 1e-6 || d.height < 2.0 - 1e-6) errors.push(`door ${d.id} too small ${d.width.toFixed(2)}×${d.height.toFixed(2)}`);
     if (!doorHeadFits(P, d)) errors.push(`door ${d.id} head cuts the ceiling`);
+    if (d.leaf && P.rise[d.id] !== undefined) errors.push(`door ${d.id} has a leaf but a head rise override`);
     if (d.kind === 'grille') continue; // barred for good
     link(d.spaces[0], d.spaces[1]); link(d.spaces[1], d.spaces[0]);
   }

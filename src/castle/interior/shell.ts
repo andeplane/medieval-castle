@@ -225,7 +225,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   function gateDetails(B: Builder, d: DoorSpec, W: (u: number, y: number, t: number) => V3, clear: V2[]) {
     // portcullis groove just inside the outer arch: a slot in both jambs and the head
     const front = -d.wall / 2, g0 = front + 0.62, g1 = g0 + 0.15, deep = 0.12;
-    const hw = d.width / 2, y = d.centre[1], top = d.height + (P.rise[d.id] ?? 1.6);
+    const hw = d.width / 2, y = d.centre[1], top = d.height + (P.rise[d.id] ?? headRise(d.head, d.width));
     for (const sgn of [-1, 1]) {
       const u0 = sgn * hw, u1 = sgn * (hw + deep);
       const nIn: V3 = norm3([-sgn * d.along[0], 0, -sgn * d.along[1]]);

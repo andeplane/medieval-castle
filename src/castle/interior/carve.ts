@@ -8,7 +8,8 @@ import type { V2 } from '../../core/math2d';
 
 export type V3 = [number, number, number];
 export interface Plane { n: V3; d: number }       // inside: dot(n, p) < d
-export interface Volume { planes: Plane[]; min: V3; max: V3 }
+/** Convex volume: inside every plane. `pts` are its corners (for consumers that want the hull, e.g. stone exclusions). */
+export interface Volume { planes: Plane[]; min: V3; max: V3; pts: V3[] }
 export interface TriBin { pos: number[]; nor: number[]; uv: number[] }
 
 const EPS = 1e-3;
@@ -25,7 +26,8 @@ export function prismVolume(poly: V2[], y0: number, y1: number): Volume {
     planes.push({ n, d: n[0] * a[0] + n[2] * a[1] });
   }
   const xs = p.map((q) => q[0]), zs = p.map((q) => q[1]);
-  return { planes, min: [Math.min(...xs), y0, Math.min(...zs)], max: [Math.max(...xs), y1, Math.max(...zs)] };
+  const pts: V3[] = [...p.map((q) => [q[0], y0, q[1]] as V3), ...p.map((q) => [q[0], y1, q[1]] as V3)];
+  return { planes, min: [Math.min(...xs), y0, Math.min(...zs)], max: [Math.max(...xs), y1, Math.max(...zs)], pts };
 }
 
 /**
@@ -49,7 +51,7 @@ export function extrudeVolume(origin: V2, along: V2, n: V2, outline: V2[], t0: n
   }
   const pts: V3[] = [];
   for (const q of o) for (const t of [t0, t1]) pts.push(P(q[0], q[1], t));
-  return { planes, min: [0, 1, 2].map((k) => Math.min(...pts.map((p) => p[k]))) as V3, max: [0, 1, 2].map((k) => Math.max(...pts.map((p) => p[k]))) as V3 };
+  return { planes, min: [0, 1, 2].map((k) => Math.min(...pts.map((p) => p[k]))) as V3, max: [0, 1, 2].map((k) => Math.max(...pts.map((p) => p[k]))) as V3, pts };
 }
 
 const dot3 = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
