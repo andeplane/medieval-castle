@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-11-05: furniture in the castle rooms (behind `?furniture=1`)
+
+Done
+- `src/props/dress.ts` (pure): every room gets a role from its kind, floor and size (hall, chapel, bedchamber, solar, study, guard room, kitchen, store, cellar, gate, passage) and a recipe that puts props against walls, in the middle, on table tops, on walls (sconces, tapestries) and from the ceiling. Tall props and hangings go on inner walls only (outer walls have windows). Props come from 6 seeded variants per kind.
+- Walkable by construction: clear zones inside every doorway (door swing + a step) and around straight stair ends; after placing, a flood fill on a 0.2 m grid (agent radius 0.3 m, wall clearance) must still connect every door of the room, or props are taken out again, last first. Tests check this for every room of the plan.
+- `src/props/furnish.ts`: one object per interior visibility group (`Map<group key, Group>`, parented under the group so it hides with its rooms), light emitters and box-collider triangle soups per group (`__game.furniture`). Main builds it only with `?furniture=1` until Anders approves furniture in the castle.
+
+Numbers (default seed): 1,405 props in 206 rooms, ~755k triangles in total, at most ~41k in one group (N:2), 7 materials per group, 322 emitters (sconces, candles, chandeliers); dressing takes ~0.6 s.
+
+Next
+- Interior light: turn `furniture.emitters` into lights; switch props to the interior materials.
+- Window positions are not in the plan, so the "inner wall" test is a heuristic; expose embrasures from the shell to place low furniture under windows correctly.
+- Triangle budget: with all groups visible the furniture adds ~755k; it relies on the interior visibility culling.
+
 ## 2026-11-05: firelight (shared flame and light system, `src/light/`)
 
 Anders: "what we really need to nail here is amazing lighting. realistic flames and warm great feeling". One system for every fire: the prop kit, the castle interiors (interior-light consumes it) and later NPC-carried torches.
@@ -263,6 +277,35 @@ Known issues / next
 - Contract interpretations the shell should match: the leaf's back face sits on the stop at `rebate` from the swing face; the leaf fits inside the clear opening with 1.5 cm clearance (no lap over the stop, so thin light slits show); pointed heads rise 0.42·w (castle.ts gate arch), segmental 0.2·w. `openingOutline(head, w, h, seg, grow)` gives the exact outline, and `grow` gives a rebate recess.
 - Portcullis grid is iron, not iron-shod oak; there is no winch or windlass in the room above yet.
 - Doors are only in the main scene for the gate, until the shell's `plan.doors` lands.
+
+## 2026-11-05: bridge ruin and moat rim fix
+
+Done
+- Revetment (`src/castle/revetment.ts`): fixes the "flying stones". It is now a battered rubble wall that rises from the moat bed, with its face 0.75 m outside the island outline. Coping stones 0.9 m deep sit 5–11 cm above the turf, and three damaged stretches have fallen stones in the water.
+- The revetment face records battered stone faces, so the real stones (castle/stones) cover it near the camera.
+- Turf strip (`src/castle/turf.ts`): uses the terrain material and covers the near grid's one-cell step under the coping. The island ground holds its level to the coping's back edge.
+- terrain.ts, island branch only:
+  - the lawn drop toward the rim is now -0.75, was -0.9;
+  - the bank is `smoothstep(0.05, 0.35, e)` down to -1.6.
+- grass.ts: the island reeds moved out to 1.3–2.5 m, in front of the wall face.
+- Bridge (`src/castle/bridge.ts` plus `src/castle/rubble.ts`): a ruined three-arch bridge.
+  - Piers with cutwaters, voussoir arches, spandrels, a string course, and parapets with coping. The deck has worn ruts.
+  - The middle span fell. Its stubs, core and parapets break back in steps, and the 45-stone rubble heap is half-submerged.
+  - The approach is flush at the gatehouse. The deck is walkable to the break, which leaves a gap of at least 4 m, so the far end can't be reached.
+  - `plan.walkable` and `plan.deckHeightAt` are exported for the nav graph.
+  - Walk mode includes the deck (`withBridge` in main.ts). Walked in the headless game: holding W from the lawn by the gate climbs smoothly onto the deck and stops 1.3 m short of the broken edge. `tests/bridge.test.ts` has a key-path test through the same composition (lawn → deck → edge, never over the parapets, the gap or the far half).
+- Plans are pure and take their collaborators as parameters (outlines, `groundAt`, rng, Builder). Tests are in `tests/bridge.test.ts`, `revetment.test.ts` and `turf.test.ts`, at 98–100% line coverage. They include the requested check that the ground 0.4–2 m inside the ring sits no lower than the coping top − 0.3 m, and a replica near-grid check that the terrain never shows in front of the wall.
+- New walk bookmarks: `bridge`, `rim`.
+
+Numbers (headless WebGL2, 1600×900):
+- Castle bin: 132.8k triangles, of which the bridge is 11.0k and the revetment 5.4k.
+- The turf strip is 7.7k triangles in one extra draw call.
+- Frame totals: bridge 5.02M triangles / 308 draw calls, rim 5.08M / 302, moat 4.47M / 356, gate 6.03M / 662. Most of that is real stones and terrain, which come from main.
+
+Known issues / next
+- `tests/revetment.test.ts` replicates the near terrain grid (380 m / 420 cells). Update `NEAR` there if the grid changes.
+- `turf.ts` `rimMask` duplicates the terrain's island ground mask.
+- Physics must treat water as a barrier so the far bank stays unreachable.
 
 ## 2026-11-05: UI through impeccable (branch `ui-impeccable`)
 

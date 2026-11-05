@@ -9,9 +9,12 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { StoneField } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
-import { buildBridge } from './castle/bridge';
-import { buildRevetment } from './castle/revetment';
-import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable } from './world/terrain';
+import { bridgePlan, buildBridge, withBridge, type BridgePlan } from './castle/bridge';
+import { revetmentPlan, buildRevetment } from './castle/revetment';
+import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
+import { gatehouseFrame } from './castle/layout';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable, footDist, defaultTerrain } from './world/terrain';
+import { rngFor } from './core/rng';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
@@ -66,6 +69,7 @@ async function main() {
   await say('Raising the walls…');
   const test = params.get('test');
   let builder, lights: unknown[];
+  let bridgeTriangles = 0, revetmentTriangles = 0, revetment: ReturnType<typeof revetmentPlan> | undefined, bridge: BridgePlan | undefined;
   if (test === 'stairs') {
     const { buildStairTest } = await import('./debug/stairtest');
     const t = buildStairTest(params.has('cut'));
@@ -74,8 +78,10 @@ async function main() {
     VIEWS.splice(0, VIEWS.length, ...t.views);
   } else {
     ({ builder, lights } = buildCastle());
-    const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
-    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+    bridge = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
+    bridgeTriangles = buildBridge(builder, bridge, rngFor('bridge-stones'));
+    revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
+    revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
@@ -83,6 +89,15 @@ async function main() {
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
+  // furniture (src/props): off until Anders approves it in the castle; ?furniture=1 turns it on
+  let furniture: import('./props/furnish').Furniture | null = null;
+  if (interior && params.get('furniture') === '1') {
+    await say('FURNISHING THE ROOMS…');
+    const [{ furnish }, { makePropMaterials }, T] = await Promise.all([import('./props/furnish'), import('./props/render'), import('./props/textures')]);
+    const pm = makePropMaterials({ wood: T.woodTex(), iron: T.ironTex(), cloth: T.clothTex(), straw: T.strawTex(), ceramic: T.ceramicTex() });
+    furniture = furnish(interior.plan, pm);
+    for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
+  }
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
   const layoutMs = Math.round(performance.now() - tStones);
@@ -99,6 +114,11 @@ async function main() {
   const sky = makeSky(renderer, scene);
   const terrain = buildTerrain(M.terrain);
   scene.add(terrain);
+  if (revetment) {
+    // turf over the rim, with the same noise as the terrain's ground weights (world/terrain.ts 'terrain-b')
+    const rimNoise = defaultTerrain().deps.noise2('terrain-b');
+    scene.add(rimTurfMesh(rimTurf(revetment, heightAt, rimMask({ footDist, noise: rimNoise, gate: gatehouseFrame() })), M.terrain));
+  }
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
@@ -140,13 +160,15 @@ async function main() {
   const rig = new CameraRig(camera, renderer.domElement);
   // walk mode may step into the gate passage when the leaves and portcullis let you
   const feet = new THREE.Vector3();
+  // the island half of the bridge is walkable up to its broken edge
+  const ground = bridge ? withBridge(bridge, islandWalkable, heightAt) : { canWalk: islandWalkable, groundAt: heightAt };
   rig.canWalk = (x, z) => {
     feet.set(x, camera.position.y - 0.8, z);
     if (doors.blocksPlayer(feet)) return false;
-    return islandWalkable(x, z) || gateSpecs.some((d) => inDoorway(d, x, z));
+    return ground.canWalk(x, z) || gateSpecs.some((d) => inDoorway(d, x, z));
   };
   // the passage floor is the gate sill, not the terrain under the gatehouse
-  rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
+  rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : ground.groundAt(x, z); };
   // HUD (src/ui): crosshair, use prompt, help, controls card and the review tools (` toggles them)
   const hud = createHud(browserHudDeps(), { onToolsOpen: () => rig.look.release() });
   const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly', view: hud.promptView });
@@ -178,13 +200,15 @@ async function main() {
     doors, hud,
     stats: () => ({
       interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
-      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      furniture: furniture ? { props: furniture.props, triangles: furniture.triangles, groups: furniture.objects.size, emitters: [...furniture.emitters.values()].reduce((s, e) => s + e.length, 0) } : null,
+      castleTriangles: castle.userData.triangles, bridgeTriangles, revetmentTriangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
 
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+  (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
