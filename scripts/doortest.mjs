@@ -90,8 +90,9 @@ if (process.env.MAIN !== '0') {
   await ev(page, () => window.__game.doors.setOpen('gate-main', false, true));
   await shot('castle-gate-lowered');
   // walk straight at it along the gate axis from 7 m out (the walker slides along whatever stops it)
-  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre; window.__game.lookFrom([c[0] - n[0] * 7, 0, c[2] - n[1] * 7], [c[0] + n[0] * 4, c[1] + 1.9, c[2] + n[1] * 4], 'walk'); });
-  await ev(page, () => window.__game.walk(4));
+  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre; window.__game.player.teleport(c[0] - n[0] * 7, c[1], c[2] - n[1] * 7, Math.atan2(-n[0], -n[1]), 0); });
+  const walk = (s) => ev(page, (ms) => window.__game.input(['KeyW'], ms), s * 1000);
+  await walk(4);
   let t = await through();
   ok(t < groove - 0.25 && t > groove - 0.7, `walked up to the lowered grille and stopped (${t.toFixed(2)} m, groove at ${groove})`);
   await tick(page, 0.05);
@@ -100,17 +101,17 @@ if (process.env.MAIN !== '0') {
   ok(await ev(page, () => window.__game.use()), 'E (use) on the grille');
   s = await tick(page, 2);
   ok(s['gate-main'] > 0.05 && s['gate-main'] < 0.8, `rising slowly after 2 s (${s['gate-main']})`);
-  ok(await ev(page, () => window.__game.walk(1)).then(async () => (await through()) < groove), 'still blocked while it is low');
+  ok(await walk(1).then(async () => (await through()) < groove), 'still blocked while it is low');
   s = await tick(page, 10);
   ok(s['gate-main'] === 1, 'fully raised');
   g = await game();
   ok(g.sounds.some((x) => x.name === 'clank'), 'ratchet clanks were heard');
-  await ev(page, () => window.__game.walk(3));
+  await walk(3);
   t = await through();
   ok(t > groove + 0.3, `walked under it into the gate (${t.toFixed(2)} m)`);
   await shot('castle-gate-walked-in');
   // from the inside: turn round, look up at it and lower it
-  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre, k = 2.0; window.__game.lookFrom([c[0] + n[0] * k, 0, c[2] + n[1] * k], [c[0] - n[0] * 1, c[1] + 5.0, c[2] - n[1] * 1], 'walk'); }); // looking up at the raised grid
+  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre, k = 2.0; window.__game.player.teleport(c[0] + n[0] * k, c[1], c[2] + n[1] * k, Math.atan2(n[0], n[1]), Math.atan2(5.0 - 1.62, k + 1)); }); // looking up at the raised grid
   await tick(page, 0.05);
   g = await game();
   ok(g.target?.id === 'gate-main' && g.target.label === 'Lower portcullis', `from inside, crosshair on the grille: ${JSON.stringify(g.target)}`);

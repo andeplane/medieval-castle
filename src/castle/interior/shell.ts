@@ -550,5 +550,8 @@ function portal(ext: Builder, P: PlanX, deps: ShellDeps, vols: Volume[]) {
   ext.prism('old', poly, g0, top, { top: 'trim' });
   // a sloped coping toward the bank
   ext.prism('trim', [q(tEnd - 0.1, -hw - 0.1), q(tEnd + 0.1, -hw - 0.1), q(tEnd + 0.1, hw + 0.1), q(tEnd - 0.1, hw + 0.1)], top, top + 0.25);
-  void vols;
+  // the bore through the housing's back face: tunnelCarve's 1 m pieces miss a face that lies on one of
+  // their boundaries, which left the face across the tunnel's last flight
+  const bw = t.width / 2;
+  vols.push(prismVolume([q(tH - 0.5, -bw), q(tH + 0.5, -bw), q(tH + 0.5, bw), q(tH - 0.5, bw)], floorAt(tH - 0.5) - 0.05, floorAt(tH + 0.5) + t.crown + 0.02));
 }
