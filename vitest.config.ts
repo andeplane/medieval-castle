@@ -8,7 +8,7 @@ export default defineConfig({
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
-      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/interior/{stairs,stairprobe}.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts', 'src/game/{interact,doorAudio}.ts'],
+      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/interior/{stairs,stairprobe}.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts'],
       exclude: ['src/loading/entry.ts', 'src/props/preview.ts'],
       thresholds: {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
@@ -19,6 +19,8 @@ export default defineConfig({
         'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts': { lines: 99, functions: 100, branches: 94, statements: 98 },
         // measured: interact 98.9 / 90.6 / 94.4 / 98.2, doorAudio 99.4 / 96.7 / 93.3 / 100
         'src/game/{interact,doorAudio}.ts': { lines: 98, functions: 93, branches: 90, statements: 98 },
+        // HUD, tools panel, help and boot error (happy-dom + fakes in tests/ui)
+        'src/ui/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
       },
     },
   },

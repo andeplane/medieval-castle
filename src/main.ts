@@ -1,6 +1,6 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?ao=0 (no ambient occlusion), ?shot (hide UI; add ?ui=locked,tools,card to keep the HUD), ?debug (three Inspector), ?seed=N,
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
@@ -13,7 +13,7 @@ import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalka
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
-import { CameraRig, VIEWS, type Mode } from './camera/controls';
+import { CameraRig, VIEWS } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
@@ -22,13 +22,16 @@ import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
 import { stepProgress, textureProgress } from './loading/model';
 import { setTextureProgress } from './render/texpool';
+import { createHud, browserHudDeps } from './ui/hud';
+import { wireGameHud } from './ui/gameHud';
+import { showBootError } from './ui/error';
 
 const params = new URLSearchParams(location.search);
 // Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
-// texture jobs fill CUTTING → RAISING.
+// texture jobs fill "Cutting the stone" → "Raising the walls".
 let screen: LoadingScreen;
 const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
-if (params.has('shot')) document.body.classList.add('shot');
+if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 async function main() {
   if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
@@ -50,13 +53,13 @@ async function main() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.25, 30000);
 
-  await say('CUTTING THE STONE…');
+  await say('Cutting the stone…');
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
   await terrainReady;
 
-  await say('RAISING THE WALLS…');
+  await say('Raising the walls…');
   const test = params.get('test');
   let builder, lights: unknown[];
   if (test === 'stairs') {
@@ -78,14 +81,14 @@ async function main() {
   const doors = buildDoors(gateSpecs, M, undefined, { portcullis: test ? [] : [gatePortcullisSpec()], sound: audio, initial: params.has('doors') ? Number(params.get('doors')) : undefined });
   scene.add(doors.object);
 
-  await say('SHAPING THE LAND…');
+  await say('Shaping the land…');
   const sky = makeSky(renderer, scene);
   const terrain = buildTerrain(M.terrain);
   scene.add(terrain);
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
-  await say('PLANTING TREES…');
+  await say('Planting trees…');
   let veg: Vegetation | null = null;
   if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
@@ -130,7 +133,9 @@ async function main() {
   };
   // the passage floor is the gate sill, not the terrain under the gatehouse
   rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
-  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
+  // HUD (src/ui): crosshair, use prompt, help, controls card and the review tools (` toggles them)
+  const hud = createHud(browserHudDeps(), { onToolsOpen: () => rig.look.release() });
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly', view: hud.promptView });
   // the stair bookmarks are close, upward-looking fly views: lift the orbit clamps that go() applies
   if (test) { rig.orbit.minDistance = 0.01; rig.orbit.maxPolarAngle = Math.PI; }
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
@@ -138,51 +143,24 @@ async function main() {
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
   rig.go(start);
 
-  // UI
-  const ui = document.getElementById('ui')!;
-  const modeRow = document.createElement('div'); modeRow.className = 'row';
-  const viewRow = document.createElement('div'); viewRow.className = 'row';
-  const modeBtns: Record<string, HTMLButtonElement> = {};
-  const help = document.getElementById('help')!;
-  const helpText: Record<Mode, string> = {
-    orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
-    walk: 'Click to look with the mouse · WASD walk · Shift run · E to use (gate, portcullis) · Esc releases',
-  };
-  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · click to use · Esc to release mouse', walk: 'WASD walk · Shift run · E or click to use · Esc to release mouse' };
-  const crosshair = document.getElementById('crosshair')!;
-  const syncMode = () => {
-    for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
-    help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
-    crosshair.hidden = !rig.locked;
-  };
-  rig.onLockChange = syncMode;
-  for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
-    const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
-    b.onclick = () => { rig.setMode(m); if (m === 'walk') { const p = camera.position; if (p.y > 30) rig.go(VIEWS.find((v) => v.name === 'gate')!); } syncMode(); };
-    modeBtns[m] = b; modeRow.appendChild(b);
-  }
-  const time = document.createElement('label');
-  time.innerHTML = 'Time <input type="range" min="6.5" max="19.8" step="0.1">';
-  const slider = time.querySelector('input')!; slider.value = String(sky.hours);
-  slider.oninput = () => setTime(Number(slider.value));
-  modeRow.appendChild(time);
-  for (const v of VIEWS) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => { rig.go(v); syncMode(); }; viewRow.appendChild(b); }
-  ui.append(modeRow, viewRow);
-  syncMode();
+  const ui = wireGameHud(hud, {
+    rig, views: VIEWS, search: location.search, time: { get: () => sky.hours, set: setTime },
+    walkFrom: { above: 30, view: 'gate', height: () => camera.position.y },
+  });
+  rig.onLockChange = ui.sync;
 
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
-  await say('LIGHTING…');
+  await say('Lighting the halls…');
   await renderer.compileAsync(scene, camera);
 
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { veg?.update(camera); pipeline.render(); },
-    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); ui.sync(); },
     use: () => interaction.use(),
-    doors,
+    doors, hud,
     stats: () => ({
       castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
@@ -196,17 +174,15 @@ async function main() {
     hooks.ready = true;
     return;
   }
-  const fpsEl = document.createElement('span');
-  fpsEl.style.cssText = 'margin-left:8px;opacity:.8;font-variant-numeric:tabular-nums';
-  modeRow.appendChild(fpsEl);
   let last = performance.now(), frames = 0, acc = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
-    if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
+    if (acc > 0.5) { ui.setFps(frames / acc); frames = 0; acc = 0; }
     rig.update(dt);
     doors.update(dt, camera.position);
     interaction.update();
+    ui.sync();
     veg?.update(camera);
     pipeline.render();
   });
@@ -220,5 +196,5 @@ async function main() {
 export function boot(loading: LoadingScreen) {
   screen = loading;
   setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
-  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+  return main().catch((e) => { console.error(e); screen.dispose(); showBootError(document, e, () => location.reload()); });
 }

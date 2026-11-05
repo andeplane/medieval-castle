@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T15:30:00Z",
+  "title": "Design System: Moated Castle",
+  "extensions": {
+    "colorMeta": {
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1b1e22", "tonalRamp": ["#0b0c0e", "#131518", "#1b1e22", "#2a2e33", "#3d4248", "#5a5f66", "#8a8e93", "#c4c6c8"] },
+      "bone": { "role": "neutral", "displayName": "Bone", "canonical": "#ddd6c6", "tonalRamp": ["#2b2925", "#45423b", "#67625a", "#8d877b", "#b3ac9d", "#ddd6c6", "#ebe6da", "#f6f3ec"] },
+      "bone-dim": { "role": "neutral", "displayName": "Dim Bone", "canonical": "#b3ac9d" },
+      "brass": { "role": "primary", "displayName": "Brass", "canonical": "#c2a56a", "tonalRamp": ["#2e2716", "#4a3e23", "#6b5a33", "#8a7346", "#a88d57", "#c2a56a", "#d6c08f", "#ece0c4"] },
+      "chip": { "role": "neutral", "displayName": "Chip Ink" },
+      "panel": { "role": "neutral", "displayName": "Panel Ink" },
+      "line": { "role": "neutral", "displayName": "Hairline" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Loading screen title only." },
+      "title": { "displayName": "Title", "purpose": "Tools panel and Controls card headings." },
+      "body": { "displayName": "Body", "purpose": "Use prompt, help line, toasts." },
+      "control": { "displayName": "Control", "purpose": "Tool buttons, segmented control, select." },
+      "label": { "displayName": "Label", "purpose": "Tool group labels, uppercase." },
+      "keycap": { "displayName": "Keycap", "purpose": "Keys inside kbd." }
+    },
+    "shadows": [
+      { "name": "crosshair-ring", "value": "0 0 0 1px rgba(0, 0, 0, 0.6)", "purpose": "Keeps the 4px dot visible on sky and stone." },
+      { "name": "caption-shadow", "value": "0 1px 2px #000, 0 0 14px rgba(0, 0, 0, 0.7)", "purpose": "Loading caption over the tunnel floor." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Ring opening, prompt and card entrance." },
+      { "name": "card-fade", "value": "opacity 0.6s ease-out after 4.5s", "purpose": "Controls card leaving." }
+    ],
+    "breakpoints": [{ "name": "narrow", "value": "560px" }]
+  },
+  "components": [
+    { "name": "Keycap", "kind": "chip", "refersTo": "keycap", "description": "A key in help, prompts and the Controls card.", "html": "<kbd class=\"ds-kbd\">E</kbd>", "css": ".ds-kbd { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border: 1px solid rgba(194,165,106,.62); border-bottom-width: 2px; border-radius: 3px; background: rgba(194,165,106,.08); color: #c2a56a; font: 600 11px/1 system-ui, sans-serif; letter-spacing: .03em; }" },
+    { "name": "Use prompt", "kind": "custom", "refersTo": "hud-chip", "description": "Under the crosshair while a usable thing is targeted.", "html": "<div class=\"ds-prompt\"><kbd class=\"ds-kbd\">E</kbd><span>Open door</span></div>", "css": ".ds-prompt { display: inline-flex; gap: 8px; align-items: center; padding: 5px 12px 5px 5px; border-radius: 6px; background: rgba(18,20,23,.82); border: 1px solid rgba(221,214,198,.2); color: #ddd6c6; font: 500 14px/1.4 system-ui, sans-serif; } .ds-kbd { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; border: 1px solid rgba(194,165,106,.62); border-bottom-width: 2px; border-radius: 3px; color: #c2a56a; font: 600 11px/1 system-ui, sans-serif; }" },
+    { "name": "Segmented choice", "kind": "nav", "refersTo": "segment-on", "description": "Camera mode in the tools panel.", "html": "<div class=\"ds-seg\"><button>Orbit</button><button aria-pressed=\"true\">Fly</button><button>Walk</button></div>", "css": ".ds-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid rgba(221,214,198,.2); border-radius: 3px; overflow: hidden; width: 228px; } .ds-seg button { min-height: 30px; border: 0; border-left: 1px solid rgba(221,214,198,.2); background: none; color: #ddd6c6; font: 13px system-ui, sans-serif; cursor: pointer; } .ds-seg button:first-child { border-left: 0; } .ds-seg button:hover { background: rgba(221,214,198,.07); } .ds-seg button[aria-pressed='true'] { background: #c2a56a; color: #1b1e22; font-weight: 600; } .ds-seg button:focus-visible { outline: 2px solid #c2a56a; outline-offset: -2px; }" },
+    { "name": "List button", "kind": "button", "refersTo": "list-button", "description": "A camera bookmark or room in the tools panel.", "html": "<button class=\"ds-list\">Across the moat</button>", "css": ".ds-list { min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: 3px; background: rgba(221,214,198,.05); color: #ddd6c6; font: 13px/1.2 system-ui, sans-serif; text-align: left; cursor: pointer; } .ds-list:hover { border-color: rgba(221,214,198,.38); background: rgba(221,214,198,.09); } .ds-list:focus-visible { outline: 2px solid #c2a56a; outline-offset: 2px; }" },
+    { "name": "Primary button", "kind": "button", "refersTo": "primary-button", "description": "The one action on the boot error screen.", "html": "<button class=\"ds-primary\">Reload</button>", "css": ".ds-primary { min-height: 36px; padding: 0 18px; border: 1px solid #c2a56a; border-radius: 3px; background: #c2a56a; color: #1b1e22; font: 600 14px system-ui, sans-serif; cursor: pointer; } .ds-primary:hover { background: #d1b67c; } .ds-primary:focus-visible { outline: 2px solid #c2a56a; outline-offset: 2px; }" }
+  ],
+  "narrative": {
+    "northStar": "Torchlight on Stone",
+    "overview": "The castle is the page. The interface is a few small marks laid over it: dark ink grounds, bone text, and brass only where something can be pressed or used. A worn early-modern book face speaks only in titles; everything read at a glance is the system sans.",
+    "keyCharacteristics": ["Experience mode: the world leads, the UI recedes; dev tools are hidden while walking.", "Ink and bone with a single brass accent for keys, the active state and focus.", "Small type (11-14px) on translucent ink chips, never bare text over the scene.", "Keyboard first: every control has a key or is reachable by Tab; keycaps show keys.", "One authored motion per surface."],
+    "rules": [
+      { "name": "The Brass Is Iron Rule", "body": "Brass marks only what you can act on (a key, a target, the current choice, focus).", "section": "colors" },
+      { "name": "The No Bare Text Rule", "body": "Text over the 3D scene always sits on Chip Ink or Panel Ink, except the loading caption.", "section": "colors" },
+      { "name": "The Titles Only Rule", "body": "The display face never sets instructions, numbers or anything smaller than 19px.", "section": "typography" }
+    ],
+    "dos": ["Do put every floating text on Chip Ink (rgba 18,20,23 at 82 %) or Panel Ink.", "Do show keys as keycaps and name the action in plain words (\"Open door\", \"release the mouse\").", "Do hide everything under body.shot; use ?ui=locked,tools,card to keep the HUD in a capture.", "Do keep the tools out of the way while walking and reachable in one key."],
+    "donts": ["Don't add panels, badges or persistent text to the walking view beyond the crosshair and prompt.", "Don't use brass for decoration, or the display face for instructions or numbers.", "Don't use emoji or Unicode glyphs as icons; draw icons as inline SVG.", "Don't add drop shadows to chips or panels; one hairline is the whole edge."]
+  }
+}
