@@ -52,26 +52,29 @@ import { planInterior } from './castle/interior/plan';
 import { createInteraction } from './game/interact';
 import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
-import { stepProgress, textureProgress } from './loading/model';
-import { setTextureProgress } from './render/texpool';
 import { createHud, browserHudDeps } from './ui/hud';
 import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
+import { createStatsOverlay } from './ui/statsOverlay';
+import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
+import { ResolutionGovernor } from './render/resolution';
+import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
-// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
-// texture jobs fill "Cutting the stone" → "Raising the walls".
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel,
+// in proportion to how long the step took on this device last time (src/loading/timeline.ts).
 let screen: LoadingScreen;
-const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
+const say = (s: string) => screen.step(s);
 if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 async function main() {
   if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
   const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
-  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
+  // trackTimestamp: GPU time per frame for the stats overlay and the benchmark (WebGPU timestamp queries)
+  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl'), trackTimestamp: !params.has('webgl') });
   await renderer.init();
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(pixelRatio(devicePixelRatio, params.get('scale')));
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
@@ -236,6 +239,9 @@ async function main() {
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
+    // the AO is computed at half resolution, so its normal/depth pre-pass needs no more (it was a full
+    // second drawing of the scene at full size: ~7 ms of a 20 ms frame on an M4 at retina 2×)
+    pre.setResolutionScale(0.5);
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
     // metre-scale occlusion so window reveals, corbels and machicolations read with depth
@@ -367,7 +373,10 @@ async function main() {
   };
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
-  if (params.has('play')) rig.setMode('walk');
+  // play starts walking at the spawn outside the gate; a ?view= bookmark, ?shot captures and the
+  // test scenes keep their review camera (O orbits, F flies)
+  const review = params.has('view') || params.has('shot') || !!test;
+  if (!review || params.has('play')) { rig.setMode('walk'); rig.toSpawn(); }
 
   const ui = wireGameHud(hud, {
     rig, views: VIEWS, search: location.search, time: { get: () => sky.hours, set: setTime },
@@ -380,6 +389,7 @@ async function main() {
     if (code === 'KeyP') rig.setMode('walk');
     else if (code === 'KeyF') rig.setMode('fly');
     else if (code === 'KeyO') rig.setMode('orbit');
+    else if (code === 'KeyI') statsView.toggle();
     else if (code === 'KeyM') { footsteps.enabled = !footsteps.enabled; hud.toast(footsteps.enabled ? 'Footsteps on' : 'Footsteps off'); }
   };
   renderer.domElement.addEventListener('pointerdown', () => footsteps.unlock());
@@ -421,6 +431,35 @@ async function main() {
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
   (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
+  // rendering stats (I, or ?stats) and the benchmark (?bench, or __game.bench())
+  const frameStats = new FrameStats(240);
+  const statsView = createStatsOverlay(document, document.body, params.has('stats') || params.has('bench'));
+  const backendName = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
+  const renderInfo = () => { const s = renderer.getDrawingBufferSize(new THREE.Vector2()); return { width: s.x, height: s.y, pixelRatio: renderer.getPixelRatio(), backend: backendName }; };
+  const bench = async (o: { warmMs?: number; measureMs?: number; steps?: string[] } = {}): Promise<{ rows: BenchRow[]; table: string; render: ReturnType<typeof renderInfo> }> => {
+    statsView.setVisible(true); statsView.report(null);
+    const steps = o.steps ? BENCH_STEPS.filter((s) => o.steps!.includes(s.name)) : BENCH_STEPS;
+    const rows = await runBench(steps, {
+      go: (from) => {
+        if (from === 'spawn') { rig.setMode('walk'); rig.toSpawn(); return true; }
+        const v = VIEWS.find((x) => x.name === from); if (!v) return false;
+        rig.go(v); return true;
+      },
+      hold: (keys) => scripted.hold(keys),
+      reset: () => frameStats.clear(),
+      summary: () => frameStats.summary(),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      onRow: (r, i, n) => statsView.note(`bench ${i + 1}/${n}: ${r.name} ${r.fps} fps`),
+    }, o);
+    const table = benchTable(rows);
+    statsView.note(null); statsView.report(table);
+    console.info('bench\n' + table);
+    return { rows, table, render: renderInfo() };
+  };
+  (hooks as Record<string, unknown>).bench = bench;
+  // for profiling from the console or Playwright: per-pass GPU times live in the backend's timestamp pools
+  (hooks as Record<string, unknown>).render = { renderer, scene, camera, pipeline };
+
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
     info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
@@ -429,10 +468,29 @@ async function main() {
     return;
   }
   let last = performance.now(), frames = 0, acc = 0;
+  // the render resolution follows the GPU's load unless ?scale= fixes it (?dynres=0 keeps the screen's)
+  const dynres = params.has('scale') || params.get('dynres') === '0' ? null : new ResolutionGovernor({ max: renderer.getPixelRatio() });
+  // GPU time from WebGPU timestamp queries only (the WebGL2 timer-query path reads nonsense here)
+  const gpuTimed = backendName === 'webgpu' && (renderer.backend as unknown as { trackTimestamp?: boolean }).trackTimestamp === true;
+  const gpuPool = () => (renderer.backend as unknown as { timestampQueryPool: { render: { timestamps: Map<string, number> } } }).timestampQueryPool.render;
+  const adapterVendor = (renderer.backend as unknown as { device?: { adapterInfo?: { vendor?: string } } }).device?.adapterInfo?.vendor;
+  const tiledGpu = adapterVendor ? adapterVendor === 'apple' : /Mac/.test(navigator.userAgent); // see gpuFrameTimes
+  let gpuPending = false;
   renderer.setAnimationLoop(() => {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
-    if (acc > 0.5) { ui.setFps(frames / acc); frames = 0; acc = 0; }
+    if (acc > 0.25) {
+      ui.setFps(frames / acc);
+      const sum = frameStats.summary();
+      statsView.update(sum, renderInfo());
+      frames = 0; acc = 0;
+      // dynamic resolution: step the pixel ratio by the GPU time (frame time without timestamps)
+      if (dynres && sum.frames >= 30) {
+        // without GPU timestamps the frame time is tied to vsync: only a missed 60 Hz frame says anything
+        const r = dynres.update(sum.gpuMs ?? (sum.p50 > 17.5 ? sum.p50 : 0), now);
+        if (r !== renderer.getPixelRatio()) { renderer.setPixelRatio(r); frameStats.clear(); }
+      }
+    }
     tick(dt);
     stones.update(camera.position);
     veg?.update(camera);
@@ -441,16 +499,25 @@ async function main() {
     exposure.update(dt, vis.state);
     pipeline.render();
     exposure.measure();
+    frameStats.push({ frameMs: raw * 1000, cpuMs: performance.now() - now, drawCalls: info.render.drawCalls, triangles: info.render.triangles });
+    // GPU time per frame from the timestamp pool's per-pass durations (one resolve in flight at a time)
+    if (gpuTimed && !gpuPending) {
+      gpuPending = true;
+      void renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => {
+        for (const ms of gpuFrameTimes(gpuPool().timestamps, tiledGpu)) frameStats.pushGpu(ms);
+        gpuPending = false;
+      });
+    }
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   hooks.ready = true;
   await screen.finish();
+  if (params.has('bench')) (hooks as Record<string, unknown>).benchResult = await bench();
 }
 
 /** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
 export function boot(loading: LoadingScreen) {
   screen = loading;
-  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
   return main().catch((e) => { console.error(e); screen.dispose(); showBootError(document, e, () => location.reload()); });
 }

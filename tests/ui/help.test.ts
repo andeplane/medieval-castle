@@ -21,7 +21,7 @@ describe('helpFor', () => {
   it('gives the free line with the HUD keys, and the locked line without them', () => {
     const free = helpFor('walk', false);
     expect(free[0]).toEqual({ keys: 'Click', action: 'to look around' });
-    expect(free.slice(-2).map((h) => h.keys)).toEqual(['H', '`']);
+    expect(free.slice(-3).map((h) => h.keys)).toEqual(['H', '`', 'I']);
     expect(helpFor('walk', true)).toBe(HELP.walk.locked);
     expect(helpFor('walk', true).at(-1)).toEqual({ keys: 'Esc', action: 'release the mouse' });
     expect(helpFor('fly', true).map((h) => h.keys)).toContain('E/Q');

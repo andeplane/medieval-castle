@@ -46,6 +46,67 @@ Still open:
 - `?shot` gives the hall's north wall +3.2 stops ("deep") when you stand 0.5 m from it, so that close-up is blown out. This is the shot exposure path; live auto-exposure was not checked.
 - lights.html is a little darker than before: shorter torch range, and no frame gain. At its exposure of 0.58 the page sits in the tone-map toe, and it is still saturated (0.97).
 - Not checked on WebGPU or on a Mac; with flicker on; at night; with `?furniture=1` (hearths, braziers and candles keep their old ranges, 9 / 7.5 / 3.5 m, and still reach through walls).
+## 2026-11-05: frame rate fixes (AO pre-pass at half size, dynamic resolution)
+
+Measured after deploy (`?bench`, Anders' M4, Chrome WebGPU, 1200×897 CSS px, devicePixelRatio 2, 120 Hz; fps / p95 frame ms):
+
+| view | before (main at #33) | AO at half size, fixed 2× (`?scale=2`) | default (dynamic resolution) |
+|---|---|---|---|
+| hero / aerial | 120 | 120 | 120 |
+| gate | 82 / 23.6 | 95 / 19.5 | 94 / 19.7 |
+| door-gate | 43 / 45.2 | 53 / 36.1 | 66 / 29.1 |
+| courtyard | 57 / 33.6 | 70 / 27.1 | 83 / 22.7 |
+| ward | 83 / 22.8 | 96 / 19.6 | 95 / 19.5 |
+| closeup-ashlar | 37 / 53.5 | 45 / 42.9 | 71 / 26.9 |
+| gatepass | 87 / 22.0 | 107 / 17.6 | 114 / 14.9 |
+| walk-gate (spawn → gate, walking) | – (the step did not move then) | 57 / 40.8 | 71 / 26.6 |
+| run-courtyard | 39 / 34.0 | 67 / 29.6 | 65 / 30.0 |
+
+- GPU time with the new per-frame reading: door-gate 16 ms at a fixed 2×, 12.8 ms with dynamic resolution. It matches the frame rate now.
+- Still open:
+  - p95 frames stay at 20–30 ms near the castle: there are occasional hitches above the GPU time. The cause is not found yet; the stone chunk builds while moving are a suspect.
+  - Door leaves are ~1,600 draw calls on WebGPU (a BatchedMesh draws once per instance). This does not limit the M4 but would weigh on weaker CPUs.
+- A run with the game also open in a second tab dropped the resolution to 1× everywhere, as designed. Close other tabs with the game before benchmarking.
+
+- Per-pass GPU timestamps on the M4 (WebGPU, retina 2×): the GTAO normal pre-pass redrew the whole scene at full size for AO that is computed at half size. It cost ~7 ms of the 20 ms door-gate frame (`?ao=0`: 20 → 12.8 ms, 45 → 70 fps). It now renders at half size (`pre.setResolutionScale(0.5)`).
+- **Dynamic resolution** (`src/render/resolution.ts`): every quarter second the render pixel ratio is checked against the GPU time per frame. It steps 0.25 down (at most once a second) while a frame costs more than 15 ms, and back up (at most every 3 s) when the bigger frame would still fit in 12 ms. It ranges from 1 to the screen's ratio (capped at 2). `?scale=` fixes the ratio, `?dynres=0` turns it off. Without GPU timestamps it only steps down, on frames slower than 57 fps. The stats overlay shows the current ratio under "size".
+- GPU time on Apple GPUs: their passes overlap, and each pass's timestamps span most of the frame, so the sum of passes read 5–8× too high (150 ms for a 22 ms frame). The overlay now takes the longest pass per frame on Apple and the sum elsewhere (`gpuFrameTimes`). It also reads one resolve per frame batch; before, a resolve could count several frames.
+
+## 2026-11-05: frame-rate measurement (stats overlay + benchmark)
+
+Anders: "please measure fps and have stats on rendering so you can improve. now it is quite bad on m4 mac".
+
+Done
+- **Stats overlay** (`src/ui/statsOverlay.ts`, I toggles it, `?stats` starts with it): fps, frame time p50/p95, CPU time in the frame callback, GPU time (WebGPU timestamp queries, `trackTimestamp`), draw calls, triangles, render size and API.
+- **Benchmark** (`src/debug/bench.ts`): the same bookmarks and walks every run (hero, aerial, gate, door-gate, courtyard, ward, closeup-ashlar, gatepass, tunnel, walk-gate from the spawn, run-courtyard), 1 s warm-up and 3 s measured each. `?bench` runs it after loading and shows the table in the overlay; `__game.bench({ steps, warmMs, measureMs })` returns rows and a markdown table; `npm run bench` drives it from Playwright (headless numbers are SwiftShader: only draw calls and triangles mean anything there).
+- `?scale=` sets the render pixel ratio (default: the screen's, capped at 2).
+
+Baseline (live build at 3e3b024, Anders' M4 MacBook Pro, Chrome WebGPU, 1200×897 CSS px at devicePixelRatio 2, 120 Hz screen):
+
+| view | fps | draw calls | triangles |
+|---|---|---|---|
+| hero / aerial / north / moat / top | 120 | 250–370 | 4.0–4.9 M |
+| gate | 77 | 904 | 5.4 M |
+| ward | 83 | 1,138 | 5.5 M |
+| courtyard | 54 | 2,304 | 5.6 M |
+| door-gate | 41 | 1,822 | 5.6 M |
+| closeup-rubble / closeup-ashlar | 40–42 | 1,240–1,250 | 5.2–5.3 M |
+
+What the A/B toggles showed on that machine:
+- It is pixel-bound. At 600×450 CSS px (a quarter of the pixels) every view above runs at 120 fps, with the same 1,800–2,300 draw calls.
+- Door leaves are ~1,600 of the courtyard's 2,304 draw calls: on WebGPU a BatchedMesh draws once per visible instance. Hiding them did not change fps.
+- `?ao=0` (no GTAO normal pre-pass) took door-gate from 41 to 57 fps and halved the draw calls; `?stones=0` changed little.
+
+## 2026-11-05: the game starts walking
+
+Anders: "default should be walk for sure". The page now starts in walk mode at the spawn on the lawn outside the gate, facing it, with the tools panel shut; O switches to orbit and F to fly. A `?view=` bookmark, `?shot` captures and the `?test=` scenes keep their review camera as before, and `?play` still forces walking. I checked it in the real page (headless WebGL2): the default URL reports mode `walk`, the player is grounded at the spawn (5.48, 2.66, 29.79), and the tools panel is closed.
+
+## 2026-11-05: loading tunnel in a worker, time-based progress
+
+- Anders: loading lagged with no animation, the light came the wrong way, and the bar sat at 90 % for a long time.
+- The tunnel draws in a worker on an OffscreenCanvas (`src/loading/tunnel.worker.ts` → `worker.ts`, loop in `loop.ts`, main-thread fallback in `backend.ts`), so it animates while the castle build and shader compile block the main thread (checked by blocking the page for 8 s). It draws at 30 fps at most, at half the device pixels. The caption is page DOM and only updates when the main thread is free.
+- Look: fully black at 0 %. The farthest torch strikes first and the light walks toward the viewer. Far torches keep a minimum size on screen. Daylight at the grille only comes up with the final fill.
+- Progress is proportional to time (`src/loading/timeline.ts`). Each boot step gets a share of the bar sized by how long it took on this device last time. Timings are kept in localStorage `moated-castle:boot-ms:v1`, averaged 70/30 with the previous value; the first visit uses defaults. Inside a step, progress moves linearly over the expected time, then slows and never reaches the step's end. main.ts calls `screen.step(label)`, matched without regard to case; unknown labels only change the caption.
 
 ## 2026-11-05: combined build on main checked (after #27–#30)
 
@@ -588,7 +649,7 @@ Checked in headless Chromium against the merged build (`?webgl&shot&ui`): backqu
 
 Known issues / next
 - Captures run on swiftshader on a loaded machine, so the locked HUD in captures is drawn via `__game.hud.setLocked(true)`, not real pointer lock.
-- The tools open on orbit/fly start views, which includes the default `hero` view on Pages; Anders may prefer them shut everywhere.
+- The tools open on orbit/fly start views (`?view=hero` and other review bookmarks); the default page starts walking with them shut.
 - With interior bookmarks the Views grid has 17 entries and scrolls inside the panel; group exterior/interior when it grows.
 - The help line still names the old walk controls; the physics player should call `hud.setHelp` with its own (jump, crouch).
 - No touch controls: on a phone the HUD lays out, but the game cannot be played.

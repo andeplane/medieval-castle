@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "shots": "node scripts/shots.mjs",
+    "bench": "node scripts/bench.mjs",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {

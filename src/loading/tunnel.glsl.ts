@@ -19,7 +19,7 @@ uniform vec2 uLook;             // small mouse parallax
 uniform float uMotion;          // 0 when the user prefers reduced motion
 uniform vec3 uStone[6];         // rubble palette (linear)
 uniform vec3 uMortar;
-uniform float uDay;             // daylight leaking through the far grille 0..1
+uniform float uDay;             // daylight leaking through the far grille 0..1 (only at the end)
 
 // Matches the castle's tunnels (interior-shell branch): barrel vault ~2.1 m wide, crown ~2.65 m,
 // rubble walls and vault, dressed springer course and dressed flagstones.
@@ -39,7 +39,8 @@ float fbm(vec2 p) { float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a
 
 vec3 torchPos(int i) {
   float side = (i % 2 == 0) ? -1.0 : 1.0;
-  return vec3(side * (W - 0.14), 1.62, -2.2 - float(i) * 3.05);
+  // torch 0 strikes first and is the farthest, so the light comes down the tunnel toward the viewer
+  return vec3(side * (W - 0.14), 1.62, -2.2 - float(${N_TORCH - 1} - i) * 3.05);
 }
 float flick(int i) {
   float t = uTime * (1.0 + 0.25 * uMotion);
@@ -210,13 +211,16 @@ vec3 flames(vec3 ro, vec3 rd, float tmax, float haze) {
       q.y *= 0.5;                                     // taller than wide
       float r2 = dot(q, q);
       c += vec3(1.0, 0.75, 0.45) * I * (exp(-r2 / 0.0018) * 6.0 + 0.0035 / (r2 + 0.003));
+      // a minimum angular size, so a torch far down the tunnel still shows as a point of fire
+      float ang2 = r2 / (b * b);
+      c += vec3(1.0, 0.62, 0.3) * I * 1.6e-5 / (ang2 + 1.2e-5);
     }
   }
   return c;
 }
 
 vec3 shade(Hit h, vec3 P, vec3 V) {
-  if (h.alb.r < 0.0) return vec3(1.3, 1.35, 1.3) * uDay + vec3(0.002);
+  if (h.alb.r < 0.0) return vec3(1.3, 1.35, 1.3) * uDay;
   // daylight spilling through the grille: falls off down the tunnel, strongest on the floor
   vec3 G = vec3(0.0, 0.9, -L);
   vec3 Gd = G - P;
