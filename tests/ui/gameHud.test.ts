@@ -14,7 +14,7 @@ describe('wireGameHud', () => {
     const rig = fakeRig('walk');
     const ui = wireGameHud(hud, { rig, views: VIEWS });
     expect(hud.toolsOpen).toBe(false);
-    expect(keys()).toEqual(['Click', 'WASD', 'Shift', 'Space', 'C', 'E', 'H', '`']);
+    expect(keys()).toEqual(['Click', 'WASD', 'Shift', 'Space', 'C', 'E', 'H', '`', 'I']);
     expect(pressed()).toBe('Walk');
     expect(document.querySelector('.tools h2')?.textContent).toBe('Tools');
     expect(document.querySelector('input[type=range]')).toBeNull(); // no time given

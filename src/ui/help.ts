@@ -38,7 +38,7 @@ export const HELP: Record<HelpMode, { free: HelpItem[]; locked: HelpItem[] }> = 
 
 /** The help line for a mode, with the HUD's own keys (tools, controls) added to the free line. */
 export function helpFor(mode: HelpMode, locked: boolean): HelpItem[] {
-  return locked ? HELP[mode].locked : [...HELP[mode].free, { keys: 'H', action: 'controls' }, { keys: '`', action: 'tools' }];
+  return locked ? HELP[mode].locked : [...HELP[mode].free, { keys: 'H', action: 'controls' }, { keys: '`', action: 'tools' }, { keys: 'I', action: 'stats' }];
 }
 
 /**

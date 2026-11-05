@@ -57,6 +57,9 @@ import { setTextureProgress } from './render/texpool';
 import { createHud, browserHudDeps } from './ui/hud';
 import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
+import { createStatsOverlay } from './ui/statsOverlay';
+import { FrameStats, pixelRatio } from './render/perf';
+import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
@@ -69,9 +72,10 @@ if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot')
 async function main() {
   if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
   const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
-  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
+  // trackTimestamp: GPU time per frame for the stats overlay and the benchmark (WebGPU timestamp queries)
+  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl'), trackTimestamp: !params.has('webgl') });
   await renderer.init();
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(pixelRatio(devicePixelRatio, params.get('scale')));
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
@@ -380,6 +384,7 @@ async function main() {
     if (code === 'KeyP') rig.setMode('walk');
     else if (code === 'KeyF') rig.setMode('fly');
     else if (code === 'KeyO') rig.setMode('orbit');
+    else if (code === 'KeyI') statsView.toggle();
     else if (code === 'KeyM') { footsteps.enabled = !footsteps.enabled; hud.toast(footsteps.enabled ? 'Footsteps on' : 'Footsteps off'); }
   };
   renderer.domElement.addEventListener('pointerdown', () => footsteps.unlock());
@@ -421,6 +426,34 @@ async function main() {
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
   (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
+  // rendering stats (I, or ?stats) and the benchmark (?bench, or __game.bench())
+  const frameStats = new FrameStats(240);
+  let computeMs = 0;
+  const statsView = createStatsOverlay(document, document.body, params.has('stats') || params.has('bench'));
+  const backendName = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
+  const renderInfo = () => { const s = renderer.getDrawingBufferSize(new THREE.Vector2()); return { width: s.x, height: s.y, pixelRatio: renderer.getPixelRatio(), backend: backendName }; };
+  const bench = async (o: { warmMs?: number; measureMs?: number; steps?: string[] } = {}): Promise<{ rows: BenchRow[]; table: string; render: ReturnType<typeof renderInfo> }> => {
+    statsView.setVisible(true); statsView.report(null);
+    const steps = o.steps ? BENCH_STEPS.filter((s) => o.steps!.includes(s.name)) : BENCH_STEPS;
+    const rows = await runBench(steps, {
+      go: (from) => {
+        if (from === 'spawn') { hooks.player.spawn(); return true; }
+        const v = VIEWS.find((x) => x.name === from); if (!v) return false;
+        rig.go(v); return true;
+      },
+      hold: (keys) => scripted.hold(keys),
+      reset: () => frameStats.clear(),
+      summary: () => frameStats.summary(),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+      onRow: (r, i, n) => statsView.note(`bench ${i + 1}/${n}: ${r.name} ${r.fps} fps`),
+    }, o);
+    const table = benchTable(rows);
+    statsView.note(null); statsView.report(table);
+    console.info('bench\n' + table);
+    return { rows, table, render: renderInfo() };
+  };
+  (hooks as Record<string, unknown>).bench = bench;
+
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
     info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
@@ -429,10 +462,16 @@ async function main() {
     return;
   }
   let last = performance.now(), frames = 0, acc = 0;
+  // GPU time from WebGPU timestamp queries only (the WebGL2 timer-query path reads nonsense here)
+  const gpuTimed = backendName === 'webgpu' && (renderer.backend as unknown as { trackTimestamp?: boolean }).trackTimestamp === true;
   renderer.setAnimationLoop(() => {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
-    if (acc > 0.5) { ui.setFps(frames / acc); frames = 0; acc = 0; }
+    if (acc > 0.25) {
+      ui.setFps(frames / acc);
+      statsView.update(frameStats.summary(), renderInfo());
+      frames = 0; acc = 0;
+    }
     tick(dt);
     stones.update(camera.position);
     veg?.update(camera);
@@ -441,11 +480,15 @@ async function main() {
     exposure.update(dt, vis.state);
     pipeline.render();
     exposure.measure();
+    frameStats.push({ frameMs: raw * 1000, cpuMs: performance.now() - now, drawCalls: info.render.drawCalls, triangles: info.render.triangles });
+    if (gpuTimed) void renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then((ms) => frameStats.pushGpu((ms ?? 0) + (computeMs ?? 0)));
+    if (gpuTimed) void renderer.resolveTimestampsAsync(THREE.TimestampQuery.COMPUTE).then((ms) => { computeMs = ms ?? 0; });
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   hooks.ready = true;
   await screen.finish();
+  if (params.has('bench')) (hooks as Record<string, unknown>).benchResult = await bench();
 }
 
 /** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
