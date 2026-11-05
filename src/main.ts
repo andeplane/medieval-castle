@@ -1,6 +1,7 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
+// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N, ?exposure=N (fixed),
+// ?test=room (no castle: a test hall + chamber for the interior light, debug/roomtest.ts).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -15,6 +16,13 @@ import { buildTrees } from './world/trees';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
+import { Builder } from './castle/builder';
+import { makeInteriorMaterials, bakeInteriorLight, interiorLight, type InteriorBake } from './render/interiorLight';
+import { createAutoExposure } from './render/exposure';
+import { createVisibility } from './world/visibility';
+import { buildRoomTest } from './debug/roomtest';
+import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
+import type { WindowInput } from './render/interiorMath';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
@@ -45,7 +53,8 @@ async function main() {
   const tTex = performance.now() - t0;
 
   await say('RAISING THE WALLS…');
-  const { builder, lights } = buildCastle();
+  const testRoom = params.get('test') === 'room';
+  const { builder, lights } = testRoom ? { builder: new Builder(), lights: [] } : buildCastle();
   const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
@@ -56,6 +65,19 @@ async function main() {
   scene.add(buildTerrain(M.terrain));
   const water = makeWater(sky.sunDir);
   scene.add(water);
+
+  // interior: the shell's groups when it lands (buildInterior(IM, …)); the test hall for now
+  const IM = makeInteriorMaterials(M, sky.sun);
+  let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights };
+  if (testRoom) {
+    const t = buildRoomTest(M, IM);
+    scene.add(t.exterior);
+    for (const g of t.groups) scene.add(g.object);
+    VIEWS.push(...t.views);
+    interior = t;
+  }
+  const bake: InteriorBake = bakeInteriorLight(interior.groups, [castle, ...(testRoom ? [scene.getObjectByName('castle')!] : []), ...interior.groups.map((g) => g.object)], { plan: interior.plan, windows: interior.windows, sun: sky.sun });
+  console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, ${bake.ms.toFixed(1)} ms (BVH ${bake.bvhMs.toFixed(1)} ms)`);
 
   await say('PLANTING TREES…');
   let trees: THREE.Group | null = null;
@@ -93,9 +115,12 @@ async function main() {
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
-  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
+  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); };
   setTime(Number(params.get('time') ?? 15.5));
-  const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
+  const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
+  // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
+  const vis = createVisibility(camera, interior.groups, interior.plan, { scene, apertures: bake.apertures, ground: heightAt });
+  const exposure = createAutoExposure(renderer, () => scenePass.getTexture('output'), { fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
 
   // UI
@@ -132,13 +157,21 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { pipeline.render(); },
+    renderNow: async () => { vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
     stats: () => ({
       castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
+      interior: {
+        room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
+        groupsShown: vis.state.visible.filter(Boolean).length, groups: interior.groups.length,
+        exposure: Math.round(exposure.state.exposure * 1000) / 1000, meanLog2: Math.round(exposure.state.meanLog2 * 100) / 100,
+        bakeMs: Math.round(bake.ms * 10) / 10, apertures: bake.apertures.length,
+      },
     }),
   });
 
+  // the doors module reports leaf positions here: __game.interiorLight.setDoorOpen(id, 0..1)
+  (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state };
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
     loading.remove();
@@ -154,7 +187,10 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    vis.update();
+    exposure.update(dt, vis.state);
     pipeline.render();
+    exposure.measure();
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
