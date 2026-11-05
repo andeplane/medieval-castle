@@ -5,7 +5,7 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 ## Commands
 - `npm run dev`: dev server (WebGPU; add `?webgl` to force WebGL2).
 - `npm test`: plan and generator tests (fast, < 5 s). `npm run coverage` adds a v8 coverage report with per-folder thresholds (`vitest.config.ts`).
-- `npm run build`: typecheck + production build (pages `index.html` and `props.html`).
+- `npm run build`: typecheck + production build (pages `index.html`, `props.html` and `lights.html`, the firelight review).
 - `npm run shots [view…]`: with the dev server running, capture camera bookmarks to `shots/` (headless WebGL2). Env: `W`, `H`, `QUERY` (e.g. `ao=0`), `OUT`, `URL` (e.g. `http://localhost:5173/props.html` for the prop kit).
 
 ## Principles
@@ -23,6 +23,7 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - Interiors are approved (2026-11-05): every room, doors that open/close, stairs, cellars and tunnels, walk/run. No furniture yet; destruction comes later.
 - Tests: aim for close to 100% coverage of logic (`npm run coverage`). Keep rendering glue thin and push logic into pure, tested functions.
 - Dependency injection: modules take their collaborators (physics, input, clock, rng, materials, scene, audio) as typed parameters or interfaces, so tests use small type-safe fakes. No hidden globals, singletons or module-level side effects.
+- Fire and firelight go through `src/light/` (one flame/light system: `LightRig`, flame sprites, `WARM_INTERIOR` look); don't add point lights or flame meshes elsewhere.
 - NPC-ready: navigating NPCs will be added later. Character movement is a reusable motor over `PhysicsApi` (the player is just one user of it); the interior plan exposes a room/door/stair navigation graph; doors can be opened by any agent; nothing assumes there is only one character.
 - Key paths have a test (vitest, no browser, using the same walk/collision code as the player): bridge → gate → passage → courtyard, courtyard → a ground-floor room → stair up one floor, and a cellar → the moat tunnel to the locked grille. Add a path when a feature adds a new way in; don't test every room.
 - Look changes (stone, materials, light) get one close-range walk-mode capture (≈ 0.5 m from a wall) as well as the usual bookmarks.
