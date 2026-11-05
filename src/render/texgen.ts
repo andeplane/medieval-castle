@@ -415,6 +415,117 @@ export const ashlarSet = (size = ASHLAR.size) => masonry({ ...ASHLAR, size });
 export const rubbleSet = (size = RUBBLE.size) => masonry({ ...RUBBLE, size });
 export const dressedSet = (size = DRESSED.size) => masonry({ ...DRESSED, size });
 
+// ---------------------------------------------------------------------------------- courtyard paving
+
+/** Lithology weights of river cobbles: mostly hard, dark whin and greywacke with granite, some sandstone. */
+const COBBLE_LITHS = [2, 1.2, 1.2, 2.4, 2.6];
+
+export interface CobbleOpts {
+  size: number; tile: number;       // px, metres per tile
+  cell: number;                     // nominal cobble spacing (m)
+  joint: number;                    // joint width between neighbouring cobbles (m)
+  round: number;                    // corner rounding (fraction of the cell)
+  bright: number;                   // per-cobble brightness spread
+  dome: number;                     // how far a cobble's crown stands above its edge (height units)
+  bedLevel: number;                 // height of the earth bed in the joints (0..1)
+  sdfRange: number;                 // metres encoded either side of the outline in data.a
+  depth: number;                    // metres spanned by height 0..1 (normal strength follows it)
+}
+/** Cobbles set in earth: about 14 cm across, a little oval, tightly packed with 1–2 cm joints. */
+export const COBBLES: CobbleOpts = { size: 2048, tile: 4, cell: 0.14, joint: 0.016, round: 0.22, bright: 0.26, dome: 0.32, bedLevel: 0.2, sdfRange: 0.03, depth: 0.045 / 0.89 };
+/** Sandstone and limestone flags for the path from the gate: tile = path width, courses run along the path. */
+export const FLAGS: MasonryOpts = {
+  name: 'flags', size: 1024, tile: 2, course: [0.5, 0.78], stone: [0.55, 1.1], joint: 0.016, jointVar: 0.35, tilt: 0.025,
+  corner: [0.01, 0.035], chamfer: 0.3, bevel: 0.014, warp: 0.003, edge: 0.004, chip: 0.012, split: 0,
+  liths: [1.2, 3, 2.6, 0.2, 1.4], bright: 0.2, face: 0.05, facets: 0.06, dome: 0.03, pinning: 0, mortarLevel: 0.3, cracks: 0.22, veins: 0.05, iron: 0.2,
+  depth: 0.03 / 0.89, sdfRange: 0.03,
+};
+
+/** Smooth minimum (rounded intersection of two signed distances, k in the same units). */
+const smin = (a: number, b: number, k: number) => { const h = clamp01(0.5 + (0.5 * (b - a)) / k); return b + (a - b) * h - k * h * (1 - h); };
+
+/**
+ * Tileable cobbles, in the masonry() channel layout so the stone shader reads both the same way:
+ * albedo RGB + AO, normal RGB + the cobble's centre along u, data = height, joint coverage, id, SDF.
+ * Each cobble is its jittered Voronoi cell, inset by half a joint, intersected with its own ellipse and
+ * rounded (a smooth minimum), so the stones are oval and a little irregular, never a grid. Crowns are
+ * domed; the joints are an earth bed between them.
+ */
+export function cobbles(o: CobbleOpts = COBBLES, r: Rng = mulberry32(hashSeed('cobbles')), noise = new TileNoise(hashSeed('cobblesn'))): TexSet {
+  const N = o.size, px = N / o.tile, n = Math.max(2, Math.round(o.tile / o.cell)), cp = N / n;
+  const wsum = COBBLE_LITHS.reduce((a, b) => a + b, 0);
+  const pickLith = (t: number) => { for (let i = 0; i < COBBLE_LITHS.length; i++) { t -= COBBLE_LITHS[i] / wsum; if (t <= 0) return i; } return COBBLE_LITHS.length - 1; };
+  const cells = Array.from({ length: n * n }, () => {
+    const lith = pickLith(r()), b = 1 - o.bright / 2 + r() * o.bright, base = LITH_COL[lith];
+    const a = cp * (0.6 + 0.15 * r()), ang = r() * Math.PI;
+    return {
+      x: 0.15 + 0.7 * r(), y: 0.15 + 0.7 * r(), a, b: a * (0.8 + 0.2 * r()), c: Math.cos(ang), s: Math.sin(ang),
+      lith, id: encodeId(lith, r()), col: [base[0] * b, base[1] * b, base[2] * b] as RGB, bulge: 0.6 + 0.4 * r(), crown: 0.6 + 0.12 * r(),
+      jh: (o.joint * px) / 2 * (0.7 + 0.6 * r()), tx: (r() * 2 - 1) * 0.5, ty: (r() * 2 - 1) * 0.5,
+    };
+  });
+  const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4), centre = new Uint8Array(N * N);
+  const sdfPx = o.sdfRange * px, bevPx = 0.012 * px, edgePx = 0.004 * px, k = o.round * cp, fFace = Math.round(o.tile * 16), fMott = Math.round(o.tile * 6);
+  // cobble centres in px for a (n + 4)² block of cells (wrapped copies at the borders), so a pixel's
+  // neighbourhood is read without modulo or allocation
+  const M = n + 4, PX = new Float64Array(M * M), PY = new Float64Array(M * M), CI = new Int32Array(M * M);
+  for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
+    const wi = (((i - 2) % n) + n) % n, wj = (((j - 2) % n) + n) % n, c = cells[wj * n + wi];
+    PX[j * M + i] = (i - 2 + c.x) * cp; PY[j * M + i] = (j - 2 + c.y) * cp; CI[j * M + i] = wj * n + wi;
+  }
+  for (let y = 0; y < N; y++) {
+    const v = y / N;
+    for (let x = 0; x < N; x++) {
+      const u = x / N, ci = Math.floor(x / cp) + 2, cj = Math.floor(y / cp) + 2;
+      // nearest cobble centre
+      let bk = cj * M + ci, best = 1e18;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const kk = (cj + j) * M + ci + i, dx = x - PX[kk], dy = y - PY[kk], d2 = dx * dx + dy * dy;
+        if (d2 < best) { best = d2; bk = kk; }
+      }
+      const cx = PX[bk], cy = PY[bk], st = cells[CI[bk]], bi = (bk % M) - 2;
+      // distance to the cell's edges (the bisectors with its neighbours), inset by half a joint
+      let edge = 1e9;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        if (!i && !j) continue;
+        const kk = bk + j * M + i, qx = PX[kk], qy = PY[kk], dx = qx - cx, dy = qy - cy, L = Math.sqrt(dx * dx + dy * dy);
+        const e = (((qx + cx) / 2 - x) * dx + ((qy + cy) / 2 - y) * dy) / L;
+        if (e < edge) edge = e;
+      }
+      const lx = x - cx, ly = y - cy, ex = (lx * st.c + ly * st.s) / st.a, ey = (ly * st.c - lx * st.s) / st.b;
+      const ell = (1 - Math.hypot(ex, ey)) * Math.min(st.a, st.b);
+      const id = st.id / 255;
+      let d = smin(edge - st.jh, ell, k);
+      d += edgePx * noise.fbm(u + id * 3.1, v + id * 1.7, fFace, 2);
+      const i4 = (y * N + x) * 4, g = noise.fbm(u, v, fFace, 3);
+      const mott = noise.fbm(u + id * 13.7, v + id * 5.1, fMott * 4, 3);
+      const kk = 1 + mott * 0.16 + g * 0.06;
+      let col: RGB = [st.col[0] * kk, st.col[1] * kk, st.col[2] * kk], h: number, ao: number;
+      if (d > 0) {
+        // rounded arris, then a domed crown, tipped a little (cobbles are never set dead level)
+        const xb = clamp01(d / bevPx), prof = 1 - (1 - xb) ** 3;
+        const dome = clamp01(1 - 0.9 * (ex * ex + ey * ey)); // a smooth, rounded crown over the ellipse, no ridges
+        const top = st.crown + o.dome * (dome - 1) * st.bulge + 0.05 * g + (st.tx * lx + st.ty * ly) / cp * 0.08;
+        const foot = o.bedLevel + 0.18;
+        h = foot + (top - foot) * prof;
+        ao = 0.84 + 0.16 * prof * (0.6 + 0.4 * dome);
+      } else {
+        // the earth and grit bed between the stones: darkest and deepest mid-joint
+        h = o.bedLevel + 0.12 * Math.exp(d / (1.2 * st.jh)) + 0.04 * noise.fbm(u, v, fFace * 2, 2);
+        ao = 0.62 + 0.3 * (1 - Math.exp(d / (1.5 * st.jh)));
+      }
+      h = Math.min(0.94, Math.max(0.07, h));
+      height[y * N + x] = h;
+      centre[y * N + x] = ((((bi + st.x) * cp) / N % 1 + 1) % 1) * 255;
+      albedo[i4] = toByte(col[0]); albedo[i4 + 1] = toByte(col[1]); albedo[i4 + 2] = toByte(col[2]); albedo[i4 + 3] = byte(ao);
+      data[i4] = byte(h); data[i4 + 1] = d <= 0 ? 255 : 0; data[i4 + 2] = st.id; data[i4 + 3] = byte(0.5 + (0.5 * d) / sdfPx);
+    }
+  }
+  return { size: N, albedo, normal: heightToNormal(height, N, (o.depth * px) / 2, centre), data };
+}
+export const cobbleSet = (size = COBBLES.size) => cobbles({ ...COBBLES, size });
+export const flagSet = (size = FLAGS.size) => masonry({ ...FLAGS, size });
+
 /** Overlapping slates: rows of 0.2 m exposure, staggered, varied widths and shades, moss in the laps. */
 export function slate(N = 1024, r: Rng = mulberry32(hashSeed('slate')), noise = new TileNoise(hashSeed('slaten'))): TexSet {
   const tile = 2, px = N / tile;

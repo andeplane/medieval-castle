@@ -27,6 +27,9 @@ export const ISLAND = islandOutline();
 export const MOAT_OUTER = moatOuter(ISLAND);
 const FOOT = footprints();
 const COURT = courtyard();
+/** Ground under the courtyard paving (castle/paving.ts, top at GROUND + 0.02): low enough that the paving's
+ *  parallax joints (4.5 cm deep, written to depth) never meet it. */
+export const COURT_BED = GROUND - 0.15;
 const CC = castleCentre();
 const GATE = gatehouseFrame();
 
@@ -270,7 +273,7 @@ function sampleIn(T: Ctx, x: number, z: number): Sample {
     // flatten the ward next to the walls and the courtyard
     const fd = footDist(x, z);
     h = h + (GROUND - 0.05 - h) * (1 - smoothstep(2, 9, fd));
-    if (pointInPoly(COURT, x, z)) h = GROUND + 0.02;
+    if (pointInPoly(COURT, x, z)) h = COURT_BED;
     // the bank is faced with a stone revetment (castle/revetment.ts) whose coping and turf strip cover the
     // outer 1.8 m: the ground holds its level to 0.35 m from the edge, then drops under the wall
     const bank = smoothstep(0.05, 0.35, e);

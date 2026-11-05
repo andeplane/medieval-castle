@@ -8,7 +8,7 @@ export default defineConfig({
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
-      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/light/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,layout,spec,openings}.ts', 'src/castle/{bridge,revetment,turf,rubble}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/*.ts', 'src/camera/interiorViews.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts', 'src/render/texgen.ts',
+      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/light/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,layout,spec,openings,paving}.ts', 'src/castle/{bridge,revetment,turf,rubble}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/*.ts', 'src/camera/interiorViews.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts', 'src/render/texgen.ts',
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts',
         'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts'],
       exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/props/preview.ts', 'src/light/preview.ts', 'src/castle/interior/types.ts'],
@@ -32,7 +32,7 @@ export default defineConfig({
         'src/{physics,character,player}/**': { lines: 98, functions: 95, branches: 85, statements: 98 },
         'src/{camera/controls,debug/hooks,debug/testcourse}.ts': { lines: 99, functions: 100, branches: 80, statements: 99 },
         // measured: castle 99.5 / 93.6 / 100 / 99.9 (statements / branches / functions / lines)
-        'src/castle/{builder,castle,layout,spec,openings}.ts': { lines: 99, functions: 100, branches: 92, statements: 99 },
+        'src/castle/{builder,castle,layout,spec,openings,paving}.ts': { lines: 99, functions: 100, branches: 92, statements: 99 },
         // measured: 99.9 / 99.0 / 100 / 100
         'src/castle/stones/**': { lines: 100, functions: 100, branches: 97, statements: 99 },
         // measured: bridge 99.1 / 98 / 100 / 99.3, revetment 98.8 / 95.5 / 96 / 100, rubble + turf 98-100

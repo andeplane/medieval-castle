@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import {
   createTerrain, defaultTerrain, buildTerrain, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
   ISLAND, MOAT_OUTER, BRIDGE_END, sample, heightAt, hedgerowLines, fieldAt, streamLine, farmland,
-  islandWalkable, footDist, moatSigned, type Terrain,
+  islandWalkable, footDist, moatSigned, COURT_BED, type Terrain,
 } from '../src/world/terrain';
 import { seededDeps } from '../src/world/deps';
 import { RN, RX0, RZ0, RCELL } from '../src/world/relief';
@@ -37,7 +37,7 @@ describe('height and zones', () => {
     expect(T.sample(cx, cz).h).toBeCloseTo(GROUND, 0);
     const court = courtyard(), [qx, qz] = court[0];
     const inside: V2 = [qx * 0.9 + cx * 0.1, qz * 0.9 + cz * 0.1];
-    if (pointInPoly(court, ...inside)) expect(T.heightAt(...inside)).toBeCloseTo(GROUND + 0.02, 5);
+    if (pointInPoly(court, ...inside)) expect(T.heightAt(...inside)).toBeCloseTo(COURT_BED, 5);
     let wet = 0, n = 0;
     for (let k = 0; k < 64; k++) {
       const a = (k / 64) * 2 * Math.PI, zs = walkOut(T, a), m = zs[1], o = zs[2];

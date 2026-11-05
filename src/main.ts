@@ -115,7 +115,7 @@ async function main() {
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
     revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
-  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   const interior = params.get('interior') === '0' || test === 'stairs' ? null : buildInterior(mats, builder, { heightAt });
   const castle = builder.build(mats);

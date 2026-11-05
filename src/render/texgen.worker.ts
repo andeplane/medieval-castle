@@ -11,6 +11,8 @@ const jobs: Record<string, () => Record<string, unknown>> = {
   macro: () => ({ data: T.macroNoise() }),
   ground: () => ({ ...T.groundLayers() }),
   water: () => ({ data: T.waterNormals() }),
+  cobbles: () => ({ ...T.cobbleSet() }),
+  flags: () => ({ ...T.flagSet() }),
 };
 
 self.onmessage = (e: MessageEvent<{ job: string }>) => {

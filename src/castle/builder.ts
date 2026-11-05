@@ -8,6 +8,9 @@ import type { StoneFace, Exclusion } from './stones/layout';
 
 export type MatKey = 'old' | 'new' | 'trim' | 'slate' | 'lead' | 'wood' | 'iron' | 'void' | 'glass';
 export const TILE: Record<MatKey, number> = { old: 4, new: 4, trim: 2, slate: 2, lead: 4, wood: 2, iron: 1, void: 1, glass: 1 };
+/** Bins beyond the wall materials: `pave` is the courtyard paving (castle/paving.ts), exterior only, so the
+ *  interior and its material maps never need it. */
+export type BinKey = MatKey | 'pave';
 
 type V3 = [number, number, number];
 const v3sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -58,7 +61,7 @@ const convexAt = (p: V2[], i: number) => {
 export class Builder {
   walls: WallRecord[] = [];
   curved: CurvedRecord[] = [];
-  bins: Record<MatKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin() };
+  bins: Record<BinKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin(), pave: new Bin() };
 
   // Stone records (src/castle/stones): every rubble/ashlar wall face, and every solid that stands proud
   // of faces (so stones are not laid under jambs, sills, buttresses, string courses, plinths…).
@@ -193,11 +196,12 @@ export class Builder {
     }
   }
 
-  /** Frustum between polygon a at y0 and polygon b at y1 (same vertex count), e.g. a battered plinth. */
-  loft(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number) {
-    this.own(() => this.loftInner(mat, a, y0, b, y1));
+  /** Frustum between polygon a at y0 and polygon b at y1 (same vertex count), e.g. a battered plinth.
+   *  `skip` lists side faces (edge i: vertex i → i + 1) to leave out, e.g. one that lies in a wall. */
+  loft(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number, skip: number[] = []) {
+    this.own(() => this.loftInner(mat, a, y0, b, y1, skip));
   }
-  private loftInner(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number) {
+  private loftInner(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number, skip: number[]) {
     this.exclude([...a.map((q) => [q[0], y0, q[1]] as V3), ...b.map((q) => [q[0], y1, q[1]] as V3)]);
     const T = TILE[mat], n = a.length, bin = this.bins[mat];
     let u = 0;
@@ -205,6 +209,7 @@ export class Builder {
       const j = (i + 1) % n;
       const A: V3 = [a[i][0], y0, a[i][1]], B: V3 = [a[j][0], y0, a[j][1]], C: V3 = [b[j][0], y1, b[j][1]], D: V3 = [b[i][0], y1, b[i][1]];
       const L = Math.hypot(a[j][0] - a[i][0], a[j][1] - a[i][1]);
+      if (skip.includes(i)) { u += L; continue; }
       const mid: V2 = [(a[i][0] + a[j][0]) / 2, (a[i][1] + a[j][1]) / 2];
       const cx = a.reduce((s, v) => s + v[0], 0) / n, cz = a.reduce((s, v) => s + v[1], 0) / n;
       const out = v3norm([mid[0] - cx, 0.2, mid[1] - cz]);
@@ -311,13 +316,14 @@ export class Builder {
     for (let i = 1; i < pts.length - 1; i++) bin.tri(pts[0], pts[i], pts[i + 1], n, uvOf(pts[0]), uvOf(pts[i]), uvOf(pts[i + 1]));
   }
 
-  build(materials: Record<MatKey, THREE.Material>) {
+  /** One mesh per non-empty bin. A bin without a material (`pave` for interior builders) is left out. */
+  build(materials: Record<MatKey, THREE.Material> & Partial<Record<BinKey, THREE.Material>>) {
     const group = new THREE.Group();
     group.name = 'castle';
     let tris = 0;
-    for (const k of Object.keys(this.bins) as MatKey[]) {
+    for (const k of Object.keys(this.bins) as BinKey[]) {
       const b = this.bins[k];
-      if (!b.pos.length) continue;
+      if (!b.pos.length || !materials[k]) continue;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
       g.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
@@ -325,7 +331,7 @@ export class Builder {
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, materials[k]);
       m.name = `castle-${k}`;
-      m.castShadow = k !== 'glass' && k !== 'void';
+      m.castShadow = k !== 'glass' && k !== 'void' && k !== 'pave'; // the flat paving shades nothing
       m.receiveShadow = true;
       group.add(m);
       tris += b.pos.length / 9;
@@ -335,14 +341,14 @@ export class Builder {
   }
 }
 
-/** Offset a convex-ish polygon outward by d (miter joins). */
-export function offsetPoly(poly: V2[], d: number): V2[] {
+/** Offset a convex-ish polygon outward by d (miter joins); an array gives each edge (i → i + 1) its own offset. */
+export function offsetPoly(poly: V2[], d: number | number[]): V2[] {
   let s = 0; for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; s += a[0] * b[1] - b[0] * a[1]; }
   const sign = s < 0 ? -1 : 1, n = poly.length;
   const lines = poly.map((a, i) => {
     const b = poly[(i + 1) % n], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const out: V2 = [((b[1] - a[1]) / L) * sign, (-(b[0] - a[0]) / L) * sign];
-    return { p: [a[0] + out[0] * d, a[1] + out[1] * d] as V2, r: [b[0] - a[0], b[1] - a[1]] as V2 };
+    const out: V2 = [((b[1] - a[1]) / L) * sign, (-(b[0] - a[0]) / L) * sign], di = typeof d === 'number' ? d : d[i];
+    return { p: [a[0] + out[0] * di, a[1] + out[1] * di] as V2, r: [b[0] - a[0], b[1] - a[1]] as V2 };
   });
   return poly.map((_, i) => {
     const L0 = lines[(i + n - 1) % n], L1 = lines[i];

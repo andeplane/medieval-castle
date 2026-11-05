@@ -9,7 +9,8 @@ import {
   positionLocal, instanceIndex, positionView, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
-import { LITHS, LITH_DETAIL, DETAIL_TILE, RUBBLE, ASHLAR, DRESSED, type TexSet } from './texgen';
+import { LITHS, LITH_DETAIL, DETAIL_TILE, RUBBLE, ASHLAR, DRESSED, COBBLES, FLAGS, type TexSet } from './texgen';
+import { pavingPlan, PAVE_TILE, type PavingPlan } from '../castle/paving';
 import { generateTextures } from './texpool';
 import { GROUND } from '../castle/spec';
 import { TILE } from '../castle/builder';
@@ -49,7 +50,7 @@ const POM_PX = 1.5, POM_MIN = 6, POM_MAX = 64, SHADOW_MAX = 16;
  * Returns the shifted uv, the gradients to sample with, the sun visibility (0-1) and `ray`, how far
  * (m) the hit lies behind the polygon along the view ray, for the depth offset.
  */
-function parallax(set: GpuSet, o: Pom) {
+function parallax(set: GpuSet, o: Pom, raw?: (q: Node<'vec2'>, gx: Node<'vec2'>, gy: Node<'vec2'>) => Node<'float'>) {
   const uv0 = uv();
   const gx = uv0.dFdx().toVar('pomGx'), gy = uv0.dFdy().toVar('pomGy');
   const res = Fn(() => {
@@ -62,7 +63,7 @@ function parallax(set: GpuSet, o: Pom) {
     const vt = vec3(V.dot(Tn), V.dot(Bn), V.dot(N)).toVar();
     const fade = float(1).sub(smoothstep(POM_NEAR, POM_FAR, positionView.length())).mul(smoothstep(0.06, 0.2, vt.z)).toVar();
     const scale = (o.depth / o.tile) * POM_GAIN;
-    const h = (q: Node<'vec2'>) => depthOf(texture(set.data, q).grad(gx, gy).r, o);
+    const h = (q: Node<'vec2'>) => depthOf(raw ? raw(q, gx, gy) : texture(set.data, q).grad(gx, gy).r, o);
     // uv spacing of one height sample at the mip the gradients pick (never finer than a texel)
     const spacing = max(max(gx.length(), gy.length()), 1 / set.size).toVar();
 
@@ -162,7 +163,7 @@ function detailSlope(D: ReturnType<typeof detailTaps>, dh: (s: Node<'vec4'>) => 
 }
 
 /** Base normal map (strength `k`) plus the detail slope, re-encoded for normalMap() (UDN blend). */
-function blendDetailNormal(nrm: Node<'vec4'>, k: number, slope: V2N) {
+function blendDetailNormal(nrm: Node<'vec4'>, k: number | F, slope: V2N) {
   const nb = nrm.xyz.mul(2).sub(1);
   return vec3(nb.xy.mul(k).sub(slope), nb.z).normalize().mul(0.5).add(0.5);
 }
@@ -188,11 +189,11 @@ export interface Materials {
   old: THREE.MeshStandardNodeMaterial; new: THREE.MeshStandardNodeMaterial; trim: THREE.MeshStandardNodeMaterial;
   slate: THREE.MeshStandardNodeMaterial; lead: THREE.MeshStandardNodeMaterial; wood: THREE.MeshStandardNodeMaterial;
   iron: THREE.MeshStandardNodeMaterial; void: THREE.MeshStandardNodeMaterial; glass: THREE.MeshStandardNodeMaterial;
-  terrain: THREE.MeshStandardNodeMaterial; macro: THREE.DataTexture;
+  pave: THREE.MeshStandardNodeMaterial; terrain: THREE.MeshStandardNodeMaterial; macro: THREE.DataTexture;
 }
 
 export async function makeMaterials(): Promise<Materials> {
-  const T = await generateTextures(['rubble', 'ashlar', 'ground', 'dressed', 'detail', 'slate', 'macro', 'planks', 'water']);
+  const T = await generateTextures(['rubble', 'ashlar', 'ground', 'dressed', 'detail', 'slate', 'macro', 'planks', 'water', 'cobbles', 'flags']);
   const ts = (k: string) => texSet(T[k] as unknown as TexSet);
   const S = { old: ts('rubble'), new: ts('ashlar'), trim: ts('dressed'), slate: ts('slate'), wood: ts('planks') };
   const macro = dataTex(T.macro.data as Uint8Array, 512, false);
@@ -349,8 +350,118 @@ export async function makeMaterials(): Promise<Materials> {
   }
 
   const terrain = makeTerrainMaterial(T.ground as unknown as GroundData, macro);
+  const pave = paving(ts('cobbles'), ts('flags'), pavingPlan(), macro, detail);
 
-  return { old, new: nw, trim, slate: slateM, lead, wood, iron, void: voidM, glass, terrain, macro };
+  return { old, new: nw, trim, slate: slateM, lead, wood, iron, void: voidM, glass, pave, terrain, macro };
+}
+
+/** Distance (m) from a world point (x, z) to the segment a–b. */
+function segDistN(p: V2N, a: [number, number], b: [number, number]): F {
+  const ab = vec2(b[0] - a[0], b[1] - a[1]), ap = p.sub(vec2(a[0], a[1]));
+  const t = ap.dot(ab).div((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 || 1).clamp(0, 1);
+  return ap.sub(ab.mul(t)).length();
+}
+
+/**
+ * The courtyard paving (castle/paving.ts): cobbles set in earth, and a path of flags from the gate
+ * passage, in one material and one draw call. Both are stone texture sets in the masonry channel layout
+ * with parallax and pixel depth, like the walls. The mesh uvs are the path frame (metres / PAVE_TILE,
+ * v = 0 on the path's right edge), so the flag texture (one repeat across the path) is laid along the
+ * path, and each pixel picks flags or cobbles from where it lies; the march then reads one texture per
+ * step (a branch, not both). Cobbles meet the flags on a straight joint.
+ * Ground weathering instead of the walls': earth in the joints, damper and mossy along the wall feet,
+ * a polished, worn track down the path, mid-scale tonal drift over the yard.
+ */
+function paving(cob: GpuSet, fl: GpuSet, plan: PavingPlan, macro: THREE.Texture, detail: THREE.Texture) {
+  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
+  m.name = 'paving';
+  const hw = plan.path.hw, kF = PAVE_TILE / FLAGS.tile, jw = 0.008;
+  const pom: Pom = { depth: 0.045, tile: PAVE_TILE, hTop: 0.95, hBot: 0.06, steps: 16 };
+  const across = (q: V2N) => q.y.mul(PAVE_TILE).sub(hw); // signed metres from the path's centre line
+  const onPath = abs(across(uv())).lessThan(hw).toVar('onPath');
+  // the cut along the path's edge: cobbles stop on a straight joint with a small rounded arris
+  const kerbDist = (q: V2N) => abs(across(q)).sub(hw).sub(jw);
+  const kerbH = (q: V2N) => mix(float(COBBLES.bedLevel + 0.05), float(1), smoothstep(0, 0.012, kerbDist(q)));
+  const raw = (q: V2N, gx: V2N, gy: V2N) => {
+    const v = float(0).toVar();
+    If(onPath, () => { v.assign(texture(fl.data, q.mul(kF)).grad(gx.mul(kF), gy.mul(kF)).r); })
+      .Else(() => { v.assign(min(texture(cob.data, q).grad(gx, gy).r, kerbH(q))); });
+    return v;
+  };
+  const P = parallax(cob, pom, raw);
+  const t = P.uv, tf = t.mul(kF);
+  const gC = (tx: THREE.Texture) => texture(tx, t).grad(P.gx, P.gy), gF = (tx: THREE.Texture) => texture(tx, tf).grad(P.gx.mul(kF), P.gy.mul(kF));
+  const pick = <T extends Node>(f: T, c: T) => select(onPath, f, c) as unknown as T;
+  const dC = gC(cob.data), dF = gF(fl.data);
+  const alb = pick(gF(fl.albedo), gC(cob.albedo)), dat = pick(dF, dC), nrm = pick(gF(fl.normal), gC(cob.normal));
+  const p = positionWorld, dist = positionView.length();
+  // stone (1) vs joint (0) from the signed distance, as jointMask() but with a range per texture and the kerb
+  const range = pick(float(FLAGS.sdfRange), float(COBBLES.sdfRange));
+  const sdf = pick(dF.a.sub(0.5).mul(2 * FLAGS.sdfRange), min(dC.a.sub(0.5).mul(2 * COBBLES.sdfRange), kerbDist(t))).toVar();
+  const aa = fwidth(sdf).mul(0.75).max(range.mul(0.004));
+  const footprint = max(P.gx.length(), P.gy.length()).mul(cob.size);
+  const cover = pick(dF.g, max(dC.g, float(1).sub(smoothstep(0, 0.004, kerbDist(t)))));
+  const stoneMask = mix(smoothstep(aa.negate(), aa, sdf), float(1).sub(cover), smoothstep(1.5, 4, footprint)).toVar();
+  const dep = depthOf(pick(dF.r, min(dC.r, kerbH(t))), pom);
+  const crev = float(1).sub(stoneMask).mul(float(1).sub(smoothstep(0, range.mul(0.3), sdf.negate()))).mul(float(1).sub(smoothstep(6, 18, dist))).toVar();
+
+  // per-stone variation that does not repeat with the tile (as stone(): stone id + the tile it sits in)
+  const id = dat.b, tu = pick(tf.x, t.x), tv = pick(tf.y, t.y);
+  const du = fract(tu).sub(nrm.a), tileU = floor(tu.sub(du.sub(round(du)))), tileV = floor(tv);
+  const rnd = hash(id.mul(997).add(tileU.mul(13.17)).add(tileV.mul(71.3)));
+  const rnd2 = hash(rnd.mul(311.7).add(5.1)), rnd3 = hash(rnd.mul(97.3).add(2.3)), rnd4 = hash(rnd.mul(53.1).add(7.7));
+  const lith = floor(id.mul(255 / 51)).clamp(0, LITHS.length - 1);
+
+  // where the yard is: wall feet (damp), the path (worn), broad patches
+  const pz = p.xz;
+  let dW: F = float(1e3);
+  for (const [a, b] of plan.walls) dW = min(dW, segDistN(pz, a, b));
+  for (const c of plan.rounds) dW = min(dW, pz.sub(vec2(c.c[0], c.c[1])).length().sub(c.r));
+  const mac = texture(macro, pz.mul(1 / 23)), mac2 = texture(macro, pz.mul(1 / 7.3));
+  const damp = float(1).sub(smoothstep(0.1, mac.r.mul(1.4).add(0.7), dW)).toVar();
+  const acrossW = abs(across(uv()));
+  const wear = float(1).sub(smoothstep(hw * 0.3, hw + 1.4, acrossW)).mul(mac2.g.mul(0.4).add(0.7)).clamp(0, 1).toVar();
+  const moss = smoothstep(0.55, 0.75, mac2.b.add(damp.mul(0.35))).mul(float(1).sub(wear)).toVar();
+
+  // close-up detail (crystals, flecks, pits), rotated per stone, softened where feet have worn it
+  const kDet = float(1).sub(smoothstep(3.5, 9, dist)).mul(float(1).sub(wear.mul(0.45)));
+  const D = detailTaps(detail, t, P.gx, P.gy, PAVE_TILE, rnd3.mul(Math.PI * 2), vec2(rnd4, rnd2));
+  const wGrain = mix(float(1.5), byLith(lith, LITH_DETAIL.grain).mul(rnd2.mul(0.6).add(0.7)), stoneMask);
+  const pitDensity = mix(float(0.22), byLith(lith, LITH_DETAIL.pits).mul(rnd4.mul(rnd4).add(0.15)), stoneMask).clamp(0.03, 0.85);
+  const pitOf = (s: Node<'vec4'>) => smoothstep(float(1).sub(pitDensity), float(1), s.g);
+  const dh = (s: Node<'vec4'>) => s.r.sub(0.5).mul(wGrain).mul(0.0009).sub(pitOf(s).mul(0.003));
+  const slope = detailSlope(D, dh).mul(kDet);
+  const fleckRaw = D.s0.a.sub(0.5).mul(2), fleck = fleckRaw.mul(select(fleckRaw.greaterThan(0), float(0.55), float(1))), grainC = D.s0.r.sub(0.5), pit0 = pitOf(D.s0);
+
+  // stones: per-stone value and hue, the detail layer, darker and a little green where damp, paler where worn
+  const value = mix(float(0.8), float(1.12), rnd).mul(select(rnd2.greaterThan(0.94), float(0.75), select(rnd2.lessThan(0.04), float(1.2), float(1))));
+  const hue = mix(vec3(0.98, 1.0, 1.0), vec3(1.07, 1.0, 0.91), smoothstep(0.2, 0.9, hash(rnd.mul(71.9).add(1.7))));
+  const drift = float(0.88).add(mac.g.mul(0.24));
+  let stoneCol = alb.rgb.mul(color(new THREE.Color(0.84, 0.82, 0.79))).mul(value).mul(hue).mul(drift)
+    .mul(fleck.mul(byLith(lith, LITH_DETAIL.fleck).mul(kDet)).add(1))
+    .mul(grainC.mul(kDet.mul(0.5)).add(1))
+    .mul(float(1).sub(pit0.mul(kDet.mul(0.4))));
+  stoneCol = mix(stoneCol, stoneCol.mul(vec3(0.66, 0.7, 0.6)), damp.mul(0.6));
+  stoneCol = stoneCol.mul(float(1).add(wear.mul(0.08)));
+  // the joints: earth and grit, dry and sandy on the path, dark and mossy along the walls
+  const earth = mix(vec3(0.135, 0.12, 0.1), vec3(0.165, 0.15, 0.125), wear).mul(grainC.mul(kDet.mul(0.8)).add(1)).mul(float(0.85).add(mac.a.mul(0.3)));
+  const wet = mix(earth.mul(0.45), vec3(0.05, 0.065, 0.03), moss.mul(0.7));
+  const jointCol = mix(earth, wet, damp.max(moss.mul(0.8)));
+  let col = mix(jointCol, stoneCol, stoneMask);
+  col = col.mul(float(1).sub(smoothstep(0.45, 0.95, dep).mul(0.25).mul(stoneMask)));
+  col = col.mul(float(1).sub(crev.mul(0.45)));
+  // a little moss creeping onto the stones' edges where it is damp
+  col = mix(col, vec3(0.07, 0.085, 0.035), moss.mul(smoothstep(0.004, -0.004, sdf.sub(0.006))).mul(0.5));
+  m.colorNode = col;
+
+  const stoneRough = float(0.78).add(rnd2.mul(0.12)).sub(wear.mul(0.16)).sub(smoothstep(0.4, 0.8, fleck).mul(kDet.mul(0.15)));
+  m.roughnessNode = mix(float(0.97), stoneRough, stoneMask).sub(damp.mul(0.22)).clamp(0.35, 1);
+  m.normalNode = normalMap(blendDetailNormal(nrm, float(1).sub(wear.mul(0.3)), slope));
+  m.aoNode = mix(float(1), alb.a, 0.85).mul(float(1).sub(crev.mul(0.6)));
+  const zv = positionView.z.mul(P.ray.div(positionView.length()).add(1));
+  m.depthNode = viewZToPerspectiveDepth(zv, cameraNear, cameraFar);
+  m.receivedShadowNode = Fn(([sh]: [Node<'vec4'>]) => sh.mul(P.shadow)) as unknown as () => Node;
+  return m;
 }
 
 /** Wind sway for foliage: bend by height above the instance origin. */

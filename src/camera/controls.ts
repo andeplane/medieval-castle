@@ -39,6 +39,11 @@ export const VIEWS: View[] = [
   // walk views of the moat edge: by the bridge looking along it, and along the revetment
   { name: 'bridge', label: 'Bridge', mode: 'walk', pos: [20.7, 0, 53.4], target: [14.5, 1.2, 67.8] },
   { name: 'rim', label: 'Moat edge', mode: 'walk', pos: [48.4, 0, 32.0], target: [59.5, 1.2, 13.5] },
+  // courtyard paving: on foot looking at the ground 1.5 m ahead (by the flag path), 0.5 m over the cobbles at
+  // the S wing's foot, and from the gate passage out into the courtyard
+  { name: 'court-ground', label: 'Courtyard ground', mode: 'walk', pos: [2.6, 0, 3.4], target: [3.8, GROUND, 2.5] },
+  { name: 'court-close', label: 'Cobbles 0.5 m', mode: 'fly', pos: [7.5, GROUND + 0.52, 5.6], target: [8.0, GROUND, 6.9] },
+  { name: 'gatepass-court', label: 'Passage to courtyard', mode: 'walk', pos: [4.1, 0, 12.8], target: [5.0, GROUND + 0.8, -2] },
 ];
 
 /** Where play starts: on the lawn just south of the gate, facing it. Not a bookmark (trees avoid those). */
