@@ -15,10 +15,15 @@ import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
+import type { LoadingScreen } from './loading/tunnel';
+import { stepProgress, textureProgress } from './loading/model';
+import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
-const loading = document.getElementById('loading')!;
-const say = (s: string) => { loading.textContent = s; return new Promise((r) => setTimeout(r, 0)); };
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
+// texture jobs fill CUTTING → RAISING.
+let screen: LoadingScreen;
+const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
@@ -148,7 +153,7 @@ async function main() {
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
-    loading.remove();
+    screen.dispose();
     hooks.ready = true;
     return;
   }
@@ -166,9 +171,13 @@ async function main() {
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  loading.style.opacity = '0';
-  setTimeout(() => loading.remove(), 700);
   hooks.ready = true;
+  await screen.finish();
 }
 
-main().catch((e) => { console.error(e); loading.textContent = 'Something went wrong: ' + (e?.message ?? e); });
+/** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
+export function boot(loading: LoadingScreen) {
+  screen = loading;
+  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
+  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+}
