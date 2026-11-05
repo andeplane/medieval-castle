@@ -8,4 +8,5 @@ All castle, terrain, water and sky textures are generated procedurally in `src/r
 | ez-tree 1.1.0 (tree generator and its bark/leaf textures) | https://github.com/dgreenheck/ez-tree | MIT |
 | meshoptimizer simplifier (ships in three/addons/libs, used for tree LODs) | https://github.com/zeux/meshoptimizer | MIT |
 | simplex-noise 4 | https://github.com/jwagner/simplex-noise.js | MIT |
+| @dimforge/rapier3d-compat 0.21 (physics, character controller) | https://github.com/dimforge/rapier | Apache-2.0 |
 | Style reference photos in `art/refs/castle/` | supplied by Anders | reference only, not shipped |

@@ -71,7 +71,7 @@ export class PlayerController {
 
   /** Highest walkable surface under (x, z), searched down from `fromY`. */
   groundAt(x: number, z: number, fromY: number, fallback: number) {
-    const hit = this.ray.raycast([x, fromY, z], [0, -1, 0], 60);
+    const hit = this.ray.raycast([x, fromY, z], [0, -1, 0], fromY + 30);
     return hit && hit.normal[1] > 0.5 ? hit.point[1] : fallback;
   }
 

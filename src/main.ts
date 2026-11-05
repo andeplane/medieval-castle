@@ -13,7 +13,9 @@ import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
-import { CameraRig, VIEWS, type Mode } from './camera/controls';
+import { CameraRig, VIEWS, spawnPoint, type Mode } from './camera/controls';
+import { outerPoly, gatehouseFrame } from './castle/layout';
+import { GATEHOUSE } from './castle/spec';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
@@ -206,6 +208,7 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     renderNow: async () => { veg?.update(camera); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior,
+    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint() },
     stats: () => ({
       castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),

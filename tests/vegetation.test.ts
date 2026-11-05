@@ -24,7 +24,8 @@ describe('tree placement', () => {
     expect(spots.length).toBeLessThan(60000); // impostor budget
   });
 
-  it('keeps trees out of the moat, off the walls and away from the bookmark cameras', () => {
+  // ~200k expects over 30k trees: slow under coverage on a busy machine, so allow more than the default 5 s
+  it('keeps trees out of the moat, off the walls and away from the bookmark cameras', { timeout: 30_000 }, () => {
     for (const p of spots) {
       const s = sample(p.x, p.z);
       expect(s.zone).not.toBe('moat');

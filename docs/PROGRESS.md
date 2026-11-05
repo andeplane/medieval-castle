@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-11-05: physics player (branch `player-physics`)
+
+Done
+- Rapier 0.21 (compat build) world, `src/physics/world.ts`: fixed 60 Hz accumulator with render interpolation, static trimeshes from render meshes (`addObject`, glass skipped), an open terrain trimesh from the near-terrain grid with holes under building footprints, interior `terrainHoles` and the test course (so cellars at −2 m and the moat tunnel at −6.5 m are reachable from below), an invisible island boundary that only exists from `heightAt − 1` upward, kinematic boxes and raycasts per the interior contract (`src/castle/interior/types.ts`, verbatim). Several characters per world; collision groups keep rays off characters and the boundary.
+- `CharacterMotor` (`src/character/motor.ts`): shared by the player and future NPCs. Takes an intent (wish direction, jump, crouch) and a `CharacterBody`; does acceleration and friction, limited air control, coyote time and jump buffer, crouch that will not stand up under low ceilings, autostep 0.3 m, snap-to-ground 0.4 m, 50° slope limit, wall sliding, landing and footfall events.
+- `PlayerController` (`src/player/controller.ts`): maps keys to intent and drives the camera: eye 1.62 m (0.98 crouched), head bob and cadence that differ for walk and run, step smoothing, landing dip, FOV kick when running. Mouse look reuses `MouseLook` from main. Procedural footsteps by surface (stone, wood, grass, dirt; M toggles).
+- Everything is injected (physics, input, clock, camera view, audio); `src/player/setup.ts` wires it for `main.ts` and the island test alike.
+- Walk mode is now the physics player; orbit and fly stay. P/F/O switch, walk bookmarks teleport the player, `?play` starts walking at the spawn south of the gate. The bridge has landward steps up to the deck.
+- `?test=walk`: a movement course on the east lawn (stairs 0.15/0.20/0.30/0.35, 30° and 55° ramps, a low beam, and stairs down through a hole in the ground into a tunnel). `scripts/walktest.mjs` drives it in the real page.
+- Debug: `__game.player` (pos, teleport, look, state, spawn), `__game.input(keys, ms)` (steps physics synchronously, returns cost and a trace), `__game.physics` (stats, raycast), `__game.probes`.
+
+Numbers (headless WebGL2 on a shared 4-core box): physics init 0.76 s on a normal load (Rapier wasm 0.16 s, colliders 0.41 s for 145k triangles: castle 114k, terrain 31k), 1.8–2.3 s with `?test=walk` under load ~30. Physics tick (player + world step) median 0.25–0.39 ms, mean 0.35–0.86 ms. Rendering cost is unchanged; colliders draw nothing.
+
+Walk test: all checks pass (gate, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
+
+Known issues / next
+- The gate is closed and the gatehouse plinth batter runs across it; the shell work must open the passage.
+- Doors (kinematic boxes) do not push the player; the KCC stops against them.
+- 0.15 m steps are ridden by snap rather than autostepped (it looks the same).
+- The test course does not cut the render terrain; the tunnel hole is visible only from the physics.
+- Collider build time should be measured on the M4; if it is long, split the castle trimesh or build it in a worker.
+
 ## 2026-11-05: stone material and light (branch `stone-material-light`)
 
 Done

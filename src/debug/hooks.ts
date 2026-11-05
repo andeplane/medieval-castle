@@ -22,6 +22,8 @@ export interface HookDeps {
   tick(dt: number): void;
   physics: Physics; player: PlayerController; input: ScriptedInput;
   course: unknown; interior: unknown;
+  /** Plain data for scripts (outlines, gate frame, bridge) so tests can check positions. */
+  probes?: Record<string, unknown>;
 }
 
 const r = (n: number) => Math.round(n * 100) / 100;
@@ -88,6 +90,7 @@ export function installHooks(d: HookDeps, w: HookWindow, clock: Clock) {
     },
     physics: { stats: () => physics.stats(), raycast: physics.raycast.bind(physics) },
     course: d.course,
+    probes: d.probes ?? {},
     interior: d.interior,
   };
   // keep anything another module already published (e.g. __game.interior from the shell)
