@@ -17,6 +17,7 @@ import type { DoorSpec } from '../castle/interior/types';
 import { createInteraction } from '../game/interact';
 import { DoorAudio } from '../game/doorAudio';
 import type { V2 } from '../core/math2d';
+import type { LoadingScreen } from '../loading/tunnel';
 
 const T = 1.4, WALL_H = 8.2, LAP = 0.06;
 type Def = Pick<DoorSpec, 'id' | 'kind' | 'head' | 'width' | 'height' | 'hinge' | 'swingInto' | 'rebate'>;
@@ -65,9 +66,8 @@ function buildWall(B: Builder, doors: DoorSpec[], X0: number, X1: number, zc: nu
   B.prism('trim', [[X0 - 6, zc - 10], [X1 + 6, zc - 10], [X1 + 6, zc + 10], [X0 - 6, zc + 10]], GROUND - 0.4, GROUND, { top: 'trim' });
 }
 
-export async function runDoorTest() {
+export async function runDoorTest(screen: LoadingScreen) {
   const params = new URLSearchParams(location.search);
-  const loading = document.getElementById('loading')!;
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -79,7 +79,7 @@ export async function runDoorTest() {
   document.body.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 30000);
-  loading.textContent = 'CUTTING THE OAK…';
+  void screen.progress(0.3, 'CUTTING THE OAK…');
   const M = await makeMaterials();
 
   const { doors: specs, x0, x1, z } = doorTestSpecs();
@@ -138,6 +138,7 @@ export async function runDoorTest() {
   };
   rig.go(views.find((w) => w.name === (params.get('view') ?? 'door-all')) ?? views[0]);
   const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
+  const xh = document.getElementById('crosshair'); if (xh) xh.hidden = false;
 
   // a compact UI: walk/fly and the bookmarks
   const ui = document.getElementById('ui')!, row = document.createElement('div'); row.className = 'row';
@@ -161,7 +162,7 @@ export async function runDoorTest() {
     doors,
     stats: () => ({ scene: 'test=doors', drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, wallTriangles: wall.userData.triangles, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6) }),
   });
-  if (params.has('shot')) { loading.remove(); hooks.ready = true; return; }
+  if (params.has('shot')) { screen.dispose(); hooks.ready = true; return; }
   let last = performance.now();
   renderer.setAnimationLoop(() => {
     const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -170,6 +171,6 @@ export async function runDoorTest() {
     interaction.update();
     pipeline.render();
   });
-  loading.remove();
   hooks.ready = true;
+  await screen.finish();
 }

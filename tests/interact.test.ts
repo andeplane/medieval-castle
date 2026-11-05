@@ -86,9 +86,9 @@ class FakeEl {
   appendChild(e: FakeEl) { this.children.push(e); }
   remove() { this.removed = true; }
 }
-function fakeDoc() {
+function fakeDoc(crosshair: FakeEl | null = null) {
   const head = new FakeEl('HEAD'), body = new FakeEl('BODY');
-  return { head, body, createElement: (t: string) => new FakeEl(t.toUpperCase()) };
+  return { head, body, createElement: (t: string) => new FakeEl(t.toUpperCase()), getElementById: (id: string) => (id === 'crosshair' ? crosshair : null) };
 }
 
 describe('DOM prompt view', () => {
@@ -107,6 +107,17 @@ describe('DOM prompt view', () => {
     expect(chip.children[1].textContent).toBe('Open gate'); // keeps the text while fading out
     v.dispose();
     expect(dot.removed && chip.removed && doc.head.children[0].removed).toBe(true);
+  });
+  it("lights the page's own #crosshair instead of adding a second dot", () => {
+    const xh = new FakeEl('DIV'); xh.id = 'crosshair';
+    const doc = fakeDoc(xh);
+    const v = domPromptView(doc as unknown as Document);
+    expect(doc.body.children.map((c) => c.id)).toEqual(['useprompt']);
+    v.show('Raise portcullis');
+    expect(xh.cls.has('on')).toBe(true);
+    v.dispose();
+    expect(xh.removed).toBe(false);
+    expect(xh.cls.has('on')).toBe(false);
   });
 });
 

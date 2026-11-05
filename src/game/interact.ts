@@ -45,7 +45,7 @@ export function pickTarget(ray: THREE.Ray, items: Interactable[], reach = REACH,
 
 const CSS = `
 #xhair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--bone); box-shadow: 0 0 0 1px rgba(0,0,0,.55); opacity: .7; pointer-events: none; z-index: 6; transition: transform .12s, background .12s, opacity .12s; }
-#xhair.on { background: var(--brass); opacity: 1; transform: scale(1.6); }
+#xhair.on, #crosshair.on { background: var(--brass); opacity: 1; transform: scale(1.6); }
 #useprompt { position: fixed; left: 50%; top: calc(50% + 22px); transform: translateX(-50%); display: flex; gap: 8px; align-items: center; padding: 5px 10px 5px 6px; background: var(--chip); border: 1px solid var(--chip-line); border-radius: 4px; color: var(--bone); font: 13px/1.2 var(--ui); white-space: nowrap; pointer-events: none; z-index: 6; opacity: 0; transition: opacity .12s; }
 #useprompt.on { opacity: 1; }
 #useprompt kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; box-sizing: border-box; border: 1px solid var(--brass); border-radius: 3px; color: var(--brass); font: 600 12px/1 var(--ui); }
@@ -53,15 +53,20 @@ body.shot #xhair, body.shot #useprompt { display: none; }
 @media (prefers-reduced-motion: reduce) { #xhair, #useprompt { transition: none; } }
 `;
 
-/** Default view: a dot and a prompt chip styled with the page's tokens (index.html), hidden in body.shot. */
+/**
+ * Default view: a dot and a prompt chip styled with the page's tokens (index.html), hidden in body.shot.
+ * If the page already has a #crosshair (mouse look), that dot is reused and only lights up.
+ */
 export function domPromptView(doc: Document = document): PromptView {
   const style = doc.createElement('style'); style.textContent = CSS; doc.head.appendChild(style);
-  const dot = doc.createElement('div'); dot.id = 'xhair';
+  const own = doc.getElementById('crosshair');
+  const dot = own ?? doc.createElement('div');
+  if (!own) dot.id = 'xhair';
   const prompt = doc.createElement('div'); prompt.id = 'useprompt'; prompt.setAttribute('role', 'status'); prompt.setAttribute('aria-live', 'polite');
   const key = doc.createElement('kbd'); key.textContent = 'E';
   const text = doc.createElement('span');
   prompt.append(key, text);
-  doc.body.append(dot, prompt);
+  if (own) doc.body.append(prompt); else doc.body.append(dot, prompt);
   let shown: string | null = null;
   return {
     show(label) {
@@ -70,7 +75,7 @@ export function domPromptView(doc: Document = document): PromptView {
       if (label) text.textContent = label;
       shown = label;
     },
-    dispose() { dot.remove(); prompt.remove(); style.remove(); },
+    dispose() { if (own) dot.classList.toggle('on', false); else dot.remove(); prompt.remove(); style.remove(); },
   };
 }
 
