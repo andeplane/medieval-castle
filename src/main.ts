@@ -88,10 +88,17 @@ async function main() {
   const help = document.getElementById('help')!;
   const helpText: Record<Mode, string> = {
     orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'WASD move · E/Q up/down · Shift fast · drag (or double-click to lock) to look',
-    walk: 'WASD walk · Shift run · drag (or double-click to lock) to look',
+    fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
+    walk: 'Click to look with the mouse · WASD walk · Shift run · Esc releases',
   };
-  const syncMode = () => { for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode); help.textContent = helpText[rig.mode]; };
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: 'WASD walk · Shift run · Esc to release mouse' };
+  const crosshair = document.getElementById('crosshair')!;
+  const syncMode = () => {
+    for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
+    help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
+    crosshair.hidden = !rig.locked;
+  };
+  rig.onLockChange = syncMode;
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
     const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
     b.onclick = () => { rig.setMode(m); if (m === 'walk') { const p = camera.position; if (p.y > 30) rig.go(VIEWS.find((v) => v.name === 'gate')!); } syncMode(); };

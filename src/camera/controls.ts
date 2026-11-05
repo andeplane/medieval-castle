@@ -37,18 +37,43 @@ export class CameraRig {
     addEventListener('keydown', (e) => { if ((e.target as HTMLElement)?.tagName === 'INPUT') return; this.keys.add(e.code); });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
-    dom.addEventListener('pointerdown', (e) => { if (this.mode !== 'orbit') { this.dragging = true; dom.setPointerCapture(e.pointerId); } });
-    dom.addEventListener('pointerup', () => { this.dragging = false; });
-    dom.addEventListener('pointermove', (e) => {
+    // FPS look: a click on the canvas grabs the pointer (walk and fly), the mouse turns the head while
+    // locked, Esc releases it (the browser does that for us). Dragging still looks around as a fallback
+    // where pointer lock is unavailable (headless captures, some embeds).
+    dom.addEventListener('pointerdown', (e) => {
       if (this.mode === 'orbit') return;
-      if (!this.dragging && document.pointerLockElement !== dom) return;
-      this.yaw -= e.movementX * 0.0025; this.pitch = THREE.MathUtils.clamp(this.pitch - e.movementY * 0.0025, -1.45, 1.45);
+      if (document.pointerLockElement !== dom && dom.requestPointerLock) {
+        const r = dom.requestPointerLock() as unknown as Promise<void> | undefined;
+        r?.catch?.(() => {});
+      }
+      this.dragging = true;
+      try { dom.setPointerCapture(e.pointerId); } catch { /* not allowed while locked */ }
     });
-    dom.addEventListener('dblclick', () => { if (this.mode !== 'orbit') dom.requestPointerLock?.(); });
+    dom.addEventListener('pointerup', () => { this.dragging = false; });
+    dom.addEventListener('mousemove', (e) => {
+      if (this.mode === 'orbit') return;
+      if (!this.locked && !this.dragging) return;
+      // some browsers report a huge first delta right after locking; drop it
+      if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
+      this.yaw -= e.movementX * this.sensitivity;
+      this.pitch = THREE.MathUtils.clamp(this.pitch - e.movementY * this.sensitivity, -1.5, 1.5);
+    });
+    document.addEventListener('pointerlockchange', () => {
+      this.locked = document.pointerLockElement === dom;
+      this.dragging = false;
+      if (!this.locked) this.keys.clear();
+      this.onLockChange?.(this.locked);
+    });
   }
+
+  /** True while the pointer is captured for mouse look. */
+  locked = false;
+  sensitivity = 0.0022;
+  onLockChange?: (locked: boolean) => void;
 
   setMode(m: Mode) {
     this.mode = m;
+    if (m === 'orbit' && document.pointerLockElement) document.exitPointerLock();
     this.orbit.enabled = m === 'orbit';
     if (m !== 'orbit') {
       const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
