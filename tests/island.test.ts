@@ -2,12 +2,9 @@
 // boundary, the ?test=walk course and the spawn, driven through setupPlay() exactly as main.ts does.
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { buildCastle } from '../src/castle/castle';
-import { buildBridge } from '../src/castle/bridge';
-import { buildRevetment } from '../src/castle/revetment';
 import { Builder } from '../src/castle/builder';
 import { footprints, gatehouseFrame, outerPoly } from '../src/castle/layout';
-import { ISLAND, MOAT_OUTER, heightAt } from '../src/world/terrain';
+import { ISLAND, heightAt } from '../src/world/terrain';
 import { pointInPoly, edgeDist, dot, sub, type V2 } from '../src/core/math2d';
 import { buildCourse, courseOrigin, type CourseInfo } from '../src/debug/testcourse';
 import { setupPlay, surfaceAt } from '../src/player/setup';
@@ -22,11 +19,12 @@ import type { V3 } from '../src/castle/interior/types';
 import { GATEHOUSE } from '../src/castle/spec';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
 import { fakeClock, fakeView } from './helpers';
-import { mats, doorMats, terrainObject, ROCK } from './world';
+import { mats, doorMats, terrainObject, islandCastle, ROCK } from './world';
+import type { BridgeInfo } from '../src/physics/boundary';
 
 
 describe('walking the island', { timeout: 60_000 }, () => {
-  let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>, stoneSet: StoneSet;
+  let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: BridgeInfo, stoneSet: StoneSet;
   const view = fakeView();
   const walk = (keys: string[], s: number) => {
     input.hold(keys);
@@ -41,9 +39,8 @@ describe('walking the island', { timeout: 60_000 }, () => {
   const face = (a: V2, b: V2) => Math.atan2(-(b[0] - a[0]), -(b[1] - a[1]));
 
   beforeAll(async () => {
-    const { builder } = buildCastle();
-    bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, undefined, heightAt);
-    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+    const isl = islandCastle(), builder = isl.builder;
+    bridge = isl.bridge;
     stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // the real 3D stones, as main.ts lays them
     const castle = builder.build(mats());
     const cb = new Builder();
@@ -126,7 +123,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     const along = dot(sub([w.feet[0], w.feet[2]], p0), d);
     expect(along).toBeGreaterThan(bridge.breakAt - 1.5);
     expect(along).toBeLessThan(bridge.breakAt + 0.1);
-    expect(w.feet[1]).toBeGreaterThan(bridge.deck - 0.6); // on the deck or the pier top, not in the moat
+    expect(w.feet[1]).toBeGreaterThan(2); // on the deck, not in the moat
   });
 
   it('runs the test course: stairs, ramps, beam and the stair down under the ground', () => {

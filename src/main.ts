@@ -1,6 +1,6 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?interior=0, ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?interior=0, ?shot (hide UI; add ?ui=locked,tools,card to keep the HUD), ?debug (three Inspector), ?seed=N,
 // ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn),
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
@@ -10,15 +10,18 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { StoneField } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
-import { buildBridge } from './castle/bridge';
-import { buildRevetment } from './castle/revetment';
-import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
+import { revetmentPlan, buildRevetment } from './castle/revetment';
+import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, footDist, defaultTerrain } from './world/terrain';
+import { rngFor } from './core/rng';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
-import { CameraRig, VIEWS, spawnPoint, type Mode } from './camera/controls';
+import { CameraRig, VIEWS, spawnPoint } from './camera/controls';
 import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
 import { GATEHOUSE } from './castle/spec';
+import { bridgeInfo } from './physics/boundary';
 import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
@@ -31,21 +34,23 @@ import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { setupPlay, playDoors } from './player/setup';
-import { MinimalHud, type Hud } from './player/hud';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
-import { createInteraction, domPromptView } from './game/interact';
+import { createInteraction } from './game/interact';
 import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
 import { stepProgress, textureProgress } from './loading/model';
 import { setTextureProgress } from './render/texpool';
+import { createHud, browserHudDeps } from './ui/hud';
+import { wireGameHud } from './ui/gameHud';
+import { showBootError } from './ui/error';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
 // Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
-// texture jobs fill CUTTING → RAISING.
+// texture jobs fill "Cutting the stone" → "Raising the walls".
 let screen: LoadingScreen;
 const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
-if (params.has('shot')) document.body.classList.add('shot');
+if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 async function main() {
   if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
@@ -67,16 +72,16 @@ async function main() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.25, 30000);
 
-  await say('CUTTING THE STONE…');
+  await say('Cutting the stone…');
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
   await terrainReady;
 
-  await say('RAISING THE WALLS…');
+  await say('Raising the walls…');
   const test = params.get('test');
   let builder, lights: unknown[];
-  let bridge: ReturnType<typeof buildBridge> | null = null;
+  let bridgeTriangles = 0, revetmentTriangles = 0, revetment: ReturnType<typeof revetmentPlan> | undefined, bridge: BridgePlan | undefined;
   if (test === 'stairs') {
     const { buildStairTest } = await import('./debug/stairtest');
     const t = buildStairTest(params.has('cut'));
@@ -85,9 +90,10 @@ async function main() {
     VIEWS.splice(0, VIEWS.length, ...t.views);
   } else {
     ({ builder, lights } = buildCastle());
-    const b = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, undefined, heightAt);
-    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - b.start[0], z - b.start[1]) < 3.2);
-    bridge = b;
+    bridge = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
+    bridgeTriangles = buildBridge(builder, bridge, rngFor('bridge-stones'));
+    revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
+    revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
@@ -119,14 +125,19 @@ async function main() {
     scene.add(course.object);
   }
 
-  await say('SHAPING THE LAND…');
+  await say('Shaping the land…');
   const sky = makeSky(renderer, scene);
   const terrain = buildTerrain(M.terrain);
   scene.add(terrain);
+  if (revetment) {
+    // turf over the rim, with the same noise as the terrain's ground weights (world/terrain.ts 'terrain-b')
+    const rimNoise = defaultTerrain().deps.noise2('terrain-b');
+    scene.add(rimTurfMesh(rimTurf(revetment, heightAt, rimMask({ footDist, noise: rimNoise, gate: gatehouseFrame() })), M.terrain));
+  }
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
-  await say('PLANTING TREES…');
+  await say('Planting trees…');
   let veg: Vegetation | null = null;
   if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
@@ -162,12 +173,12 @@ async function main() {
   void output;
 
   // physics + player (G.1): colliders are built here, before the ready flag
-  await say('LAYING THE FLOORS…');
+  await say('Laying the floors…');
   const input = new KeyboardInput(window);
   const scripted = new ScriptedInput();
   const footsteps = new Footsteps(browserAudio(window));
   const play = await setupPlay({
-    castle, terrain, bridge, interior: interior ? { collision: interior.collision } : null, furniture: furniture ? [...furniture.collision.values()] : [], input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
+    castle, terrain, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, interior: interior ? { collision: interior.collision } : null, furniture: furniture ? [...furniture.collision.values()] : [], input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
     extra: course ? { object: course.object, holes: course.info.holes } : null,
   });
   const { physics, player } = play;
@@ -187,7 +198,7 @@ async function main() {
     enabled: () => rig.mode !== 'orbit',
     get: () => rig.getLook(), set: (l) => rig.setLook(l),
     // clear held keys on release so the player does not keep walking after Esc
-    onLockChange: (locked) => { if (!locked) input.clear(); syncMode(); },
+    onLockChange: (locked) => { if (!locked) input.clear(); ui.sync(); },
   });
   rig.mouse = mouse;
   input.capture = () => mouse.locked;
@@ -212,42 +223,26 @@ async function main() {
   // the player blocks leaves by its body in walk mode; a flying camera by where it is
   physics.onFixed((dt) => doors.update(dt, rig.mode === 'walk' ? play.playerCentre() : camera.position));
 
-  // the HUD bits play needs (crosshair, help, use prompt), behind Hud so src/ui can replace it
-  const hud: Hud = new MinimalHud(
-    { help: document.getElementById('help')!, crosshair: document.getElementById('crosshair')! },
-    domPromptView(document), { set: (f, ms) => setTimeout(f, ms), clear: (h) => clearTimeout(h as number) });
+  // HUD (src/ui): crosshair, use prompt, help, controls card and the review tools (` toggles them)
+  const hud = createHud(browserHudDeps(), { onToolsOpen: () => mouse.release() });
   const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, {
     enabled: () => rig.mode !== 'fly',
-    view: { show: (l) => hud.setPrompt(l), dispose: () => hud.setPrompt(null) },
+    view: hud.promptView,
     // walls between you and a door stop the use ray; door leaves themselves do not
     occluder: (f, dir, max) => { const h = physics.raycast([f.x, f.y, f.z], [dir.x, dir.y, dir.z], max); return h && !h.tag?.startsWith('door:') ? h.dist : null; },
   });
-  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); };
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
   rig.go(start);
   if (params.has('play')) rig.setMode('walk');
 
-  // UI
-  const ui = document.getElementById('ui')!;
-  const modeRow = document.createElement('div'); modeRow.className = 'row';
-  const viewRow = document.createElement('div'); viewRow.className = 'row';
-  const modeBtns: Record<string, HTMLButtonElement> = {};
-  const keysText = 'P walk · F fly · O orbit';
-  const walkKeys = 'WASD walk · Shift run · Space jump · C (or Ctrl) crouch · M sound';
-  const helpText: Record<Mode, string> = {
-    orbit: `Drag to orbit · right-drag to pan · scroll to zoom · ${keysText}`,
-    fly: `Click to look with the mouse · WASD move · E/Q up/down · Shift fast · ${keysText}`,
-    walk: `Click to look with the mouse · ${walkKeys} · E to use (gate, portcullis) · ${keysText}`,
-  };
-  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · click to use · Esc to release mouse', walk: `${walkKeys} · E or click to use · Esc to release mouse` };
-  const syncMode = () => {
-    for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
-    hud.setHelp((rig.locked ? lockedText : helpText)[rig.mode]);
-    hud.setLocked(rig.locked);
-  };
-  rig.onModeChange = () => syncMode();
+  const ui = wireGameHud(hud, {
+    rig, views: VIEWS, search: location.search, time: { get: () => sky.hours, set: setTime },
+    walkFrom: { above: 30, view: 'gate', height: () => camera.position.y },
+  });
+  rig.onModeChange = () => ui.sync();
+  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); ui.sync(); };
   input.onPress = (code) => {
     footsteps.unlock();
     if (code === 'KeyP') rig.setMode('walk');
@@ -256,28 +251,10 @@ async function main() {
     else if (code === 'KeyM') { footsteps.enabled = !footsteps.enabled; hud.toast(footsteps.enabled ? 'Footsteps on' : 'Footsteps off'); }
   };
   renderer.domElement.addEventListener('pointerdown', () => footsteps.unlock());
-  for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
-    const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
-    b.onclick = () => { rig.setMode(m); syncMode(); b.blur(); };
-    modeBtns[m] = b; modeRow.appendChild(b);
-  }
-  const time = document.createElement('label');
-  time.innerHTML = 'Time <input type="range" min="6.5" max="19.8" step="0.1">';
-  const slider = time.querySelector('input')!; slider.value = String(sky.hours);
-  slider.oninput = () => setTime(Number(slider.value));
-  modeRow.appendChild(time);
-  const sens = document.createElement('label');
-  sens.innerHTML = 'Mouse <input type="range" min="0.0008" max="0.006" step="0.0001">';
-  const sensIn = sens.querySelector('input')!; sensIn.value = String(mouse.sensitivity);
-  sensIn.oninput = () => { mouse.sensitivity = Number(sensIn.value); try { localStorage.setItem('mouseSens', sensIn.value); } catch { /* private mode */ } };
-  modeRow.appendChild(sens);
-  for (const v of VIEWS) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => { rig.go(v); syncMode(); }; viewRow.appendChild(b); }
-  ui.append(modeRow, viewRow);
-  syncMode();
 
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
-  await say('LIGHTING…');
+  await say('Lighting the halls…');
   stones.update(camera.position, Infinity);
   await renderer.compileAsync(scene, camera);
 
@@ -286,13 +263,13 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
-    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint(), gateDoors: gateSpecs },
+    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
-    doors,
+    doors, hud,
     stats: () => ({
       interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
       furniture: furniture ? { props: furniture.props, triangles: furniture.triangles, groups: furniture.objects.size, emitters: [...furniture.emitters.values()].reduce((s, e) => s + e.length, 0) } : null,
-      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      castleTriangles: castle.userData.triangles, bridgeTriangles, revetmentTriangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: { ...doors.state(), ...locked.state() }, target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       physics: { ...physics.stats(), ...play.timings },
@@ -309,14 +286,11 @@ async function main() {
     hooks.ready = true;
     return;
   }
-  const fpsEl = document.createElement('span');
-  fpsEl.style.cssText = 'margin-left:8px;opacity:.8;font-variant-numeric:tabular-nums';
-  modeRow.appendChild(fpsEl);
   let last = performance.now(), frames = 0, acc = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
-    if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
+    if (acc > 0.5) { ui.setFps(frames / acc); frames = 0; acc = 0; }
     tick(dt);
     stones.update(camera.position);
     veg?.update(camera);
@@ -332,5 +306,5 @@ async function main() {
 export function boot(loading: LoadingScreen) {
   screen = loading;
   setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
-  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+  return main().catch((e) => { console.error(e); screen.dispose(); showBootError(document, e, () => location.reload()); });
 }

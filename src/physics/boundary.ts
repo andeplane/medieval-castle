@@ -6,6 +6,15 @@ import { offsetPoly } from '../castle/builder';
 
 export interface BridgeInfo { start: V2; dir: V2; width: number; breakAt: number }
 
+/**
+ * The bridge corridor from the bridge plan's walkable deck: [start −w, end −w, end +w, start +w] around
+ * its axis `dir` (castle/bridge.ts bridgePlan().walkable and .d).
+ */
+export function bridgeInfo(walkable: V2[], dir: V2): BridgeInfo {
+  const [a, b, , d] = walkable;
+  return { start: scale(add(a, d), 0.5), dir, width: Math.hypot(d[0] - a[0], d[1] - a[1]), breakAt: dot(sub(b, a), dir) };
+}
+
 /** Distance from the island edge to the wall (the revetment coping is ~0.35–1.1 m in). */
 export const BOUNDARY_INSET = 0.75;
 

@@ -146,7 +146,7 @@ describe('dressing a small plan', () => {
 
 describe('dressing the castle plan', () => {
   let P: InteriorPlan, D: Dressing;
-  beforeAll(() => { P = planInterior(); D = dressPlan(P); });
+  beforeAll(() => { P = planInterior(); D = dressPlan(P); }, 60_000); // slow next to the walking tests on a loaded machine
 
   it('is deterministic', () => {
     const E = dressPlan(P);

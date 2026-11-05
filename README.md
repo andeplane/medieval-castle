@@ -25,5 +25,6 @@ Walk is the physics player (Rapier capsule, 1.75 m, eye at 1.62 m). Open the pag
 | E (or click while looking) | use the door or portcullis under the crosshair | up (E) |
 | M | footstep sound on/off | |
 | P / F / O | switch to walk / fly / orbit | |
+| H / ` | controls card / review tools (camera mode, time, bookmarks) | same |
 
-The Mouse slider sets the look sensitivity (remembered per browser). `?test=walk` adds a movement test course on the east lawn: stairs with 0.15/0.20/0.30/0.35 m rises, 30° and 55° ramps, a low beam and a stair down into a tunnel under the ground. With the dev server running, `node scripts/walktest.mjs` walks it in a headless browser and checks each obstacle.
+`?test=walk` adds a movement test course on the east lawn: stairs with 0.15/0.20/0.30/0.35 m rises, 30° and 55° ramps, a low beam and a stair down into a tunnel under the ground. With the dev server running, `node scripts/walktest.mjs` walks it in a headless browser and checks each obstacle.

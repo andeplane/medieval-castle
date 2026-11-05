@@ -2,14 +2,11 @@
 // bridge, revetment, the interior shell's collision soups, terrain with holes, boundary, every door leaf,
 // the locked sally-port grille), walked by steering the player along the interior nav graph. No browser.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { buildCastle } from '../src/castle/castle';
-import { buildBridge } from '../src/castle/bridge';
-import { buildRevetment } from '../src/castle/revetment';
 import { buildInterior, type PlanX } from '../src/castle/interior';
 import { navGraph, findPath, type NavGraph } from '../src/castle/interior/nav';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, type DoorSystem } from '../src/castle/interior/doors';
 import type { V3 } from '../src/castle/interior/types';
-import { ISLAND, MOAT_OUTER, heightAt } from '../src/world/terrain';
+import { heightAt } from '../src/world/terrain';
 import { pointInPoly } from '../src/core/math2d';
 import { courtyard } from '../src/castle/layout';
 import { GROUND } from '../src/castle/spec';
@@ -18,17 +15,17 @@ import { setupPlay, playDoors } from '../src/player/setup';
 import { ScriptedInput } from '../src/player/input';
 import { Footsteps } from '../src/player/footsteps';
 import { fakeClock, fakeView } from './helpers';
-import { mats, doorMats, terrainObject } from './world';
+import { mats, doorMats, terrainObject, islandCastle } from './world';
+import type { BridgeInfo } from '../src/physics/boundary';
 
 type Play = Awaited<ReturnType<typeof setupPlay>>;
 
 describe('key paths', { timeout: 120_000 }, () => {
-  let play: Play, input: ScriptedInput, plan: PlanX, G: NavGraph, doors: DoorSystem, bridge: ReturnType<typeof buildBridge>;
+  let play: Play, input: ScriptedInput, plan: PlanX, G: NavGraph, doors: DoorSystem, bridge: BridgeInfo, deckAt: (x: number, z: number) => number | null;
 
   beforeAll(async () => {
-    const { builder } = buildCastle();
-    bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, undefined, heightAt);
-    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+    const isl = islandCastle(), builder = isl.builder;
+    bridge = isl.bridge; deckAt = isl.plan.deckHeightAt;
     const interior = buildInterior(mats(), builder, { heightAt });
     const castle = builder.build(mats());
     plan = interior.plan; G = navGraph(plan);
@@ -92,9 +89,9 @@ describe('key paths', { timeout: 120_000 }, () => {
     return pts;
   };
 
-  const path = (from: string, to: string, allowLocked = false) => {
+  const path = (from: string, to: string, allowLocked = false, open = true) => {
     const p = findPath(G, from, to, { allowLocked })!;
-    for (const id of p.doors) if (doors.state()[id] !== undefined) doors.setOpen(id, true, true); // E on each door on the way
+    if (open) for (const id of p.doors) if (doors.state()[id] !== undefined) doors.setOpen(id, true, true); // E on each door on the way
     return p;
   };
   const room = (id: string) => plan.rooms.find((r) => r.id === id)!;
@@ -104,7 +101,9 @@ describe('key paths', { timeout: 120_000 }, () => {
     doors.setOpen('main-gate', true, true); // the gate opening counts as open (gate-portcullis branch owns it)
     const p = path('outside', 'courtyard');
     expect(p.doors).toEqual(['gate-main', 'gate-inner', 'gate-court']);
-    start(bridge.start[0], bridge.deck, bridge.start[1]);
+    // the bridge end: half a metre short of the broken edge, on the deck
+    const e: [number, number] = [bridge.start[0] + bridge.dir[0] * (bridge.breakAt - 0.5), bridge.start[1] + bridge.dir[1] * (bridge.breakAt - 0.5)];
+    start(e[0], deckAt(e[0], e[1])!, e[1]);
     const w = follow(route(p.nodes));
     expect(w.reached, JSON.stringify(w)).toBe(w.of);
     expect(pointInPoly(courtyard(), w.feet[0], w.feet[2])).toBe(true);
@@ -113,8 +112,19 @@ describe('key paths', { timeout: 120_000 }, () => {
   });
 
   it('courtyard → ground-floor rooms → the SW tower stair up one floor', () => {
-    const p = path('courtyard', 'sw-1');
+    const p = path('courtyard', 'sw-1', false, false);
     expect(p.nodes).toContain('room:W0-2');
+    // the courtyard door into W0-2 is a real leaf: shut, it stops you; opened (E), you walk through
+    const d = plan.doors.find((x) => x.id === 'court>W0-2')!;
+    expect(d.leaf).toBe(true);
+    expect(doors.state()[d.id]).toBe(0);
+    const c0 = G.nodes.get('room:courtyard')!.pos;
+    start(c0[0], c0[1], c0[2]);
+    const shut = follow(route(['room:courtyard', 'door:court>W0-2', 'room:W0-2']));
+    expect(shut.reached).toBeLessThan(4); // never the point past the door
+    const side = (f: V3) => (f[0] - d.centre[0]) * d.normal[0] + (f[2] - d.centre[2]) * d.normal[1];
+    expect(side(shut.feet)).toBeLessThan(d.wall / 2); // still in the doorway at most, not in the room
+    path('courtyard', 'sw-1');
     expect(p.nodes.filter((n) => n.startsWith('landing:sw-stair'))).toHaveLength(2);
     const c = G.nodes.get('room:courtyard')!.pos;
     start(c[0], c[1], c[2]);

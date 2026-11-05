@@ -23,6 +23,8 @@ import { openingOutline, headRise } from '../castle/interior/doorGeom';
 import type { DoorSpec } from '../castle/interior/types';
 import { createInteraction } from '../game/interact';
 import { DoorAudio } from '../game/doorAudio';
+import { createHud, browserHudDeps } from '../ui/hud';
+import { wireGameHud } from '../ui/gameHud';
 import type { V2 } from '../core/math2d';
 import type { LoadingScreen } from '../loading/tunnel';
 
@@ -86,7 +88,7 @@ export async function runDoorTest(screen: LoadingScreen) {
   document.body.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 30000);
-  void screen.progress(0.3, 'CUTTING THE OAK…');
+  void screen.progress(0.3, 'Cutting the oak…');
   const M = await makeMaterials();
 
   const { doors: specs, x0, x1, z } = doorTestSpecs();
@@ -149,24 +151,15 @@ export async function runDoorTest(screen: LoadingScreen) {
   // walk mode drops you under the camera anywhere on the floor
   rig.walkable = (x, zz) => Math.abs(zz - z) < 9.5 && x > x0 - 5 && x < x1 + 5 && !(Math.abs(zz - z) < T / 2 + 0.3 && !specs.some((d) => inDoorway(d, x, zz, 0.3, 0.3)));
   physics.onFixed((dt) => doors.update(dt, rig.mode === 'walk' ? { x: motor.feet[0], y: motor.feet[1] + motor.height / 2, z: motor.feet[2] } : camera.position));
-  const xh = document.getElementById('crosshair')!;
-  const mouse = new MouseLook({ el: renderer.domElement, doc: document, enabled: () => rig.mode !== 'orbit', get: () => rig.getLook(), set: (l) => rig.setLook(l), onLockChange: (locked) => { if (!locked) keys.clear(); xh.hidden = !locked; } });
+  const mouse = new MouseLook({ el: renderer.domElement, doc: document, enabled: () => rig.mode !== 'orbit', get: () => rig.getLook(), set: (l) => rig.setLook(l), onLockChange: (locked) => { if (!locked) keys.clear(); ui.sync(); } });
   rig.mouse = mouse; keys.capture = () => mouse.locked;
   rig.go(views.find((w) => w.name === (params.get('view') ?? 'door-all')) ?? views[0]);
-  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
-  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); };
-
-  // a compact UI: walk/fly and the bookmarks
-  const ui = document.getElementById('ui')!, row = document.createElement('div'); row.className = 'row';
-  const help = document.getElementById('help')!;
-  for (const m of ['walk', 'fly'] as const) {
-    const b = document.createElement('button'); b.textContent = m === 'walk' ? 'Walk' : 'Fly';
-    b.onclick = () => { rig.setMode(m); b.blur(); help.textContent = m === 'walk' ? 'WASD walk · Shift run · Space jump · click to look · E or click to open' : 'WASD · E/Q up/down · click to look · click (locked) to use'; };
-    row.appendChild(b);
-  }
-  for (const w of views) { const b = document.createElement('button'); b.textContent = w.label; b.onclick = () => rig.go(w); row.appendChild(b); }
-  ui.appendChild(row);
-  help.textContent = 'Walk to a door and press E · click to look with the mouse';
+  // the castle page's HUD with walk/fly and these bookmarks
+  const hud = createHud(browserHudDeps(), { onToolsOpen: () => mouse.release() });
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly', view: hud.promptView });
+  const ui = wireGameHud(hud, { rig, views, modes: ['walk', 'fly'], search: location.search, title: 'Door test' });
+  rig.onModeChange = () => ui.sync();
+  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); ui.sync(); };
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   const info = renderer.info;
   await renderer.compileAsync(scene, camera);
@@ -175,7 +168,7 @@ export async function runDoorTest(screen: LoadingScreen) {
     renderNow: async () => { pipeline.render(); },
     tick, physics, player, input: scripted, course: null, interior: null,
     use: () => interaction.use(),
-    doors,
+    doors, hud,
     stats: () => ({ scene: 'test=doors', drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, wallTriangles: wall.userData.triangles, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6), physics: physics.stats() }),
   }, window as unknown as HookWindow, systemClock);
   if (params.has('shot')) { screen.dispose(); hooks.ready = true; return; }

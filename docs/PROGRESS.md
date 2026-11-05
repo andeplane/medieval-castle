@@ -10,11 +10,12 @@ Done
 - Walk mode is now the physics player; orbit and fly stay. P/F/O switch, walk bookmarks teleport the player, `?play` starts walking at the spawn south of the gate. The bridge has landward steps up to the deck.
 - `?test=walk`: a movement course on the east lawn (stairs 0.15/0.20/0.30/0.35, 30° and 55° ramps, a low beam, and stairs down through a hole in the ground into a tunnel). `scripts/walktest.mjs` drives it in the real page.
 - Interior on physics: the shell's collision soups (`buildInterior().collision`, glass excluded) are static meshes, so every room, stair, cellar and tunnel is walked on real geometry (no `canWalk` gating any more). The terrain keeps its ground in the courtyard (it was holed with the whole castle footprint) except in the stair tower. With `?furniture=1` the furniture's box soups are static colliders too.
-- Doors on physics: the gate's leaves and portcullis (`gateDoorSpecs`, untouched here; the gate-portcullis branch owns them) and every leaf door of the plan except `gate-main` are kinematic boxes in the same world, stepped each fixed tick (`playDoors()` picks the sets). `sallyport-grille` is built as its own never-opened system with no interactables. Leaves stop the player and any NPC motors (`setupPlay().characters`), and the use ray is blocked by walls via physics raycasts. `?test=doors` walks with the physics player too.
+- Doors on physics: the gate's leaves and portcullis (`gateDoorSpecs`, untouched here; the gate-portcullis branch owns them) and every leaf door of the plan except the gate (`kind !== 'gate'`; 243 leaves, one batched build through doorBatch) are kinematic boxes in the same world, stepped each fixed tick (`playDoors()` picks the sets). `sallyport-grille` is built as its own never-opened system with no interactables. Leaves stop the player and any NPC motors (`setupPlay().characters`), and the use ray is blocked by walls via physics raycasts. `?test=doors` walks with the physics player too.
 - Camera clip margin: the eye stays on the capsule axis (sway clamped to the 0.02 m skin), its height is clamped inside the capsule (≥ r, ≤ height − 0.1), and the walk near plane is 0.06 m (0.25 m otherwise), so the near-plane corners reach 0.133 m from the eye at FOV 76 / 21:9, under half the 0.3 m radius. `tests/island.test.ts` walks into walls, the gatehouse, the batter and a low beam and asserts the eye stays ≥ 0.3 m from every collider (0.313 m measured at the closest wall) and, after subtracting the relief of the real 3D stones there (measured from StoneSet), still more than the near-plane reach + 0.03 m.
-- Key paths (`tests/keypaths.test.ts`, vitest, no browser): the same motor and colliders as main.ts, steered along the interior nav graph. (1) bridge end → `gate-main` (gate open) → gate passage → courtyard; (2) courtyard → W0-2, W0-1, W0-0, sw-0 → SW tower spiral → sw-1 on floor 1; (3) great-tower cellar → moat tunnel down to −6.5 and up the far flight → stopped 0.2–1.2 m short of the locked `sallyport-grille`. Doors on the way are opened as E would.
+- Key paths (`tests/keypaths.test.ts`, vitest, no browser): the same motor and colliders as main.ts, steered along the interior nav graph. (1) the bridge end (0.5 m short of the break) → `gate-main` (gate open) → gate passage → courtyard; (2) the shut courtyard door into W0-2 stops you, opened it lets you through, then W0-2, W0-1, W0-0, sw-0 → SW tower spiral → sw-1 on floor 1; (3) great-tower cellar → moat tunnel down to −6.5 and up the far flight → stopped 0.2–1.2 m short of the locked `sallyport-grille`. Doors on the way are opened as E would.
 - Fixed for path (3): the sally-port housing's back face lay on a boundary between two of `tunnelCarve`'s 1 m carve pieces, so neither carved it and it closed the tunnel's last flight (also visible from inside). `portal()` now adds a carve volume for the bore.
-- UI kept minimal behind `Hud` (`src/player/hud.ts`: setHelp, setPrompt, setLocked, toast), so the impeccable HUD in src/ui can replace `MinimalHud` at merge.
+- HUD: main's `src/ui` HUD through `wireGameHud` (the physics rig is the `RigLike`; MouseLook's lock change and rig mode changes call `ui.sync()`); the walk help adds Space jump and C crouch. The interim `MinimalHud` is gone. P / F / O and M stay as keys.
+- Bridge: the new bridge plan's walkable deck (`walkable`, `d`) gives the boundary its corridor (`bridgeInfo`); the island tests use main's own bridge and revetment build (`tests/world.ts islandCastle()`) and a test terrain at the real near-grid resolution (0.9 m cells).
 - Debug: `__game.player` (pos, teleport, look, state, spawn), `__game.input(keys, ms)` (steps physics synchronously, returns cost and a trace), `__game.physics` (stats, raycast), `__game.probes`.
 
 Numbers (headless WebGL2 on a shared 4-core box): physics init 0.76 s on a normal load (Rapier wasm 0.16 s, colliders 0.41 s for 145k triangles: castle 114k, terrain 31k), 1.8–2.3 s with `?test=walk` under load ~30. Physics tick (player + world step) median 0.25–0.39 ms, mean 0.35–0.86 ms. Rendering cost is unchanged; colliders draw nothing.
@@ -305,3 +306,61 @@ Known issues / next
 - Contract interpretations the shell should match: the leaf's back face sits on the stop at `rebate` from the swing face; the leaf fits inside the clear opening with 1.5 cm clearance (no lap over the stop, so thin light slits show); pointed heads rise 0.42·w (castle.ts gate arch), segmental 0.2·w. `openingOutline(head, w, h, seg, grow)` gives the exact outline, and `grow` gives a rebate recess.
 - Portcullis grid is iron, not iron-shod oak; there is no winch or windlass in the room above yet.
 - Doors are only in the main scene for the gate, until the shell's `plan.doors` lands.
+
+## 2026-11-05: bridge ruin and moat rim fix
+
+Done
+- Revetment (`src/castle/revetment.ts`): fixes the "flying stones". It is now a battered rubble wall that rises from the moat bed, with its face 0.75 m outside the island outline. Coping stones 0.9 m deep sit 5–11 cm above the turf, and three damaged stretches have fallen stones in the water.
+- The revetment face records battered stone faces, so the real stones (castle/stones) cover it near the camera.
+- Turf strip (`src/castle/turf.ts`): uses the terrain material and covers the near grid's one-cell step under the coping. The island ground holds its level to the coping's back edge.
+- terrain.ts, island branch only:
+  - the lawn drop toward the rim is now -0.75, was -0.9;
+  - the bank is `smoothstep(0.05, 0.35, e)` down to -1.6.
+- grass.ts: the island reeds moved out to 1.3–2.5 m, in front of the wall face.
+- Bridge (`src/castle/bridge.ts` plus `src/castle/rubble.ts`): a ruined three-arch bridge.
+  - Piers with cutwaters, voussoir arches, spandrels, a string course, and parapets with coping. The deck has worn ruts.
+  - The middle span fell. Its stubs, core and parapets break back in steps, and the 45-stone rubble heap is half-submerged.
+  - The approach is flush at the gatehouse. The deck is walkable to the break, which leaves a gap of at least 4 m, so the far end can't be reached.
+  - `plan.walkable` and `plan.deckHeightAt` are exported for the nav graph.
+  - Walk mode includes the deck (`withBridge` in main.ts). Walked in the headless game: holding W from the lawn by the gate climbs smoothly onto the deck and stops 1.3 m short of the broken edge. `tests/bridge.test.ts` has a key-path test through the same composition (lawn → deck → edge, never over the parapets, the gap or the far half).
+- Plans are pure and take their collaborators as parameters (outlines, `groundAt`, rng, Builder). Tests are in `tests/bridge.test.ts`, `revetment.test.ts` and `turf.test.ts`, at 98–100% line coverage. They include the requested check that the ground 0.4–2 m inside the ring sits no lower than the coping top − 0.3 m, and a replica near-grid check that the terrain never shows in front of the wall.
+- New walk bookmarks: `bridge`, `rim`.
+
+Numbers (headless WebGL2, 1600×900):
+- Castle bin: 132.8k triangles, of which the bridge is 11.0k and the revetment 5.4k.
+- The turf strip is 7.7k triangles in one extra draw call.
+- Frame totals: bridge 5.02M triangles / 308 draw calls, rim 5.08M / 302, moat 4.47M / 356, gate 6.03M / 662. Most of that is real stones and terrain, which come from main.
+
+Known issues / next
+- `tests/revetment.test.ts` replicates the near terrain grid (380 m / 420 cells). Update `NEAR` there if the grid changes.
+- `turf.ts` `rimMask` duplicates the terrain's island ground mask.
+- Physics must treat water as a barrier so the far bank stays unreachable.
+
+## 2026-11-05: UI through impeccable (branch `ui-impeccable`)
+
+Anders asked for the vendored `impeccable` skill to be used on every UI surface. Its launcher ran (`impeccable context`); `init` and `document` ran without a live interview (the agent was a subagent), so PRODUCT.md and DESIGN.md mark inferred facts for Anders to confirm.
+
+Done
+- `PRODUCT.md` (product truth), `DESIGN.md` + `.impeccable/design.json` (design system "Torchlight on Stone": ink, bone, one brass accent; IM Fell English SC for titles, system sans for everything read at a glance).
+- `src/ui/ui.css`: one stylesheet for tokens, loading caption, HUD, tools panel and boot error, linked from `index.html` and `props.html` (the inline styles are gone). The title face is self-hosted (`src/ui/fonts/`, OFL, 57 kB, in CREDITS.md).
+- `src/ui/hud.ts` `createHud(deps, opts)`: crosshair dot that opens a brass ring on a usable target, the use prompt ("E Open door"), a help line while the mouse is free, a Controls card on the first pointer lock that fades after 4.5 s (H shows it again), toasts, and the review tools panel (backquote toggles it, Esc closes it; opening it while locked releases the mouse). Document, keys and timers are injected.
+  - API for other modules (the physics player): `hud.setHelp(text | items)`, `hud.setPrompt(text | null, key?)`, `hud.setLocked(bool)`, `hud.toast(text, ms?)`, `hud.showControls()`, `hud.promptView` (pass as `createInteraction(..., { view })`). `__game.hud` exposes it for captures.
+- `src/ui/tools.ts` `createToolsPanel`: choice (segmented), range, actions grid and select sections; used by the castle page, `?test=doors` and `props.html`.
+- `src/ui/gameHud.ts` `wireGameHud(hud, { rig, views, time, walkFrom, search })`: camera mode, time of day (hh:mm), bookmarks, fps, and help per mode and lock state. The rig is an interface, so the physics controller can stand in. The tools start shut when the start bookmark is a walk view and open for orbit and fly.
+- `src/ui/help.ts`: help presets per mode, `parseHelp` for old "WASD walk · E use" strings, `?ui=` flags. `src/ui/error.ts`: a boot error with a Reload button instead of a bare text line.
+- `?ui` keeps the HUD under `?shot`: `?ui=locked` draws it as if the mouse were captured, `tools` / `notools` opens or shuts the panel, `card` holds the Controls card.
+- Loading caption: "Moated Castle" in the title face, the step in words and the percentage apart in tabular figures, `aria-valuetext`; step labels in sentence case.
+- `interact.ts` is unchanged: main.ts passes `view: hud.promptView`.
+- Tests: `tests/ui/*` (happy-dom + typed fakes for keys, timers and the rig), `src/ui/**` at 100 % lines in coverage.
+
+- The dot also shows whenever something usable is under it, even with the mouse free (drag-look).
+- `lights.html` (merged from main) uses the same chrome: tools panel "Firelight", help line, boot error.
+
+Checked in headless Chromium against the merged build (`?webgl&shot&ui`): backquote shuts and reopens the tools (focus goes to "Orbit"), Esc shuts them, H shows the Controls card. Standing 2.1 m from the gate in walk mode, the prompt read "Open gate"; pressing E on the keyboard (the player's key handler) opened it (`main-gate` 0 → 1 after 6 s). Contrast: bone on chip ink ≥ 6.5:1 and brass keycaps ≥ 4.6:1 over white sky (computed). Not checked: real pointer lock (headless cannot grab the mouse) and a real touch device.
+
+Known issues / next
+- Captures run on swiftshader on a loaded machine, so the locked HUD in captures is drawn via `__game.hud.setLocked(true)`, not real pointer lock.
+- The tools open on orbit/fly start views, which includes the default `hero` view on Pages; Anders may prefer them shut everywhere.
+- With interior bookmarks the Views grid has 17 entries and scrolls inside the panel; group exterior/interior when it grows.
+- The help line still names the old walk controls; the physics player should call `hud.setHelp` with its own (jump, crouch).
+- No touch controls: on a phone the HUD lays out, but the game cannot be played.

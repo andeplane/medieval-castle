@@ -32,11 +32,11 @@ export interface PlayDeps {
 export const LOCKED_DOORS = new Set(['sallyport-grille']);
 
 /**
- * The door leaves of the walking world: the gate's own specs (until the gate-portcullis branch
- * reconciles them with the plan's 'gate-main'), every leaf door of the plan, and the locked ones apart.
+ * The door leaves of the walking world: the gate's own specs (the doors agent owns the main gate),
+ * every leaf door of the plan but the gate, and the locked ones (the sally-port grille) apart.
  */
-export function playDoors<D extends { id: string; leaf: boolean }>(gate: D[], plan: D[]) {
-  const leaves = plan.filter((d) => d.leaf && d.id !== 'gate-main');
+export function playDoors<D extends { id: string; leaf: boolean; kind: string }>(gate: D[], plan: D[]) {
+  const leaves = plan.filter((d) => d.leaf && d.kind !== 'gate');
   return { active: [...gate, ...leaves.filter((d) => !LOCKED_DOORS.has(d.id))], locked: leaves.filter((d) => LOCKED_DOORS.has(d.id)) };
 }
 
