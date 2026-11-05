@@ -2,7 +2,7 @@
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
 // ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, builtinAOContext, screenUV } from 'three/tsl';
+import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
@@ -29,7 +29,7 @@ async function main() {
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // soft PCF; PCFSoftShadowMap is deprecated in r187
   document.body.appendChild(renderer.domElement);
   if (params.has('debug')) {
     const { Inspector } = await import('three/addons/inspector/Inspector.js');
@@ -61,17 +61,35 @@ async function main() {
   let trees: THREE.Group | null = null;
   try { trees = buildTrees(VIEWS.map((v) => [v.pos[0], v.pos[2]])); scene.add(trees); } catch (e) { console.error('trees failed', e); }
 
-  // post: GTAO from a single-sampled normal pre-pass, then the main pass (threejs-postprocessing)
+  // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
+  // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
   const pipeline = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
+  let aoTex: THREE.Node | null = null;
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
-    scenePass.contextNode = builtinAOContext(aoPass.getTextureNode().sample(screenUV).r);
+    // metre-scale occlusion so window reveals, corbels and machicolations read with depth
+    aoPass.radius.value = 1.1; aoPass.thickness.value = 1.5; aoPass.scale.value = 1.2; aoPass.distanceExponent.value = 1.3;
+    const aoNode = aoPass.getTextureNode();
+    aoTex = aoNode;
+    // half-res AO turns to noise far away; fade it out with distance (the textures carry their own AO)
+    const aoFar = smoothstep(110, 260, positionView.z.negate());
+    scenePass.contextNode = builtinAOContext(mix(aoNode.sample(screenUV).r, float(1), aoFar));
   }
-  pipeline.outputNode = scenePass;
+  if (params.get('grade') !== '0') {
+    // after tone mapping: a touch less saturation (candy greens and blues read as CG), a gentle
+    // S-curve, warm highlights and neutral shadows (STYLE.md light)
+    pipeline.outputColorTransform = false;
+    const c = renderOutput(scenePass).rgb, l = luminance(c);
+    let g = mix(vec3(l), c, 0.88);
+    g = g.sub(0.5).mul(1.07).add(0.5);
+    g = g.mul(mix(vec3(0.995, 1.0, 1.01), vec3(1.025, 1.0, 0.965), smoothstep(0.35, 0.9, l)));
+    pipeline.outputNode = vec4(clamp(g, 0, 1), 1);
+  } else pipeline.outputNode = scenePass;
+  if (params.has('aoview') && aoTex) { pipeline.outputColorTransform = true; pipeline.outputNode = aoTex; }
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
