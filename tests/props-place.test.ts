@@ -36,3 +36,14 @@ describe('placing props', () => {
     expect(previewLayout(2).placed[0].prop.seed).toBe(2);
   });
 });
+
+describe('collider soup', () => {
+  it('turns each blocking prop collider into a 12-triangle box, skipping walk-over props', async () => {
+    const { colliderSoup } = await import('../src/props/place');
+    const t = makeProp('chest', 1), rug = makeProp('rug', 1);
+    const soup = colliderSoup([{ prop: t, at: [2, 1, 3], yaw: 0.5 }, { prop: rug, at: [0, 0, 0], yaw: 0 }]);
+    expect(soup.length).toBe(t.meta.colliders.length * 12 * 9);
+    const ys = soup.filter((_, i) => i % 3 === 1);
+    expect(Math.min(...ys)).toBeCloseTo(1 + t.meta.colliders[0].centre[1] - t.meta.colliders[0].half[1]);
+  });
+});
