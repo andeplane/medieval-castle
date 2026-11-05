@@ -125,7 +125,7 @@ if (process.env.MAIN !== '0') {
     const P = window.__game.interior.plan, d = P.doors.find((x) => x.id === 'gate-main'), n = d.normal, a = d.along, c = d.centre;
     const r = P.rooms.filter((x) => x.zone === 'gate' && x.y0 > c[1] + 8).sort((x, y) => x.y0 - y.y0)[0];
     const k = 2.6 / 2 - 0.5, gx = c[0] + n[0] * k, gz = c[2] + n[1] * k;
-    return { room: r.id, y: r.y0, pos: [gx + n[0] * 1.9 + a[0] * 0.9, r.y0 + 1.6, gz + n[1] * 1.9 + a[1] * 0.9], look: [gx + n[0] * 0.25, r.y0 + 0.9, gz + n[1] * 0.25] };
+    return { room: r.id, y: r.y0, pos: [gx + n[0] * 1.9 + a[0] * 0.9, r.y0 + 1.6, gz + n[1] * 1.9 + a[1] * 0.9], look: [gx + n[0] * 0.25, r.y0 + 0.9, gz + n[1] * 0.25], wide: [gx + n[0] * 3.3 + a[0] * 2.2, r.y0 + 2.4, gz + n[1] * 3.3 + a[1] * 2.2] };
   });
   await ev(page, (w) => window.__game.lookFrom(w.pos, w.look, 'fly'), winch);
   await tick(page, 0.05);
@@ -136,6 +136,9 @@ if (process.env.MAIN !== '0') {
   s = await tick(page, 12);
   ok(s['gate-main'] === 1, 'raised from the winch');
   await shot('castle-winch-raised');
+  // the whole windlass from the back of the room
+  await ev(page, (w) => window.__game.lookFrom(w.wide, w.look, 'fly'), winch);
+  await shot('castle-winch-room');
   await ev(page, () => window.__game.setCamera('gatepass'));
   await shot('castle-passage-raised');
   console.log(JSON.stringify({ doors: (await game()).doors, doorTriangles: (await game()).doorTriangles, drawCalls: (await game()).drawCalls }));

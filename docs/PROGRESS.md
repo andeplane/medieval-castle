@@ -1,5 +1,46 @@
 # Progress
 
+## 2026-11-05: main gate is a portcullis with a working windlass (branch `gate-portcullis`)
+
+Anders, on the live gate (`castle-plan/feedback/gate-door-bad-1531.png`): "why would we have a door like that. why is it not just the fence … that goes up/down (please add the rope and rotating stuff on the inside so it is 'real')". And on doors: "Either no wooden door, or the entire wood thing is a door."
+
+Done
+- **No oak gate.** The plan's `gate-main` is leafless (`leaf: false`, kind `gate`), and the portcullis is the only thing that closes it. There is one gate and no duplicate: the old `gateDoorSpecs` / `main-gate` / `main-portcullis` are gone. `placeLeaves` never gives a gate leaves.
+- **Whole leaves only.** The wicket code and the two-leaf gate code (sag, judder, the stud grid) are deleted from doorParts, doorGeom and doors. Every door with a leaf is one whole leaf.
+- **`src/castle/interior/portcullis.ts`** holds only pure code:
+  - Placement from the gate's DoorSpec. The groove sits 0.5 m from the inner face of the 2.6 m wall, so it lies under the gatehouse room. The shell's jamb grooves moved to match.
+  - The state machine: `portCommand` / `portStep`. It heaves up unevenly (sin² pulses × a per-tooth effort) with a clank per 9 cm ratchet tooth, about 6 s in all. It drops on the brake at up to 2.6 m/s, about 1.3 s, and the spikes seat 12 cm into sill sockets with a thud. It holds rather than come down on anyone under it.
+  - The collider: one kinematic box, only while the spike tips are below 2 m.
+  - The winch pose: rope length = drum radius × angle, and the coil widens as the rope winds on.
+  - The geometry: 8 cm square bars, flush half-lapped crossings with a rivet head on each face, a spike per upright, and a heavy top rail with two lifting eyes. Also the sill sockets, a slot in the arch head and a slot in the room floor.
+- **Windlass** in the lowest room over the raised grid (plan room `gate2`, floor 13.6 m): a horizontal oak drum (r 0.23 m, 3 m long) on two timber A-frames with sole plates and runners, a six-spoke capstan head at each end, an iron ratchet wheel (16 teeth = one per tooth of lift) with its pawl, and two hemp ropes running down into a floor slot. It rotates with the lift. Everything goes into the existing two door BatchedMeshes, so there are no new draw calls.
+- **Use:** E on the grille from outside or inside, or on the windlass, raises or lowers it (the `gate-main` and `gate-main:winch` interactables). NPCs can call `request('gate-main', …)` from the grille or the drum; `isPassable('gate-main')` is true once the spike tips are above 2 m.
+- `__game.walk(seconds, key)` holds a key through the player's own controls (rig.update + canWalk + door blocking) without rendering, for scripted walks.
+
+Checked
+- `scripts/doortest.mjs` ran 25 checks in the real game (headless WebGL2), and every one passed. The castle part walks it as the player:
+  1. Starting with the portcullis lowered, walk straight at the gate with W: stopped 0.36 m short of the groove.
+  2. Look at the grille and press use (E): it rises slowly, still blocks while low, and is fully up after about 7 s, with clanks logged.
+  3. Walk on with W: through the groove to the end of the walkable doorway (+2.2 m).
+  4. Turn round inside, look up at the raised grid and use it: it drops and seats with a thud.
+  5. In the room above, aim at the windlass and use it: raised.
+- Not walked: the gate passage beyond the doorway or the climb to the windlass room. Walking there needs #17's colliders; `canWalk` on main only covers the doorway. The windlass interaction was checked with a fly camera placed in the room.
+- Unit tests: `tests/portcullis.test.ts` (19). Placement from the real plan, including every vertex of the frames, drum and spokes, at any angle, lies inside room `gate2`. The state machine, the winch pose, geometry, both-side and winch aiming, the collider appearing and disappearing, holding over an NPC, rope shortening in the batch matrices, and NPC requests. `tests/doors.test.ts` is updated for whole leaves.
+
+Numbers: gate, windlass and ropes are 8.1k triangles (`doorTriangles`) and 0 extra draw calls (two door batches). Coverage on doors / doorGeom / doorParts / doorBatch / portcullis: 100 % lines, except doorParts statements at 98.9 %.
+
+Assumptions (for Anders to veto)
+- The portcullis starts raised.
+- The grille sits 2.1 m in from the outer face (0.5 m from the inner face), under the room above, rather than just behind the outer arch.
+- The windlass is in the first gatehouse room above the gate (`gate2`, 13.6 m). The plan has no gatehouse room on floor 1: the passage vault fills up to 8.5 m. The raised grid stays inside the masonry (its top at about 11.3 m), and the ropes go down through a slot in the room floor.
+- Ropes, not chains; no counterweight; a drum windlass with capstan spokes rather than a treadwheel.
+- The test scene's gate is portcullis-only too, with no windlass, because there is no room above it.
+
+Known issues
+- With `?furniture=1` the furnishing pass does not know about the windlass, and could place furniture in `gate2` on top of it. `dress.ts` `keepOutFor` would need the windlass footprint.
+- The rivet heads are small (2.2 cm) and read as dots from a few metres away.
+- In `castle-gate-walked-in.png` there is a thin bright diagonal line on the left wall near the doorway's inner end. I don't know yet whether it comes from the shell or from the groove change.
+
 ## 2026-11-05: stone close up (branch `stone-closeup`)
 
 Anders: "this does NOT look good close up" (`castle-plan/feedback/2026-11-05-stone-closeup-bad.png`). The problems were flat, plastic slabs; a staircased dark outline round every stone; uniform speckle; a closed crack loop; and mortar drawn as a line.
