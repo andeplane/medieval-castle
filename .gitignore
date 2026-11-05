@@ -6,3 +6,4 @@ shots/
 art/refs/**/*.png
 art/refs/**/*.jpg
 coverage
+.claude/worktrees/
