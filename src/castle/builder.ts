@@ -295,6 +295,8 @@ export class Builder {
         bin.triN([P(t0, ra, ya), P(t0, rb, yb), P(t1, rb, yb)], [nrm(t0), nrm(t0), nrm(t1)], [[ua0, va], [ub0, vb], [ub1, vb]]);
       }
     }
+    // soffit: the cone overhangs its wall head, so close it from below or the sky shows through the eave
+    this.cap(mat, Array.from({ length: seg }, (_, i) => [cx + Math.cos((i / seg) * Math.PI * 2) * r, cz + Math.sin((i / seg) * Math.PI * 2) * r] as V2), y0, false);
   }
 
   /** Sloped roof plane through 3–4 points; slate courses run parallel to the eave (p0→p1). */
