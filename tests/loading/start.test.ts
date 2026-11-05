@@ -3,7 +3,7 @@ import { start, screenOpts, type EntryDeps } from '../../src/loading/start';
 import type { LoadingScreen } from '../../src/loading/tunnel';
 
 function deps(search: string) {
-  const screen: LoadingScreen = { shown: 0, progress: vi.fn(async () => {}), finish: vi.fn(async () => {}), dispose: vi.fn() };
+  const screen: LoadingScreen = { shown: 0, step: vi.fn(async () => {}), progress: vi.fn(async () => {}), finish: vi.fn(async () => {}), dispose: vi.fn() };
   let tick: (() => void) | null = null;
   const d: EntryDeps = {
     search,
