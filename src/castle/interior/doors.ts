@@ -14,7 +14,7 @@ import { threeBatch, type BatchFactory, type BatchLike } from './doorBatch';
 import {
   portAt, portCommand, portStep, willRaise, blocking, underGrille, portFrame, toPort, drumAngle, ropeLength, coilWidth,
   grilleGeometry, gateFixtures, drumGeometry, ropeGeometry, coilGeometry, SEAT, BAR, DRUM_R,
-  type PortcullisSpec, type PortState, type PortEvent,
+  type PortcullisSpec, type PortState, type PortEvent, type WinchSpec,
 } from './portcullis';
 
 export type DoorSound = 'creak' | 'latch' | 'thud' | 'bump' | 'clank' | 'chain';
@@ -108,6 +108,26 @@ export function rayBox(o: V3, d: V3, b: Box3, pad: number): number | null {
     if (t0 > t1) return null;
   }
   return t0;
+}
+
+/**
+ * What the crosshair can aim at: a ray entering the box from outside. A ray that starts inside the box
+ * (a fly camera inside a shut leaf) sees none of its faces, so it does not hit it.
+ */
+export function rayEnters(o: V3, d: V3, b: Box3, pad: number): number | null {
+  const inside = [0, 1, 2].every((i) => o[i] > b.min[i] - pad && o[i] < b.max[i] + pad);
+  return inside ? null : rayBox(o, d, b, pad);
+}
+
+/** The windlass as the crosshair sees it (port frame): the drum, the two capstan heads and the two A-frames. */
+export function winchBoxes(w: WinchSpec): Box3[] {
+  const zc = -DRUM_R, yd = w.drumY, rd = DRUM_R + 0.06, out: Box3[] = [{ min: [-w.frameAt - 0.24, yd - rd, zc - rd], max: [w.frameAt + 0.24, yd + rd, zc + rd] }];
+  for (const s of [-1, 1]) {
+    const x0 = s * (w.frameAt + 0.1), x1 = s * (w.frameAt + 0.2);
+    out.push({ min: [Math.min(x0, x1), yd - 0.62, zc - 0.62], max: [Math.max(x0, x1), yd + 0.62, zc + 0.62] });
+    out.push({ min: [s * w.frameAt - 0.09, w.floor, zc - 0.69], max: [s * w.frameAt + 0.09, yd + 0.06, zc + 0.69] });
+  }
+  return out;
 }
 
 /** World point into a leaf's local (unmirrored) space, given its world matrix. */
@@ -327,7 +347,7 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
     if (l.place.mirrored) dx = -dx;
     const ld: V3 = [dx, m[4] * d.x + m[5] * d.y + m[6] * d.z, m[8] * d.x + m[9] * d.y + m[10] * d.z];
     let best: number | null = null;
-    for (const b of l.geom.boxes) { const t = rayBox(lo, ld, b, 0.02); if (t !== null && t <= maxDist && (best === null || t < best)) best = t; }
+    for (const b of l.geom.boxes) { const t = rayEnters(lo, ld, b, 0.02); if (t !== null && t <= maxDist && (best === null || t < best)) best = t; }
     return best;
   };
   const labels: Record<Unit['kind'], [string, string]> = { gate: ['Open gate', 'Close gate'], grille: ['Open grille', 'Close grille'], plank: ['Open door', 'Close door'], postern: ['Open door', 'Close door'] };
@@ -349,7 +369,7 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       hit: (ray, maxDist) => {
         // the part of the grid showing in the opening, from either side
         const sp = p.spec, [lo, ld] = portRay(p, ray);
-        const t = rayBox(lo, ld, { min: [-sp.ow / 2, Math.max(0, p.s.lift - SEAT), -0.15], max: [sp.ow / 2, sp.head(0), 0.15] }, 0);
+        const t = rayEnters(lo, ld, { min: [-sp.ow / 2, Math.max(0, p.s.lift - SEAT), -0.15], max: [sp.ow / 2, sp.head(0), 0.15] }, 0);
         if (t === null || t > maxDist || lo[1] + ld[1] * t > sp.head(lo[0] + ld[0] * t)) return null;
         return t;
       },
@@ -359,8 +379,9 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       id: p.spec.id + ':winch', label, use,
       hit: (ray, maxDist) => {
         const [lo, ld] = portRay(p, ray);
-        const t = rayBox(lo, ld, { min: [-w.frameAt - 0.3, w.floor, -DRUM_R - 0.75], max: [w.frameAt + 0.3, w.drumY + 0.65, 0.45] }, 0);
-        return t !== null && t <= maxDist ? t : null;
+        let best: number | null = null;
+        for (const b of winchBoxes(w)) { const t = rayEnters(lo, ld, b, 0.02); if (t !== null && t <= maxDist && (best === null || t < best)) best = t; }
+        return best;
       },
     });
   }

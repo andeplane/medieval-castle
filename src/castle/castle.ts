@@ -649,7 +649,7 @@ function stairTower(B: Builder, r: Rng) {
     const a = p[i], b = p[(i + 1) % n], d = norm(sub(b, a)), out: V2 = [d[1], -d[0]], L = len(sub(b, a));
     const ops: Opening[] = [];
     for (let y = GROUND + 2.5 + i * 0.55; y < top - 3; y += n * 0.55) ops.push({ pts: rect(L / 2, y, 0.14, 1.1), depth: 0.6, fill: 'void', reveal: 'trim' });
-    if (i === 3) ops.push({ pts: pointedArch(L / 2, GROUND - 0.05, 1.15, 2.0, 0.5), depth: 0.5, fill: 'wood', reveal: 'trim' });
+    // the door is the interior plan's (court>stairtower): its DoorSpec cuts, reveals and hangs it
     B.wall('new', a, b, out, G0, top, ops);
   }
   const op = offsetPoly(p, 0.45);

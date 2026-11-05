@@ -14,6 +14,7 @@ import { prismVolume, extrudeVolume, type Volume } from './carve';
 import { buildTunnel } from './tunnel';
 import { buildStair } from './stairs';
 import { grooveFromFront } from './portcullis';
+import { LIP, headTop, stopDepth } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 
@@ -28,7 +29,7 @@ export interface ShellResult {
 }
 export interface ShellDeps { heightAt?: (x: number, z: number) => number }
 
-const VAULT_K = 12, LIP = 0.08, LEAF_T: Record<DoorSpec['kind'], number> = { plank: 0.08, postern: 0.08, gate: 0.25, grille: 0.06 };
+const VAULT_K = 12;
 
 interface Hole { pts: V2[]; kind: 'door' | 'window'; id?: string }
 interface Edge { a: V2; b: V2; n: V2; L: number; holes: Hole[] }
@@ -160,10 +161,13 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
 
   function door(d: DoorSpec) {
     const n = d.normal, al = d.along, c: V2 = [d.centre[0], d.centre[2]], y = d.centre[1];
-    const head: Head = d.head, rise = P.rise[d.id] ?? headRise(head, d.width);
-    const clear = archOutline(0, y, d.width, d.height, head, rise);
     const leafy = d.leaf && d.kind !== 'gate';
-    const reb = leafy ? archOutline(0, y, d.width + 2 * LIP, d.height + LIP, head, rise + LIP * 0.5) : clear;
+    // a leaved door's outlines come from doorGeom, as its leaf does: the clear opening, and the rebate
+    // recess round the leaf (the clear outline grown by LIP, same arc centres, point for point)
+    const head: Head = d.head, rise = leafy ? headRise(head, d.width) : P.rise[d.id] ?? headRise(head, d.width);
+    const clear = archOutline(0, y, d.width, d.height, head, rise);
+    const grown = headTop(head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
+    const reb = leafy ? clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)])) : clear;
     // faces: for room sides, the room's actual edge (handles skew); for outside/courtyard, the mid-plane ± wall/2
     const sides = d.spaces.map((sp, k) => {
       const sgn = k === 0 ? -1 : 1, r = room.get(sp);
@@ -188,7 +192,8 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     });
     const owner = sides.find((s) => s.r)!.r!;
     const B = groupOf(owner).B;
-    const rebT = leafy ? ((swing === 1 ? 1 : -1) * (d.wall / 2 - d.rebate - LEAF_T[d.kind])) : 0;
+    // the stop: just behind the shut leaf's back face (doorGeom places the leaf)
+    const rebT = d.leaf && d.kind !== 'gate' ? (swing === 1 ? 1 : -1) * (d.wall / 2 - stopDepth(d, d.kind)) : 0;
     // reveal: from face 0 to the rebate plane with one outline, then the other to face 1
     const ring = (o: V2[], tA: (u: number) => number, tB: (u: number) => number) => {
       for (let i = 0; i < o.length; i++) {
@@ -222,7 +227,10 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const t0 = Math.min(depthOn(0, 0), depthOn(0, -d.width / 2), depthOn(0, d.width / 2)) - (sides[0].r ? 0.05 : 0.02);
     const t1 = Math.max(depthOn(1, 0), depthOn(1, -d.width / 2), depthOn(1, d.width / 2)) + (sides[1].r ? 0.05 : 0.02);
     const out = d.kind === 'gate' ? 1.4 : 0;
-    carveVols.push(extrudeVolume(c, al, n, leafy ? reb : clear, t0 - out, t1));
+    // the clear outline from the non-swing face to the stop, the rebated one from there to the swing face
+    if (!leafy) carveVols.push(extrudeVolume(c, al, n, clear, t0 - out, t1));
+    else if (swing === 1) carveVols.push(extrudeVolume(c, al, n, clear, t0, rebT + 0.002), extrudeVolume(c, al, n, reb, rebT, t1));
+    else carveVols.push(extrudeVolume(c, al, n, reb, t0, rebT), extrudeVolume(c, al, n, clear, rebT - 0.002, t1));
     if (d.kind === 'gate') carveVols.push(extrudeVolume(c, al, n, clear.map(([u, yy]) => [u * 1.0005, yy] as V2), t0 - out, t1));
   }
 

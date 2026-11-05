@@ -8,7 +8,7 @@
 // Gates have no leaves: the portcullis (portcullis.ts) closes them.
 import type { Rng } from '../../core/rng';
 import type { V3 } from './types';
-import { KIND, leafDepth, headTop, CLEAR, type LeafClass, type LeafKind } from './doorGeom';
+import { KIND, leafDepth, headTop, GROW, type LeafClass, type LeafKind } from './doorGeom';
 
 type P2 = [number, number];
 export interface PartBin { pos: number[]; nor: number[]; uv: number[] }
@@ -301,7 +301,7 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
 export function leafGeometry(cls: LeafClass, r: Rng): LeafGeom {
   const kind = cls.kind;
   const sill = KIND[kind].sill;
-  const topO = headTop(cls.head, cls.ow, cls.oh, CLEAR);
+  const topO = headTop(cls.head, cls.ow, cls.oh, -GROW);
   const top = (x: number) => topO(cls.sOff + x) - sill; // leaf local x → opening s
   const W = cls.width;
   const apexS = 0, apexX = cls.head === 'pointed' && apexS - cls.sOff <= W ? apexS - cls.sOff : null;

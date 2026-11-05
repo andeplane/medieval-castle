@@ -3,14 +3,16 @@
 // barred at the far bank, and a navigation graph that reaches every room.
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { planInterior, validatePlan, facings, towerFloorsY, outerFootprint, ceilingAt, doorHeadFits, fitDoorHeads, GATE, type PlanX } from '../src/castle/interior/plan';
+import { planInterior, validatePlan, facings, towerFloorsY, outerFootprint, ceilingAt, doorHeadFits, fitDoorHeads, fitHinges, leafSwingFits, GATE, COURT_DOOR_LIP, type PlanX } from '../src/castle/interior/plan';
+import { placeLeaves, leafPoint, leafDepth, m4swing, LIP } from '../src/castle/interior/doorGeom';
+import { masses, convexOverlap, CLEAR, FRONT } from '../src/castle/openings';
 import { navGraph, findPath, floorPolys } from '../src/castle/interior/nav';
 import { buildShell, type ShellResult } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior/index';
 import { interiorViews } from '../src/camera/interiorViews';
 import { buildCastle } from '../src/castle/castle';
 import { Builder, type MatKey } from '../src/castle/builder';
-import { gatehouseFrame, islandOutline } from '../src/castle/layout';
+import { gatehouseFrame, islandOutline, wingQuads } from '../src/castle/layout';
 import { GATEHOUSE } from '../src/castle/spec';
 import { pointInPoly, add, scale, sub, norm, type V2 } from '../src/core/math2d';
 import { WORLD_SEED } from '../src/core/rng';
@@ -344,5 +346,91 @@ describe('navigation on stairs', () => {
     const bare = { ...P, stairs: P.stairs.map((s) => ({ ...s, landings: s.landings.map((L) => ({ ...L })) })) };
     bare.stairs[0].landings.forEach((L) => { L.door = undefined; });
     expect(navGraph(bare).nodes.size).toBeGreaterThan(P.rooms.length);
+  });
+});
+
+describe('doors on their faces (the windows rule, openings.ts) and their leaves', () => {
+  type D = (typeof P.doors)[number];
+  const OUTDOOR = new Set(['courtyard', 'outside']);
+  const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+  const at = (d: D, across: number, through: number): V2 => [d.centre[0] + d.along[0] * across + d.normal[0] * through, d.centre[2] + d.along[1] * across + d.normal[1] * through];
+  const sideOf = (k: number) => (k === 0 ? -1 : 1); // spaces[0] lies along −normal
+
+  it('cuts no door through a junction: both jambs and their rebates open into the room on each side', () => {
+    const bad: string[] = [];
+    for (const d of P.doors) for (const k of [0, 1]) {
+      const r = rooms.get(d.spaces[k]);
+      if (!r || r.zone === 'tunnel') continue; // a tunnel ends in its door
+      for (const s of [-1, 1]) {
+        const p = at(d, s * (d.width / 2 + COURT_DOOR_LIP), sideOf(k) * (d.wall / 2 + 0.3));
+        if (!pointInPoly(r.poly, p[0], p[1])) bad.push(`${d.id}: jamb ${s} not in ${r.id}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('keeps courtyard and outside doors CLEAR of other buildings, as windows are (the stair tower stood in front of N)', () => {
+    const M = masses(), bad: string[] = [];
+    for (const d of P.doors) {
+      const k = d.spaces.findIndex((s) => OUTDOOR.has(s));
+      if (k < 0 || d.kind === 'gate') continue;
+      const out = sideOf(k); // from the wall's mid plane toward the open air
+      const own = M.find((m) => pointInPoly(m.poly, d.centre[0], d.centre[2]))!;
+      const hw = d.width / 2 + COURT_DOOR_LIP;
+      // the plan rectangle in front of the opening, widened by CLEAR, FRONT deep (openings.ts frontRect)
+      const front = [[-hw - CLEAR, 0.02], [hw + CLEAR, 0.02], [hw + CLEAR, FRONT], [-hw - CLEAR, FRONT]].map(([a, t]) => at(d, a, out * (d.wall / 2 + t)));
+      for (const m of M) if (m !== own && convexOverlap(front, m.poly)) bad.push(`${d.id} (${own.id}) in front of ${m.id}`);
+    }
+    expect(bad).toEqual([]);
+    // the courtyard doors into the wings: opening and rebate CLEAR from the ends of the courtyard face
+    for (const id of ['N', 'E', 'W']) {
+      const d = P.doors.find((x) => x.spaces.includes('courtyard') && x.spaces.some((s) => s.startsWith(`${id}0-`)))!;
+      const [, , ib, ia] = wingQuads().find((q) => q.id === id)!.quad;
+      const u = norm(sub(ib, ia)), s = (d.centre[0] - ia[0]) * u[0] + (d.centre[2] - ia[1]) * u[1], L = Math.hypot(ib[0] - ia[0], ib[1] - ia[1]);
+      expect(s - d.width / 2 - COURT_DOOR_LIP, d.id).toBeGreaterThanOrEqual(CLEAR - 1e-6);
+      expect(L - s - d.width / 2 - COURT_DOOR_LIP, d.id).toBeGreaterThanOrEqual(CLEAR - 1e-6);
+    }
+  });
+
+  it('swings every leaf into a room, its whole arc in its doorway or that room, under the ceiling', () => {
+    const bad: string[] = [];
+    for (const d of P.doors) {
+      const [pl] = placeLeaves(d);
+      if (!pl) continue;
+      const into = d.spaces[d.swingInto], r = rooms.get(into);
+      if (!r) { bad.push(`${d.id} swings out into ${into}`); continue; }
+      const { zBack } = leafDepth(pl.kind);
+      if (pl.pivot[1] + pl.height > r.y1 - 0.02) bad.push(`${d.id}: leaf top above the ceiling of ${r.id}`);
+      for (let i = 0; i <= 24; i++) {
+        const a = (pl.maxAngle * i) / 24;
+        for (let k = 0; k <= 8; k++) for (const z of [zBack, 0]) {
+          const p = leafPoint(pl, m4swing(a), [(pl.width * k) / 8, 1, z]);
+          const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
+          const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
+          // in the doorway or its rebate (a curved or skewed room face lies up to 0.15 m beyond the wall face at the centre) or in the room
+          const inDoor = Math.abs(across) <= d.width / 2 + LIP + 1e-3 && Math.abs(through) <= d.wall / 2 + 0.15;
+          if (!inDoor && !pointInPoly(r.poly, p[0], p[2])) bad.push(`${d.id} at ${Math.round((a * 180) / Math.PI)}°: (${across.toFixed(2)}, ${through.toFixed(2)}) outside ${r.id}`);
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+  });
+
+  it('hangs a leaf on its other jamb when the room beside the hinge is too tight to open it', () => {
+    const d0 = P.doors.find((d) => d.leaf && d.kind === 'plank')!;
+    const sgn = d0.swingInto === 1 ? 1 : -1, id = d0.spaces[d0.swingInto];
+    // a room on the swing side reaching 3 m past one jamb but only 0.1 m past the other (hinge 'right' = +along)
+    const room = (a0: number, a1: number) => ({ ...rooms.get(id)!, poly: [[a0, 0], [a1, 0], [a1, 3], [a0, 3]].map(([a, t]) => at(d0, a, sgn * (d0.wall / 2 - 0.01 + t))) });
+    const hw = d0.width / 2, tight = { rooms: [room(-3, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    expect(leafSwingFits(tight, tight.doors[0])).toBe(false);
+    fitHinges(tight);
+    expect(tight.doors[0].hinge).toBe('left');
+    expect(leafSwingFits(tight, tight.doors[0])).toBe(true);
+    // too tight either side: left as it was (and the swing test above reports it)
+    const both = { rooms: [room(-hw - 0.1, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    fitHinges(both);
+    expect(both.doors[0].hinge).toBe('right');
+    // a door into the open air has no room to check
+    expect(leafSwingFits({ rooms: [] }, d0)).toBe(true);
   });
 });
