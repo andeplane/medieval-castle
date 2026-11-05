@@ -15,10 +15,13 @@ export interface FlameProfile {
 }
 
 // Brightness is tuned for the interior exposure (src/light/look.ts), not photometrically exact: a
-// real candle is ~1 cd, but eyes adapt and the scene exposure is set for firelight.
+// real candle is ~1 cd, but eyes adapt and the scene exposure is set for firelight. `kelvin` is the
+// physical flame; the rig shows it as the adapted eye sees it (blackbody.seenKelvin). Fire lights cast
+// no shadows, so `range` also bounds how far a torch shines through the walls into the next room:
+// keep it about one room (a wall torch, intensity 3, reaches 4 × √3 ≈ 6.9 m).
 export const PROFILES: Record<FlameKind, FlameProfile> = {
   candle: { kind: 'candle', kelvin: 1850, candela: 3.6, range: 3.5, speed: 1.0, amp: 0.7, sway: 0.015, gutter: 0.6 },
-  torch: { kind: 'torch', kelvin: 1800, candela: 7.5, range: 7, speed: 1.25, amp: 0.85, sway: 0.06, gutter: 1.0 },
+  torch: { kind: 'torch', kelvin: 1800, candela: 7.5, range: 4, speed: 1.25, amp: 0.85, sway: 0.06, gutter: 1.0 },
   lantern: { kind: 'lantern', kelvin: 1950, candela: 4, range: 5, speed: 0.8, amp: 0.4, sway: 0.004, gutter: 0.2 },
   brazier: { kind: 'brazier', kelvin: 1650, candela: 10, range: 7.5, speed: 0.7, amp: 0.65, sway: 0.08, gutter: 0.5 },
   hearth: { kind: 'hearth', kelvin: 1600, candela: 14, range: 9, speed: 0.55, amp: 0.55, sway: 0.15, gutter: 0.35 },

@@ -4,7 +4,8 @@
 // NPC-carried torches slot in later without changes here.
 import type { LightEmitter, RGB, V3 } from './types';
 import { PROFILES, flicker, flickerAmount, seedOf } from './flicker';
-import { kelvinToLinear } from './blackbody';
+import { kelvinToLinear, seenKelvin } from './blackbody';
+import { WARM_INTERIOR } from './look';
 import { assign, emptyPool, type Candidate, type Pools, type Slot } from './budget';
 
 /** One engine light. `set` is called every frame for every slot (intensity 0 = off). */
@@ -20,14 +21,16 @@ export interface RigOptions {
   keep: number;
   /** 0 = steady lights (prefers-reduced-motion). */
   motion: number;
+  /** How far the eye has adapted to firelight (blackbody.seenKelvin): 0 = the camera's deep orange. */
+  adapt: number;
 }
-export const DEFAULT_RIG: RigOptions = { shadows: 2, lights: 10, fadeTime: 0.35, keep: 1.25, motion: 1 };
+export const DEFAULT_RIG: RigOptions = { shadows: 2, lights: 10, fadeTime: 0.35, keep: 1.25, motion: 1, adapt: WARM_INTERIOR.grade.adapt };
 
 export interface Source { emitter: LightEmitter; seed: number; candela: number; range: number; colour: RGB; mobile: boolean }
 
-/** Resolve an emitter against its profile: candela, range, colour (emitter tint × black body). */
-export function toSource(e: LightEmitter): Source {
-  const p = PROFILES[e.kind], bb = kelvinToLinear(p.kelvin);
+/** Resolve an emitter against its profile: candela, range, colour (emitter tint × the black body as the adapted eye sees it). */
+export function toSource(e: LightEmitter, adapt = DEFAULT_RIG.adapt): Source {
+  const p = PROFILES[e.kind], bb = kelvinToLinear(seenKelvin(p.kelvin, adapt));
   const colour: RGB = [bb[0] * e.colour[0], bb[1] * e.colour[1], bb[2] * e.colour[2]];
   const m = Math.max(...colour);
   return { emitter: e, seed: e.seed ?? seedOf(e.position), candela: p.candela * e.intensity, range: p.range * Math.min(2, Math.sqrt(Math.max(0.25, e.intensity))), colour: [colour[0] / m, colour[1] / m, colour[2] / m], mobile: false };
@@ -51,12 +54,12 @@ export class LightRig {
 
   /** Replace all sources (e.g. when a level's fixtures are placed). Returns their ids. */
   setEmitters(es: LightEmitter[]): number[] {
-    this.sources = es.map(toSource);
+    this.sources = es.map((e) => toSource(e, this.options.adapt));
     this.pools = { shadow: emptyPool(this.options.shadows), plain: emptyPool(this.options.lights) };
     return this.sources.map((_, i) => i);
   }
   /** Add one source (a torch an NPC carries, a fire lit later). Returns its id. */
-  add(e: LightEmitter, mobile = false): number { this.sources.push({ ...toSource(e), mobile }); return this.sources.length - 1; }
+  add(e: LightEmitter, mobile = false): number { this.sources.push({ ...toSource(e, this.options.adapt), mobile }); return this.sources.length - 1; }
   /** Move a source (carried torches). */
   move(id: number, p: V3) { this.sources[id].emitter = { ...this.sources[id].emitter, position: p }; }
   /** Dim or put out a source (0 = out). */
