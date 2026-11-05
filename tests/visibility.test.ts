@@ -103,6 +103,9 @@ describe('createVisibility', () => {
     expect(outsider.visible).toBe(true);
     vis.update();
     expect(vis.roomId).toBe('N0');
+    expect(vis.isRoomVisible('N1')).toBe(true);
+    expect(vis.isRoomVisible('N3')).toBe(false);
+    expect(vis.isRoomVisible(null)).toBe(false);   // deep inside: the outdoors is not in view
     expect(ig.find((g) => g.key === 'N:3')!.object.visible).toBe(false);
     expect(npc.visible).toBe(false);
     npcRoom = 'N1'; vis.update();

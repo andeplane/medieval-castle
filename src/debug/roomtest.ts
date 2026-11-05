@@ -100,6 +100,8 @@ export function buildRoomTest(M: Materials, IM: InteriorMaterials): RoomTest {
   const parIn: V2[] = [P(OUT.x0 + 0.6, OUT.z0 + 0.6), P(OUT.x1 - 0.6, OUT.z0 + 0.6), P(OUT.x1 - 0.6, OUT.z1 - 0.6), P(OUT.x0 + 0.6, OUT.z1 - 0.6)];
   ext.ringPrism('trim', outerPoly, parIn, YR, YR + 1.1, false);
   ext.cap('lead', parIn, YR, true);
+  // the step down outside the door (outdoor light)
+  ext.box('trim', [OX + DOOR_OUT.x, (GROUND - 0.3 + Y0) / 2, OZ + OUT.z0 - 0.35], [DOOR_OUT.w + 0.4, Y0 - GROUND + 0.3, 0.7], [1, 0]);
   const exterior = ext.build(extMats);
   exterior.name = 'castle';
 
@@ -136,8 +138,6 @@ export function buildRoomTest(M: Materials, IM: InteriorMaterials): RoomTest {
     ceiling(B, x0, x1);
     B.cap('trim', [P(DOOR_OUT.x - DOOR_OUT.w / 2, OUT.z0), P(DOOR_OUT.x + DOOR_OUT.w / 2, OUT.z0), P(DOOR_OUT.x + DOOR_OUT.w / 2, IN.z0), P(DOOR_OUT.x - DOOR_OUT.w / 2, IN.z0)], Y0, true);
     B.cap('trim', [P(IN.hallX, DOOR_IN.z - DOOR_IN.w / 2), P(IN.chX, DOOR_IN.z - DOOR_IN.w / 2), P(IN.chX, DOOR_IN.z + DOOR_IN.w / 2), P(IN.hallX, DOOR_IN.z + DOOR_IN.w / 2)], Y0, true);
-    // the step down outside the door
-    B.box('trim', [OX + DOOR_OUT.x, (GROUND - 0.3 + Y0) / 2, OZ + OUT.z0 - 0.35], [DOOR_OUT.w + 0.4, Y0 - GROUND + 0.3, 0.7], [1, 0]);
     mkGroup('T:0', 'T', B, ['T0-1']);
   }
   {

@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-11-05: interior daylight, eye adaptation, cell visibility
+
+Done
+- `src/render/interiorLight.ts`: `makeInteriorMaterials(M, sun, light)` clones stone/timber/iron/glass with `lightsNode = lights([sun])` (no outdoor hemisphere or sky IBL indoors) and their own irradiance; `setDynamicLights(lights)` (non-enumerable) lets the interior light manager add candles/torches. `bakeInteriorLight(groups, occluder, { plan, windows, sun, light })` tags every interior triangle with its room (`interiorRoom` attribute), turns windows (castle.ts `lights` or richer records with embrasure sizes) and doors (outside doors, grilles, portals between rooms) into apertures, checks each window's sun with three-mesh-bvh, solves split-flux bounce per room (stairs and open doors carry light on) and packs one float table. `setDoorOpen(id, 0..1)` re-solves. `buildShadowSkins` adds hidden casters inside the walls and above ceilings (the shadow map renders back faces, so thick walls leaked a strip of sun along every floor seam and beam).
+- `src/render/interiorShader.ts`: per pixel, each aperture of the room is an area light with its exact form factor (polygon edge integral), clipped to the glass the point sees through its splayed embrasure; plus bounce × gain and a readability floor. Glass glows from the room side, brighter at the top.
+- `src/render/exposure.ts`: eye adaptation from a 32×18 log-luminance reduction of the HDR scene pass, read back every 6 frames; 0.72 outdoors, up to +2.5 stops in rooms and +3.2 underground; ~1.4 s into the dark, ~0.6 s into the light. `?exposure=` fixes it; `?shot` sets +2.5 / +3.2 from where the camera is.
+- `src/world/visibility.ts`: cell visibility for InteriorGroups (inside: own floor, ±1 floor, adjacent zones at that height, door neighbours, nearby stairs; outside: groups within 60 m whose windows/doors face the camera). Underground hides water, far terrain, stream, rocks, trees and ground cover; deep inside (no open way out within 40 m) hides trees and ground cover. `register(obj, roomOf)` shows/hides NPCs, door leaves and other dynamic things with their room.
+- `?test=room` (`src/debug/roomtest.ts`): 12 × 8 × 6 m hall (2 m walls, three splayed south windows, one west, a round-headed door from outside) and a 6 × 8 m chamber through a 1.4 m cross wall, timber floor, boarded ceiling on beams, bookmarks `room-hall, room-pool, room-window, room-chamber, room-dark, room-ceiling, room-out, room-south`.
+- Tests: `tests/interiorMath.test.ts`, `interiorLight.test.ts`, `visibility.test.ts`, `exposure.test.ts`; 100 % lines on the interior light, exposure and visibility modules.
+
+Numbers (test cell, headless WebGL2): bake 15–25 ms for 2 rooms / 9 apertures (BVH over the island 35–90 ms); the per-room part is linear, so ~140 rooms ≈ 0.3–0.6 s plus the BVH. Draw calls: outside 246–260, inside 228–240 (2.3 M triangles with vegetation; 50–60 / 0.93 M with `?veg=0`). Measured mean log2 luminance: exterior −1.2, hall −6.9, chamber −8.6.
+
+Known issues / next
+- Shell integration: pass the shell's `groups` + `plan` and the castle `lights` (better: windows with `depth`, `wi`, `hi`, `yi` from the shell's embrasures) to `bakeInteriorLight`; doors module calls `setDoorOpen`.
+- Glass is opaque from inside (glows); there is no view out through glazed windows.
+- Light through a door from a neighbour is a uniform portal; no directional sun through internal doors.
+- Rooms that are not convex get some light through their own corners (no occlusion inside a room).
+
 ## 2026-11-05: procedural prop kit (furniture, not yet placed in the castle)
 
 Sourcing decision (Anders, 2026-11-05): code + free CC0 only; no store packs (their licences forbid shipping raw files from a public repo); Meshy (already paid for) may be used later for a few organic hero props.

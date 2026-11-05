@@ -78,15 +78,16 @@ async function main() {
   const interiorLight = createInteriorLight();
   const IM = makeInteriorMaterials(M, sky.sun, interiorLight);
   let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights };
+  const shells: THREE.Object3D[] = [castle];
   if (testRoom) {
     const t = buildRoomTest(M, IM);
-    scene.add(t.exterior);
+    scene.add(t.exterior); shells.push(t.exterior);
     for (const g of t.groups) scene.add(g.object);
     VIEWS.push(...t.views);
     interior = t;
   }
   const tB = performance.now();
-  const occluder = bvhOccluder([castle, ...(testRoom ? [scene.getObjectByName('castle')!] : []), ...interior.groups.map((g) => g.object)]);
+  const occluder = bvhOccluder([...shells, ...interior.groups.map((g) => g.object)]);
   const bvhMs = performance.now() - tB;
   const bake = bakeInteriorLight(interior.groups, occluder, { plan: interior.plan, windows: interior.windows, sun: sunStateOf(sky.sun), light: interiorLight });
   if (interior.plan.rooms.length) scene.add(buildShadowSkins(interior.plan, bake.apertures));

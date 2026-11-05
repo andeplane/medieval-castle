@@ -50,7 +50,7 @@ export interface InteriorLight {
 export function createInteriorLight(maxRooms = 1024): InteriorLight {
   const table = new THREE.DataTexture(new Float32Array(TEX_W * maxRooms * 4), TEX_W, maxRooms, THREE.RGBAFormat, THREE.FloatType);
   table.minFilter = table.magFilter = THREE.NearestFilter; table.generateMipmaps = false; table.needsUpdate = true;
-  return { table, maxRooms, floor: uniform(new THREE.Vector3(0.03, 0.03, 0.033)), gain: uniform(10), glow: uniform(1) };
+  return { table, maxRooms, floor: uniform(new THREE.Vector3(0.05, 0.05, 0.055)), gain: uniform(12), glow: uniform(1) };
 }
 
 /**

@@ -78,7 +78,7 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
   return { room, inside: room >= 0, deep: deep || underground, underground, visible };
 }
 
-export const HIDE_UNDERGROUND = ['water', 'terrain-far', 'trees', 'ground-cover', 'far-forest'];
+export const HIDE_UNDERGROUND = ['water', 'stream-water', 'terrain-far', 'terrain-stream', 'trees', 'ground-cover', 'rocks', 'far-forest'];
 export const HIDE_DEEP = ['trees', 'ground-cover', 'far-forest'];
 
 interface Obj { visible: boolean; name: string }
@@ -111,6 +111,8 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
      * in is shown. `roomOf` returns a room id, or 'outside' / 'courtyard' / null when not in a room.
      * Returns an unregister function.
      */
+    /** Room-culling hook for other systems (the fire LightRig's `visible(id)`): is this room shown? */
+    isRoomVisible(id: SpaceId | null) { return roomShown(ctx, last, index.get(id ?? '') ?? -1); },
     register(obj: { visible: boolean }, roomOf: () => SpaceId | null) {
       const e = { obj, roomOf };
       dynamic.add(e);
