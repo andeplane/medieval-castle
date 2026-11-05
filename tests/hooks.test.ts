@@ -53,6 +53,11 @@ describe('__game hooks', () => {
     game.setMode('fly');
     expect(game.state().camera.mode).toBe('fly');
     game.setPose([0, 20, 0], [0, 0, -10]);
+    game.lookFrom([1, 21, 2], [0, 0, -10]);
+    expect(game.state().camera).toMatchObject({ mode: 'fly', x: 1, y: 21, z: 2 });
+    game.lookFrom([0, 30, 60], [0, 0, 0], 'orbit');
+    expect(game.state().camera.mode).toBe('orbit');
+    game.setMode('fly');
     game.setTime(7);
     expect(game.state().time).toBe(7);
     await game.step(3);

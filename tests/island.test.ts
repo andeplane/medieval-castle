@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import { buildCastle } from '../src/castle/castle';
 import { buildBridge } from '../src/castle/bridge';
 import { buildRevetment } from '../src/castle/revetment';
-import { Builder, type MatKey } from '../src/castle/builder';
+import { Builder } from '../src/castle/builder';
 import { footprints, gatehouseFrame, outerPoly } from '../src/castle/layout';
 import { ISLAND, MOAT_OUTER, heightAt } from '../src/world/terrain';
 import { pointInPoly, edgeDist, dot, sub, type V2 } from '../src/core/math2d';
@@ -22,28 +22,8 @@ import type { V3 } from '../src/castle/interior/types';
 import { GATEHOUSE } from '../src/castle/spec';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
 import { fakeClock, fakeView } from './helpers';
+import { mats, doorMats, terrainObject, ROCK } from './world';
 
-const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, m])) as unknown as Record<MatKey, THREE.Material>; };
-
-/** A coarse stand-in for the render terrain: same layout as buildTerrain's near grid. */
-function terrainObject(size = 240, seg = 160) {
-  const g = new THREE.PlaneGeometry(size, size, seg, seg);
-  g.rotateX(-Math.PI / 2);
-  const p = g.getAttribute('position') as THREE.BufferAttribute;
-  for (let i = 0; i < p.count; i++) p.setY(i, heightAt(p.getX(i), p.getZ(i)));
-  const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial()); mesh.name = 'terrain-near';
-  // a rock on the lawn (near: collides) and one far away (far detail: ignored), like buildRocks
-  const rocks = new THREE.Group(); rocks.name = 'rocks';
-  for (const tag of ['near', 'far']) {
-    const im = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), new THREE.MeshBasicMaterial(), 1);
-    im.name = `rocks-${tag}-0`;
-    im.setMatrixAt(0, new THREE.Matrix4().makeTranslation(ROCK[0], heightAt(ROCK[0], ROCK[1]) + 0.4, ROCK[1]));
-    rocks.add(im);
-  }
-  const grp = new THREE.Group(); grp.add(mesh, rocks);
-  return grp;
-}
-const ROCK: V2 = (() => { const e = ISLAND[24], l = Math.hypot(e[0], e[1]); return [e[0] * (1 - 12 / l), e[1] * (1 - 12 / l)]; })();
 
 describe('walking the island', { timeout: 60_000 }, () => {
   let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>, stoneSet: StoneSet;
@@ -89,7 +69,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
 
   it('spawns south of the gate facing it; the gate leaves stop you, and once open you walk in on the sill', () => {
     // the real gate: leaves (kinematic boxes) and the portcullis, stepped with physics like main.ts
-    const doors = buildDoors(gateDoorSpecs(), { wood: new THREE.MeshBasicMaterial(), iron: new THREE.MeshBasicMaterial(), trim: new THREE.MeshBasicMaterial() }, play.physics,
+    const doors = buildDoors(gateDoorSpecs(), doorMats(), play.physics,
       { initial: 0, portcullis: [gatePortcullisSpec()], characters: play.characters });
     play.physics.onFixed((dt) => doors.update(dt, play.playerCentre()));
     const s = spawnPoint(), g = gatehouseFrame(), sill = gateDoorSpecs()[0].centre[1];

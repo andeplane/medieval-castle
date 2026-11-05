@@ -30,7 +30,7 @@ import { MouseLook } from './camera/mouseLook';
 import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { setupPlay } from './player/setup';
+import { setupPlay, playDoors } from './player/setup';
 import { MinimalHud, type Hud } from './player/hud';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
 import { createInteraction, domPromptView } from './game/interact';
@@ -41,7 +41,6 @@ import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
-const LOCKED = new Set(['sallyport-grille']);
 // Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
 // texture jobs fill CUTTING → RAISING.
 let screen: LoadingScreen;
@@ -190,14 +189,14 @@ async function main() {
   // and any NPC motors stop a swinging leaf.
   const audio = new DoorAudio(camera);
   const gateSpecs = test === 'stairs' ? [] : gateDoorSpecs(); // the stair scene has no castle
-  const planDoors = interior ? interior.plan.doors.filter((d) => d.leaf && d.id !== 'gate-main') : [];
-  const doors = buildDoors([...gateSpecs, ...planDoors.filter((d) => !LOCKED.has(d.id))], M, physics, {
+  const doorSets = playDoors(gateSpecs, interior?.plan.doors ?? []);
+  const doors = buildDoors(doorSets.active, M, physics, {
     portcullis: test === 'stairs' ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
     initial: params.has('doors') ? Number(params.get('doors')) : undefined,
   });
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs
-  const locked = buildDoors(planDoors.filter((d) => LOCKED.has(d.id)), M, physics, { ajar: 0, initial: 0 });
+  const locked = buildDoors(doorSets.locked, M, physics, { ajar: 0, initial: 0 });
   scene.add(locked.object);
   // the fly camera's floor in the gate passage is the sill, not the terrain under the gatehouse
   rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
