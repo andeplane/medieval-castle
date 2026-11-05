@@ -441,7 +441,7 @@ async function main() {
     const steps = o.steps ? BENCH_STEPS.filter((s) => o.steps!.includes(s.name)) : BENCH_STEPS;
     const rows = await runBench(steps, {
       go: (from) => {
-        if (from === 'spawn') { hooks.player.spawn(); return true; }
+        if (from === 'spawn') { rig.setMode('walk'); rig.toSpawn(); return true; }
         const v = VIEWS.find((x) => x.name === from); if (!v) return false;
         rig.go(v); return true;
       },
