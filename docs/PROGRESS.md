@@ -1,5 +1,30 @@
 # Progress
 
+## 2026-11-05: frame-rate measurement (stats overlay + benchmark)
+
+Anders: "please measure fps and have stats on rendering so you can improve. now it is quite bad on m4 mac".
+
+Done
+- **Stats overlay** (`src/ui/statsOverlay.ts`, I toggles it, `?stats` starts with it): fps, frame time p50/p95, CPU time in the frame callback, GPU time (WebGPU timestamp queries, `trackTimestamp`), draw calls, triangles, render size and API.
+- **Benchmark** (`src/debug/bench.ts`): the same bookmarks and walks every run (hero, aerial, gate, door-gate, courtyard, ward, closeup-ashlar, gatepass, tunnel, walk-gate from the spawn, run-courtyard), 1 s warm-up and 3 s measured each. `?bench` runs it after loading and shows the table in the overlay; `__game.bench({ steps, warmMs, measureMs })` returns rows and a markdown table; `npm run bench` drives it from Playwright (headless numbers are SwiftShader: only draw calls and triangles mean anything there).
+- `?scale=` sets the render pixel ratio (default: the screen's, capped at 2).
+
+Baseline (live build at 3e3b024, Anders' M4 MacBook Pro, Chrome WebGPU, 1200×897 CSS px at devicePixelRatio 2, 120 Hz screen):
+
+| view | fps | draw calls | triangles |
+|---|---|---|---|
+| hero / aerial / north / moat / top | 120 | 250–370 | 4.0–4.9 M |
+| gate | 77 | 904 | 5.4 M |
+| ward | 83 | 1,138 | 5.5 M |
+| courtyard | 54 | 2,304 | 5.6 M |
+| door-gate | 41 | 1,822 | 5.6 M |
+| closeup-rubble / closeup-ashlar | 40–42 | 1,240–1,250 | 5.2–5.3 M |
+
+What the A/B toggles showed on that machine:
+- It is pixel-bound. At 600×450 CSS px (a quarter of the pixels) every view above runs at 120 fps, with the same 1,800–2,300 draw calls.
+- Door leaves are ~1,600 of the courtyard's 2,304 draw calls: on WebGPU a BatchedMesh draws once per visible instance. Hiding them did not change fps.
+- `?ao=0` (no GTAO normal pre-pass) took door-gate from 41 to 57 fps and halved the draw calls; `?stones=0` changed little.
+
 ## 2026-11-05: the game starts walking
 
 Anders: "default should be walk for sure". The page now starts in walk mode at the spawn on the lawn outside the gate, facing it, with the tools panel shut; O switches to orbit and F to fly. A `?view=` bookmark, `?shot` captures and the `?test=` scenes keep their review camera as before, and `?play` still forces walking. I checked it in the real page (headless WebGL2): the default URL reports mode `walk`, the player is grounded at the spawn (5.48, 2.66, 29.79), and the tools panel is closed.

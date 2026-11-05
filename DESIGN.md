@@ -165,6 +165,7 @@ The viewport is the scene; UI pins to its edges and centre with a 12px gutter pl
 
 - **Centre:** crosshair dot; the use prompt 24px below it; the Controls card 72px below it.
 - **Bottom centre:** the help line (wraps on narrow screens), toasts 52px above it.
+- **Top right:** the rendering stats chip (I), when shown.
 - **Top left:** the tools panel (252px wide, scrolls inside itself) or, while it is shut, the small Tools toggle.
 - Below 560px wide the tools panel spans the top between the gutters, caps at 52vh and its buttons grow to 36px.
 - Spacing steps: 4, 8, 14, 20px; groups inside the panel are 14px apart, items inside a group 4–6px.
@@ -187,7 +188,7 @@ Brass text in a brass hairline box with a thicker bottom edge, 22px tall. Used i
 - **On target:** the dot turns brass and a brass ring opens round it (0.2s ease-out); the prompt chip ("E Open door") fades in under it. Prompt text is announced politely to screen readers.
 
 ### Help line
-A Chip Ink bar at the bottom centre with key + action pairs, shown only while the mouse is free. While walking it ends with `H controls` and `` ` tools``.
+A Chip Ink bar at the bottom centre with key + action pairs, shown only while the mouse is free. While walking it ends with `H controls`, `` ` tools`` and `I stats`.
 
 ### Controls card
 Panel Ink card with a display-face "Controls" title and a two-column list of keycaps and actions. Appears on the first pointer lock, holds 4.5s and fades over 0.6s; H shows it again.
@@ -199,6 +200,9 @@ Panel Ink card with a display-face "Controls" title and a two-column list of key
 - **Actions:** two-column grid of quiet list buttons (5 % bone fill, hairline on hover).
 - **Select:** native picker on Ink.
 - Toggled with the backquote key (`` ` ``), closed with Esc; opening it while the mouse is captured releases the mouse and focuses the first control. Open by default for orbit and fly bookmarks, shut when you start out walking.
+
+### Rendering stats (I)
+A Chip Ink box in the top-right corner, hidden until I is pressed (or `?stats` / `?bench`): a two-column list of uppercase dim labels and right-aligned bone values in tabular figures (fps, frame time, CPU, GPU, draws, triangles, render size, API), redrawn four times a second. It takes no pointer events. Under the numbers a brass line shows benchmark progress, then the benchmark table in monospace, which can be selected and copied.
 
 ### Boot error
 Centred on Ink: a display-face headline naming what failed, one line of advice, the browser's message in code, and a single brass Reload button that takes focus.
