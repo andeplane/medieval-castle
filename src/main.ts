@@ -21,7 +21,7 @@ import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint } from './camera/controls';
 import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
-import { GATEHOUSE } from './castle/spec';
+import { GATEHOUSE, GROUND } from './castle/spec';
 import { bridgeInfo } from './physics/boundary';
 import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
@@ -46,7 +46,9 @@ import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { setupPlay, playDoors } from './player/setup';
-import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
+import { buildDoors, joinDoors, inDoorway } from './castle/interior/doors';
+import { portcullisInPlan } from './castle/interior/portcullis';
+import { planInterior } from './castle/interior/plan';
 import { createInteraction } from './game/interact';
 import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
@@ -186,7 +188,7 @@ async function main() {
   const bake = bakeInteriorLight(lit.groups, occluder, { plan: lit.plan, windows: lit.windows, sun: sunStateOf(sky.sun), light: interiorLight });
   if (lit.plan.rooms.length) scene.add(buildShadowSkins(lit.plan, bake.apertures));
   console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, bake ${bake.ms.toFixed(1)} ms, BVH ${bvhMs.toFixed(1)} ms over ${occluder.triangles} tris`);
-  // leaf doors (gate, wicket, portcullis) pass daylight on as they open: re-solve when one moves
+  // leaf doors and the portcullis pass daylight on as they open: re-solve when one moves
   const doorLit: Record<string, number> = {};
   const syncDoorLight = () => {
     for (const [id, o] of Object.entries(doors.state())) {
@@ -288,20 +290,28 @@ async function main() {
   rig.mouse = mouse;
   input.capture = () => mouse.locked;
   try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) mouse.sensitivity = s; } catch { /* storage blocked */ }
-  // doors (G.2): the main gate's two leaves with a wicket and the portcullis (gateDoorSpecs, until the
-  // gate-portcullis branch reconciles it with the plan's 'gate-main'), plus every leaf door of the
-  // interior plan. Every leaf is a kinematic box in the physics world, posed each fixed tick; the player
-  // and any NPC motors stop a swinging leaf.
+  // doors (G.2): the main gate has no leaves; the plan's 'gate-main' is closed by its portcullis, whose
+  // windlass stands in the room above. Every leaf door of the interior plan is a kinematic box in the
+  // physics world, posed each fixed tick, and so is the grille while it is low; the player and any NPC
+  // motors stop a swinging leaf.
   const audio = new DoorAudio(camera);
-  const gateSpecs = test === 'stairs' ? [] : gateDoorSpecs(); // the stair scene has no castle
-  const doorSets = playDoors(gateSpecs, interior?.plan.doors ?? []);
-  const doors = buildDoors(doorSets.active, M, physics, {
-    portcullis: test === 'stairs' ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
-    initial: params.has('doors') ? Number(params.get('doors')) : undefined,
-  });
+  const plan = test === 'stairs' ? null : interior?.plan ?? planInterior(); // the stair scene has no castle
+  const gateDoor = plan?.doors.find((d) => d.id === 'gate-main');
+  const gateSpecs = gateDoor ? [gateDoor] : [];
+  const doorSets = playDoors([], interior?.plan.doors ?? []);
+  const port = gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [];
+  // a batch has one material: leaves take their floor's interior material (as the furniture does; cellars
+  // and tunnels have no sun), and so does the portcullis, for its windlass room
+  const under = (d: { centre: number[] }) => d.centre[1] < GROUND - 1;
+  const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
+  const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined };
+  const doors = joinDoors([
+    buildDoors(doorSets.active.filter((d) => !under(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
+    buildDoors(doorSets.active.filter(under), inMats(IMu), physics, doorOpts),
+  ]);
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs
-  const locked = buildDoors(doorSets.locked, M, physics, { ajar: 0, initial: 0 });
+  const locked = buildDoors(doorSets.locked, inMats(IMu), physics, { ajar: 0, initial: 0 });
   scene.add(locked.object);
   // the fly camera's floor in the gate passage is the sill, not the terrain under the gatehouse
   rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
@@ -338,7 +348,9 @@ async function main() {
   let fireT = 0;
   const fireGroups = lit.groups.map((g) => fire.group.includes(g.key));
   // door leaves follow their rooms: shown while either side is shown (outside counts when not deep)
-  const doorCells = [...doorSets.active.map((d) => [doors, d] as const), ...doorSets.locked.map((d) => [locked, d] as const)];
+  // the portcullis follows the gate's spaces and its windlass the room it stands in (doors.setVisible)
+  const portCells = port.flatMap((p) => [{ id: p.id, spaces: gateDoor!.spaces }, ...(p.winch?.room ? [{ id: p.id + ':winch', spaces: [p.winch.room, p.winch.room] }] : [])]);
+  const doorCells = [...doorSets.active.map((d) => [doors, d] as const), ...doorSets.locked.map((d) => [locked, d] as const), ...portCells.map((d) => [doors, d] as const)];
   const doorShown = new Map<string, boolean>();
   const syncDoorVis = () => {
     for (const [sys, d] of doorCells) {

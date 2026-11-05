@@ -17,7 +17,9 @@ import { GeoBuf, writeStone } from '../src/castle/stones/mesh';
 import { worldToFace } from '../src/castle/stones/layout';
 import type { V3 } from '../src/castle/interior/types';
 import { GATEHOUSE } from '../src/castle/spec';
-import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
+import { buildDoors } from '../src/castle/interior/doors';
+import { portcullisInPlan } from '../src/castle/interior/portcullis';
+import { planInterior } from '../src/castle/interior/plan';
 import { fakeClock, fakeView } from './helpers';
 import { mats, doorMats, terrainObject, islandCastle, ROCK } from './world';
 import type { BridgeInfo } from '../src/physics/boundary';
@@ -66,21 +68,22 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(play.physics.stats().characters).toBe(1);
   });
 
-  it('spawns south of the gate facing it; the gate leaves stop you, and once open you walk in on the sill', () => {
-    // the real gate: leaves (kinematic boxes) and the portcullis, stepped with physics like main.ts
-    const doors = buildDoors(gateDoorSpecs(), doorMats(), play.physics,
-      { initial: 0, portcullis: [gatePortcullisSpec()], characters: play.characters });
+  it('spawns south of the gate facing it; the lowered portcullis stops you, and once raised you walk in on the sill', () => {
+    // the real gate: no leaves, the plan's portcullis (a kinematic box while low), stepped with physics like main.ts
+    const plan = planInterior(), gate = plan.doors.find((d) => d.id === 'gate-main')!;
+    const doors = buildDoors([], doorMats(), play.physics,
+      { initial: 0, portcullis: [portcullisInPlan(gate, plan.rooms)], characters: play.characters });
     play.physics.onFixed((dt) => doors.update(dt, play.playerCentre()));
-    const s = spawnPoint(), g = gatehouseFrame(), sill = gateDoorSpecs()[0].centre[1];
+    const s = spawnPoint(), g = gatehouseFrame(), sill = gate.centre[1];
     // how far into the gatehouse (from its front face, along −out) the feet got
     const front: V2 = [g.base[0] + g.out[0] * GATEHOUSE.project, g.base[1] + g.out[1] * GATEHOUSE.project];
     const into = (f: number[]) => -dot(sub([f[0], f[2]], front), g.out);
     stand(s.x, s.z, s.yaw);
     const shut = walk(['KeyW'], 5).feet;
     expect(into(shut)).toBeGreaterThan(0.5);   // through the arch, onto the sill…
-    expect(into(shut)).toBeLessThan(4.2);      // …but stopped by the closed leaves
+    expect(into(shut)).toBeLessThan(2.1);      // …but stopped by the grille (its groove is 2.1 m in)
     expect(Math.abs(shut[1] - sill)).toBeLessThan(0.1);
-    doors.setOpen('main-gate', true, true);
+    doors.setOpen('gate-main', true, true);
     const open = walk(['KeyW'], 3).feet;
     expect(into(open)).toBeGreaterThan(4.5);   // to the end of the passage (the shell continues it)
     expect(Math.abs(open[1] - sill)).toBeLessThan(0.1);

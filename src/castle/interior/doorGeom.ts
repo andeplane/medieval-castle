@@ -15,17 +15,15 @@ import type { DoorSpec, V3 } from './types';
 import type { V2 } from '../../core/math2d';
 
 export const CLEAR = 0.015;       // leaf to jamb and head clearance (per side)
-export const MEET = 0.006;        // gap between the two gate leaves (each side of the centre line)
 export const HEAD_RISE = { pointed: 0.42, segmental: 0.2 } as const; // pointed matches the gate arch in castle.ts (1.6 / 3.8)
 export const OPEN_ANGLE = (100 * Math.PI) / 180;
 
-export type LeafKind = 'plank' | 'gate' | 'postern' | 'grille' | 'wicket';
+/** Leaf kinds: every DoorSpec kind but 'gate' (gates have no leaves; the portcullis closes them). */
+export type LeafKind = Exclude<DoorSpec['kind'], 'gate'>;
 /** Board thickness t, ledge depth (0 = none), gap under the leaf. */
 export const KIND: Record<LeafKind, { t: number; ledge: number; sill: number }> = {
   plank: { t: 0.07, ledge: 0.035, sill: 0.02 },
   postern: { t: 0.09, ledge: 0.045, sill: 0.02 },
-  gate: { t: 0.09, ledge: 0.06, sill: 0.03 },
-  wicket: { t: 0.09, ledge: 0.06, sill: 0 },
   grille: { t: 0.035, ledge: 0.035, sill: 0.03 },
 };
 /** Pintle axis stands this far proud of the ledges / strap hinges. */
@@ -94,7 +92,6 @@ export interface LeafPlace {
   eV: V2;               // into the swing space
   mirrored: boolean;    // (eU, up, eV) is left-handed: use the mirrored geometry
   maxAngle: number;
-  wicket?: boolean;     // gate leaf that carries the wicket door
 }
 
 /**
@@ -114,37 +111,35 @@ export interface LeafClass {
 }
 
 const BIN = 0.04;
-export function leafClassFor(d: DoorSpec, kind: LeafKind, part: 'single' | 'gate' = kind === 'gate' ? 'gate' : 'single'): LeafClass {
+export function leafClassFor(d: DoorSpec, kind: LeafKind): LeafClass {
   const ow = Math.floor(d.width / BIN) * BIN, oh = Math.floor(d.height / BIN) * BIN;
-  const width = part === 'gate' ? ow / 2 - CLEAR - MEET : ow - 2 * CLEAR;
+  const width = ow - 2 * CLEAR;
   const key = `${kind}:${d.head}:${ow.toFixed(2)}x${oh.toFixed(2)}`;
   // hinge edge at the left jamb (s = -ow/2 + CLEAR), latch toward +s
   return { key, kind, head: d.head, ow, oh, width, sOff: -ow / 2 + CLEAR, sDir: 1 };
 }
 
-/** The leaves a door needs (none for an open arch). Gate: two leaves; hinge 'left' = leaf 0 hinged left. */
+/** The leaves a door needs: one whole leaf, or none for an open arch or a gate (closed by its portcullis). */
 export function placeLeaves(d: DoorSpec): LeafPlace[] {
-  if (!d.leaf) return [];
+  if (!d.leaf || d.kind === 'gate') return [];
   const kind: LeafKind = d.kind;
   const f = doorFrame(d, kind);
   const cls = leafClassFor(d, kind);
-  const sides: (1 | -1)[] = kind === 'gate' ? [d.hinge === 'right' ? 1 : -1, d.hinge === 'right' ? -1 : 1] : [d.hinge === 'right' ? 1 : -1];
+  const hs = d.hinge === 'right' ? 1 : -1;
   const sill = KIND[kind].sill;
-  return sides.map((hs, i) => {
-    // hinge edge at s = hs·(ow/2 − CLEAR) (class geometry centred in the opening); latch toward the centre
-    const sHinge = hs * (cls.ow / 2 - CLEAR);
-    const eU: V2 = [-hs * f.right[0], -hs * f.right[1]];
-    const base: V2 = [f.swingFace[0] - f.eV[0] * f.pivotDepth, f.swingFace[1] - f.eV[1] * f.pivotDepth];
-    const pivot: V3 = [base[0] + f.right[0] * sHinge, d.centre[1] + sill, base[1] + f.right[1] * sHinge];
-    // right-handed when eU × up = eV, i.e. eV = (−eU.z, eU.x)
-    const mirrored = f.eV[0] * -eU[1] + f.eV[1] * eU[0] < 0;
-    const top = headTop(d.head, cls.ow, cls.oh, CLEAR);
-    return {
-      door: d.id, kind, classKey: cls.key + (kind === 'gate' ? (i === 0 ? ':w' : ':g') : ''), width: cls.width,
-      height: top(0) - sill, sOff: sHinge, sDir: (hs > 0 ? -1 : 1) as 1 | -1,
-      pivot, eU, eV: f.eV, mirrored, maxAngle: maxSwing(f.pivotDepth) - (i ? 0.03 : 0), wicket: kind === 'gate' && i === 0,
-    };
-  });
+  // hinge edge at s = hs·(ow/2 − CLEAR) (class geometry centred in the opening); latch toward the other jamb
+  const sHinge = hs * (cls.ow / 2 - CLEAR);
+  const eU: V2 = [-hs * f.right[0], -hs * f.right[1]];
+  const base: V2 = [f.swingFace[0] - f.eV[0] * f.pivotDepth, f.swingFace[1] - f.eV[1] * f.pivotDepth];
+  const pivot: V3 = [base[0] + f.right[0] * sHinge, d.centre[1] + sill, base[1] + f.right[1] * sHinge];
+  // right-handed when eU × up = eV, i.e. eV = (−eU.z, eU.x)
+  const mirrored = f.eV[0] * -eU[1] + f.eV[1] * eU[0] < 0;
+  const top = headTop(d.head, cls.ow, cls.oh, CLEAR);
+  return [{
+    door: d.id, kind, classKey: cls.key, width: cls.width,
+    height: top(0) - sill, sOff: sHinge, sDir: (hs > 0 ? -1 : 1) as 1 | -1,
+    pivot, eU, eV: f.eV, mirrored, maxAngle: maxSwing(f.pivotDepth),
+  }];
 }
 
 // ------------------------------------------------------------------------------------- matrices
@@ -158,14 +153,15 @@ export const m4mul = (a: M4, b: M4): M4 => {
 };
 export const m4apply = (m: M4, p: V3): V3 => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];
 export const m4translate = (x: number, y: number, z: number): M4 => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+export const m4scale = (x: number, y: number, z: number): M4 => [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1];
+/** Rotation by a about +x: +y turns toward +z. */
+export const m4rotX = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]; };
 /** Swing by a: local +x turns toward local +z. */
 export const m4swing = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 0, 1, 0, 0, -s, 0, c, 0, 0, 0, 0, 1]; };
-/** In-plane droop by a: local +x turns toward −y (sagging latch end). */
-export const m4droop = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, 0, s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; };
 const MIRROR: M4 = [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 /**
- * World matrix of a leaf for local transform `local` (in unmirrored leaf space, e.g. swing · droop).
+ * World matrix of a leaf for local transform `local` (in unmirrored leaf space, e.g. a swing).
  * Mirrored leaves use the x-mirrored geometry and the conjugated transform, so every matrix keeps
  * det = +1 and front faces stay front faces.
  */
@@ -179,6 +175,3 @@ export function leafMatrix(L: Pick<LeafPlace, 'pivot' | 'eU' | 'eV' | 'mirrored'
 export function leafPoint(L: LeafPlace, local: M4, p: V3): V3 {
   return m4apply(leafMatrix(L, local), L.mirrored ? [-p[0], p[1], p[2]] : p);
 }
-
-/** Easing helpers. */
-export const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);

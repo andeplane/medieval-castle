@@ -58,15 +58,13 @@ describe('interior plan', () => {
   it('opens a walkable gate route: outside → gate passage → courtyard → wings', () => {
     const gm = P.doors.find((d) => d.id === 'gate-main')!;
     expect(gm.kind).toBe('gate');
-    expect(gm.leaf).toBe(true);
+    expect(gm.leaf).toBe(false); // no oak leaves: the portcullis closes the gate
     expect(gm.spaces).toEqual(['outside', 'gate-0']);
     expect(gm.width).toBeCloseTo(GATE.width);
     // centred on the mid plane of the gatehouse front
     const g = gatehouseFrame(), c: V2 = [gm.centre[0], gm.centre[2]];
     const d = (c[0] - g.base[0]) * g.out[0] + (c[1] - g.base[1]) * g.out[1];
     expect(d).toBeCloseTo(GATEHOUSE.project - gm.wall / 2, 5);
-    // room for the portcullis groove and the leaves behind the outer arch
-    expect(gm.rebate).toBeGreaterThanOrEqual(0.15 + 0.25);
     const gi = P.doors.find((x) => x.id === 'gate-inner')!, gc = P.doors.find((x) => x.id === 'gate-court')!;
     expect(gi.leaf || gc.leaf).toBe(false);
     expect(gc.spaces).toContain('courtyard');

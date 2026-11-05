@@ -1,10 +1,11 @@
 // Key paths (AGENTS.md): the player's own motor and colliders, assembled as main.ts assembles them (castle,
 // bridge, revetment, the interior shell's collision soups, terrain with holes, boundary, every door leaf,
-// the locked sally-port grille), walked by steering the player along the interior nav graph. No browser.
+// the main gate's portcullis, the locked sally-port grille), walked by steering the player along the interior nav graph. No browser.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { buildInterior, type PlanX } from '../src/castle/interior';
 import { navGraph, findPath, type NavGraph } from '../src/castle/interior/nav';
-import { buildDoors, gateDoorSpecs, gatePortcullisSpec, type DoorSystem } from '../src/castle/interior/doors';
+import { buildDoors, type DoorSystem } from '../src/castle/interior/doors';
+import { portcullisInPlan } from '../src/castle/interior/portcullis';
 import type { V3 } from '../src/castle/interior/types';
 import { heightAt } from '../src/world/terrain';
 import { pointInPoly } from '../src/core/math2d';
@@ -34,8 +35,10 @@ describe('key paths', { timeout: 120_000 }, () => {
       castle, terrain: terrainObject(), bridge, input, view: fakeView(), footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
       interior: { collision: interior.collision },
     });
-    const sets = playDoors(gateDoorSpecs(), plan.doors);
-    doors = buildDoors(sets.active, doorMats(), play.physics, { initial: 0, portcullis: [gatePortcullisSpec()], characters: play.characters });
+    const sets = playDoors([], plan.doors);
+    const gate = plan.doors.find((d) => d.id === 'gate-main')!;
+    // initial 0: every leaf shut and the portcullis down
+    doors = buildDoors(sets.active, doorMats(), play.physics, { initial: 0, portcullis: [portcullisInPlan(gate, plan.rooms)], characters: play.characters });
     buildDoors(sets.locked, doorMats(), play.physics, { ajar: 0, initial: 0 });
     play.physics.onFixed((dt) => doors.update(dt, play.playerCentre()));
     play.player.setActive(true);
@@ -97,18 +100,58 @@ describe('key paths', { timeout: 120_000 }, () => {
   const room = (id: string) => plan.rooms.find((r) => r.id === id)!;
   const start = (x: number, y: number, z: number) => play.player.teleport(x, play.player.groundAt(x, z, y + 1, y), z, 0, 0);
 
-  it('bridge end → through gate-main → the gate passage → the courtyard', () => {
-    doors.setOpen('main-gate', true, true); // the gate opening counts as open (gate-portcullis branch owns it)
-    const p = path('outside', 'courtyard');
+  it('bridge end → the lowered portcullis stops you → raise it → through gate-main → the courtyard', () => {
+    const p = path('outside', 'courtyard', false, false);
     expect(p.doors).toEqual(['gate-main', 'gate-inner', 'gate-court']);
+    for (const id of p.doors.slice(1)) if (doors.state()[id] !== undefined) doors.setOpen(id, true, true); // E on the inner doors
+    expect(doors.isPassable('gate-main')).toBe(false);
     // the bridge end: half a metre short of the broken edge, on the deck
     const e: [number, number] = [bridge.start[0] + bridge.dir[0] * (bridge.breakAt - 0.5), bridge.start[1] + bridge.dir[1] * (bridge.breakAt - 0.5)];
     start(e[0], deckAt(e[0], e[1])!, e[1]);
-    const w = follow(route(p.nodes));
+    const pts = route(p.nodes);
+    const shut = follow(pts);
+    expect(shut.reached).toBeLessThan(pts.length);
+    // stopped by the grille in the gate passage, short of the groove (2.1 m in from the front face)
+    const g = plan.doors.find((d) => d.id === 'gate-main')!;
+    const into = (f: V3) => (f[0] - g.centre[0]) * g.normal[0] + (f[2] - g.centre[2]) * g.normal[1] + g.wall / 2; // the normal points in
+    expect(into(shut.feet)).toBeGreaterThan(1.5);
+    expect(into(shut.feet)).toBeLessThan(2.1);
+    // E as the player: a request from where they stand, then the windlass heaves it up (≈ 6 s of ticks)
+    expect(doors.request('gate-main', true, { pos: play.playerCentre() })).toBe(true);
+    let t = 0;
+    for (; t < 15 && !doors.isOpen('gate-main'); t += 1 / 60) play.physics.tick();
+    expect(doors.isOpen('gate-main')).toBe(true);
+    expect(t).toBeGreaterThan(3);
+    const w = follow(pts.slice(shut.reached));
     expect(w.reached, JSON.stringify(w)).toBe(w.of);
     expect(pointInPoly(courtyard(), w.feet[0], w.feet[2])).toBe(true);
     expect(w.feet[1]).toBeCloseTo(GROUND, 0);
-    expect(w.minY).toBeGreaterThan(1.5); // down the bridge-head steps to the lawn, never into the moat
+    expect(shut.minY).toBeGreaterThan(1.5); // down the bridge-head steps to the lawn, never into the moat
+  });
+
+  it('courtyard → SE tower stair → the windlass room over the gate → the winch lowers and raises the portcullis', () => {
+    const p = path('courtyard', 'gate2');
+    expect(p.nodes).toContain('room:gate2');
+    const c = G.nodes.get('room:courtyard')!.pos;
+    start(c[0], c[1], c[2]);
+    const r = room('gate2'), g = plan.doors.find((d) => d.id === 'gate-main')!;
+    // then up to the drum: stand 1.9 m behind the groove line (portcullis.ts GROOVE_IN), beside the near rope
+    const k = g.wall / 2 - 0.5, at: V3 = [g.centre[0] + g.normal[0] * (k + 1.9) + g.along[0] * 0.9, r.y0, g.centre[2] + g.normal[1] * (k + 1.9) + g.along[1] * 0.9];
+    const w = follow([...route(p.nodes), at]);
+    expect(w.reached, JSON.stringify(w)).toBe(w.of);
+    expect(pointInPoly(r.poly, w.feet[0], w.feet[2])).toBe(true);
+    expect(w.feet[1]).toBeCloseTo(r.y0, 1);
+    // E on the windlass from where the player stands: down (fast, on the brake), then up again (slow)
+    const tickUntil = (done: () => boolean, max: number) => { let t = 0; for (; t < max && !done(); t += 1 / 60) play.physics.tick(); return t; };
+    expect(doors.isOpen('gate-main')).toBe(true); // key path 1 left it raised
+    expect(doors.request('gate-main', false, { pos: play.playerCentre() })).toBe(true);
+    const down = tickUntil(() => doors.state()['gate-main'] === 0, 10);
+    expect(down).toBeLessThan(2.5);
+    expect(doors.isPassable('gate-main')).toBe(false);
+    expect(doors.request('gate-main', true, { pos: play.playerCentre() })).toBe(true);
+    const up = tickUntil(() => doors.isOpen('gate-main'), 15);
+    expect(up).toBeGreaterThan(down * 2);
+    expect(doors.isOpen('gate-main')).toBe(true);
   });
 
   it('courtyard → ground-floor rooms → the SW tower stair up one floor', () => {

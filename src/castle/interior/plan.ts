@@ -328,8 +328,9 @@ export function planInterior(seed = WORLD_SEED): PlanX {
   vault['gate-1'] = { axis: sP.v, spring: GATE.sill + 3.0, ribs: true, murder: true };
   {
     const gc = add(g.base, scale(g.out, GATEHOUSE.project - GATE.wall / 2));
-    const d = exteriorDoor('gate-main', 'gate-0', 'outside', gc, GATE.sill, g.out, GATE.width, GATE.spring, GATE.wall, 'pointed', true, 'gate');
-    d.swingInto = 1; d.rebate = 1.5; // head: pointed, 0.42 × 3.8 = 1.6 m rise like the exterior arch
+    // no leaves: the portcullis (portcullis.ts) closes the gate; head pointed, 0.42 × 3.8 = 1.6 m rise like the exterior arch
+    const d = exteriorDoor('gate-main', 'gate-0', 'outside', gc, GATE.sill, g.out, GATE.width, GATE.spring, GATE.wall, 'pointed', false, 'gate');
+    d.swingInto = 1;
     const inner = mkDoor('gate-inner', ['gate-0', 'gate-1'], add(g.base, scale(sP.v, sP.tOut / 2)), GATE.sill, sP.v, 3.4, 2.8, sP.tOut, 'pointed', false, 'plank');
     doors.push(inner); rise['gate-inner'] = 1.4;
     const court = mkDoor('gate-court', ['gate-1', 'courtyard'], local(sP.o, sP.u, sP.v, sGate, sP.dIn + T_COURT / 2), GATE.sill, sP.v, 3.4, 2.8, T_COURT, 'pointed', false, 'plank');
