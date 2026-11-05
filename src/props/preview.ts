@@ -9,6 +9,9 @@ import type { TexSet } from '../render/texgen';
 import { woodTex, ironTex, clothTex, strawTex, ceramicTex } from './textures';
 import { makePropMaterials, meshFromProp } from './render';
 import { mergePlaced, previewLayout } from './place';
+import { LightRig } from '../light/rig';
+import { linkFlames, flameBrightness } from '../light/flames';
+import { threeLightFactory, makeFlameSprites } from '../light/three';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
@@ -89,11 +92,13 @@ async function main() {
   Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 90 });
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
   scene.add(sun, sun.target);
-  for (const e of emitters.slice(0, 16)) {
-    const l = new THREE.PointLight(new THREE.Color(...e.colour), e.intensity * 0.9, 7, 2);
-    l.position.set(...e.position);
-    scene.add(l);
-  }
+  // fixtures light the rooms through the shared fire system (src/light): flickering lights + flame sprites
+  const rig = new LightRig(threeLightFactory(scene), { shadows: 0, lights: 12 });
+  rig.setEmitters(emitters);
+  const flames = linkFlames(mesh.flames, emitters);
+  const sprites = makeFlameSprites(flames);
+  scene.add(sprites.group);
+  const bright = new Float32Array(flames.length);
 
   const go = (name: string) => {
     const v = L.views.find((x) => x.name === name) ?? L.views[0];
@@ -115,7 +120,15 @@ async function main() {
   await renderer.compileAsync(scene, camera);
 
   const spin = params.has('spin');
-  const render = () => { if (spin) { controls.autoRotate = true; controls.autoRotateSpeed = 1.5; } controls.update(); renderer.render(scene, camera); };
+  const t0r = performance.now();
+  const render = () => {
+    if (spin) { controls.autoRotate = true; controls.autoRotateSpeed = 1.5; }
+    controls.update();
+    const t = (performance.now() - t0r) / 1000, eye: [number, number, number] = [camera.position.x, camera.position.y, camera.position.z];
+    rig.update(t, 1 / 60, eye);
+    sprites.update(flameBrightness(flames, t, 1, bright), t);
+    renderer.render(scene, camera);
+  };
   const info = renderer.info;
   const errors: string[] = [];
   addEventListener('error', (e) => errors.push(String(e.message)));

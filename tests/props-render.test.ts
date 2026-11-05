@@ -25,7 +25,10 @@ describe('prop render adapter', () => {
     expect(g.userData.triangles).toBe(p.mesh.triangles);
     const m = g.children[0] as THREE.Mesh;
     expect(m.geometry.getAttribute('color').count).toBe(m.geometry.getAttribute('position').count);
-    expect(g.children.find((c) => c.name === 'candle-flame')!.castShadow).toBe(false);
+    expect(g.children.find((c) => c.name === 'candle-flame')).toBeUndefined(); // flames are sprites (src/light)
+    const torch = new PropMesh(); torch.box('flame', [0, 0, 0], [0.1, 0.1, 0.1]);
+    const tg = meshFromProp(torch, mats, 't');
+    expect(tg.children[0].castShadow).toBe(false);
     expect(meshFromProp(new PropMesh(), mats).children).toHaveLength(0);
   });
 });

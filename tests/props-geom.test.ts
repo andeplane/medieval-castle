@@ -71,3 +71,21 @@ describe('PropMesh primitives', () => {
     expect(m.triangles).toBe(2); checkMesh(m);
   });
 });
+
+describe('flame markers', () => {
+  it('follow the transform stack and survive append', async () => {
+    const { PropMesh, translate, rotX, compose } = await import('../src/props/geom');
+    const m = new PropMesh();
+    m.with(compose(translate(1, 2, 3), rotX(Math.PI / 2)), () => m.addFlame('torch', [0, 0.5, 0], 0.2));
+    const f = m.flames[0];
+    expect(f.base[0]).toBeCloseTo(1); expect(f.base[1]).toBeCloseTo(2); expect(f.base[2]).toBeCloseTo(3.5);
+    expect(f.up![2]).toBeCloseTo(1); expect(f.height).toBeCloseTo(0.2);
+    const w = new PropMesh();
+    w.with(translate(10, 0, 0), () => w.append(m));
+    expect(w.flames[0].base[0]).toBeCloseTo(11);
+    expect(w.flames[0].up![2]).toBeCloseTo(1);
+    const bare = new PropMesh(); bare.flames.push({ kind: 'candle', base: [0, 0, 0], height: 0.03 });
+    const w2 = new PropMesh(); w2.append(bare);
+    expect(w2.flames[0].up).toEqual([0, 1, 0]);
+  });
+});
