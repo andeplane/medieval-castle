@@ -11,7 +11,7 @@ import { buildRevetment } from './castle/revetment';
 import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
-import { buildTrees } from './world/trees';
+import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
@@ -58,8 +58,8 @@ async function main() {
   scene.add(water);
 
   await say('PLANTING TREES…');
-  let trees: THREE.Group | null = null;
-  try { trees = buildTrees(VIEWS.map((v) => [v.pos[0], v.pos[2]])); scene.add(trees); } catch (e) { console.error('trees failed', e); }
+  let veg: Vegetation | null = null;
+  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
   // post: GTAO from a single-sampled normal pre-pass, then the main pass (threejs-postprocessing)
   const pipeline = new THREE.RenderPipeline(renderer);
@@ -114,9 +114,9 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { pipeline.render(); },
+    renderNow: async () => { veg?.update(camera); pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
@@ -136,6 +136,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    veg?.update(camera);
     pipeline.render();
   });
   // two frames, then reveal
