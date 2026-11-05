@@ -1,11 +1,13 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
+// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
+import { StoneField } from './castle/stones/field';
+import { StoneSet } from './castle/stones/set';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
 import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
@@ -50,6 +52,12 @@ async function main() {
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(castle);
+  const tStones = performance.now();
+  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
+  const layoutMs = Math.round(performance.now() - tStones);
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
+  scene.add(stones.group);
+  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
@@ -109,20 +117,22 @@ async function main() {
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
   await say('LIGHTING…');
+  stones.update(camera.position, Infinity);
   await renderer.compileAsync(scene, camera);
 
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { pipeline.render(); },
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, trees: trees?.userData, windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
+    info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
     loading.remove();
     hooks.ready = true;
     return;
@@ -136,6 +146,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    stones.update(camera.position);
     pipeline.render();
   });
   // two frames, then reveal

@@ -64,10 +64,13 @@ export interface MasonryOpts {
   strength: number;
 }
 
-export function masonry(o: MasonryOpts): TexSet {
-  const N = o.size, px = N / o.tile, r = mulberry32(hashSeed(o.name));
-  const noise = new TileNoise(hashSeed(o.name + 'n'));
+export interface LayoutStone { x0: number; x1: number; split: number; id: number; col: RGB; bulge: number; tilt: number }
+export interface MasonryLayout { N: number; px: number; hs: number[]; cy: number[]; courses: { off: number; stones: LayoutStone[] }[] }
 
+/** The course/stone layout of a masonry tile, in texture pixels. Shared with the 3D stones
+ *  (src/castle/stones), so the geometric stones sit exactly on the texture's stones. */
+export function masonryLayout(o: MasonryOpts, r: Rng = mulberry32(hashSeed(o.name))): MasonryLayout {
+  const N = o.size, px = N / o.tile;
   // Courses: heights in px summing exactly to N.
   let hs: number[] = [], sum = 0;
   while (sum < N) { const h = (o.course[0] + r() * (o.course[1] - o.course[0])) * px; hs.push(h); sum += h; }
@@ -75,15 +78,14 @@ export function masonry(o: MasonryOpts): TexSet {
   const cy = [0]; for (const h of hs) cy.push(cy[cy.length - 1] + h);
 
   // Stones per course: boundaries starting at an offset, wrapping at N.
-  interface Stone { x0: number; x1: number; split: number; id: number; col: RGB; bulge: number; tilt: number }
-  const courses: { off: number; stones: Stone[] }[] = [];
+  const courses: { off: number; stones: LayoutStone[] }[] = [];
   const pickCol = (): RGB => {
     let t = r() * o.palette.reduce((a, p) => a + p.w, 0);
     for (const p of o.palette) { t -= p.w; if (t <= 0) return p.c; }
     return o.palette[0].c;
   };
   for (let c = 0; c < hs.length; c++) {
-    const off = r() * N, stones: Stone[] = [];
+    const off = r() * N, stones: LayoutStone[] = [];
     let x = off;
     while (x < off + N - 1) {
       let L = (o.stone[0] + r() * (o.stone[1] - o.stone[0])) * px;
@@ -94,6 +96,21 @@ export function masonry(o: MasonryOpts): TexSet {
     }
     courses.push({ off, stones });
   }
+  return { N, px, hs, cy, courses };
+}
+
+/** Joint warp field of masonry(): texture pixel (u, v) samples the layout at pixel + warp * (wx, wy). */
+export function masonryWarp(o: MasonryOpts) {
+  const noise = new TileNoise(hashSeed(o.name + 'n'));
+  return (u: number, v: number): [number, number] => [
+    noise.fbm(u, v, 16, 3) * 0.7 + noise.n(u, v, 64) * 0.3,
+    noise.fbm(u + 0.37, v + 0.71, 16, 3) * 0.7 + noise.n(u + 0.5, v, 64) * 0.3,
+  ];
+}
+
+export function masonry(o: MasonryOpts): TexSet {
+  const { N, px, hs, cy, courses } = masonryLayout(o);
+  const noise = new TileNoise(hashSeed(o.name + 'n'));
 
   const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4);
   const jw = o.joint * px * 0.5, bev = o.bevel * px, wp = o.warp * px;
@@ -160,19 +177,22 @@ export const STONE_GREYS = {
   ],
 };
 
-export const ashlarSet = () => masonry({
+export const ASHLAR: MasonryOpts = {
   name: 'ashlar', size: 2048, tile: 4, course: [0.26, 0.44], stone: [0.42, 1.05], joint: 0.016, bevel: 0.03, warp: 0.014,
   split: 0.04, palette: STONE_GREYS.ashlar, mortar: [0.33, 0.32, 0.3], bright: 0.14, face: 0.2, pinning: 0, chip: 0.022, cracks: 1, strength: 8,
-});
-export const rubbleSet = () => masonry({
+};
+export const RUBBLE: MasonryOpts = {
   name: 'rubble', size: 2048, tile: 4, course: [0.16, 0.4], stone: [0.18, 0.75], joint: 0.035, bevel: 0.05, warp: 0.05,
   split: 0.12, palette: STONE_GREYS.rubble, mortar: [0.31, 0.3, 0.28], bright: 0.18, face: 0.3, pinning: 0.07, chip: 0.05, cracks: 1.5, strength: 10,
-});
-export const dressedSet = () => masonry({
+};
+export const DRESSED: MasonryOpts = {
   name: 'dressed', size: 1024, tile: 2, course: [0.3, 0.42], stone: [0.55, 0.95], joint: 0.01, bevel: 0.015, warp: 0.004,
   split: 0, palette: [{ c: [0.36, 0.355, 0.34], w: 3 }, { c: [0.32, 0.32, 0.315], w: 2 }, { c: [0.39, 0.375, 0.35], w: 1 }],
   mortar: [0.34, 0.335, 0.31], bright: 0.12, face: 0.1, pinning: 0, chip: 0.008, cracks: 0.5, strength: 6,
-});
+};
+export const ashlarSet = () => masonry(ASHLAR);
+export const rubbleSet = () => masonry(RUBBLE);
+export const dressedSet = () => masonry(DRESSED);
 
 /** Overlapping slates: rows of 0.2 m exposure, staggered, varied widths and shades, moss in the laps. */
 export function slate(): TexSet {
