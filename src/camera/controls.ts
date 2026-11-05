@@ -7,6 +7,7 @@ import { castleCentre, gatehouseFrame } from '../castle/layout';
 import { GATEHOUSE } from '../castle/spec';
 import { add, scale } from '../core/math2d';
 import type { InputSource } from '../player/input';
+import type { Look } from './mouseLook';
 import type { PlayerController } from '../player/controller';
 import { TUNING } from '../player/movement';
 
@@ -41,8 +42,8 @@ export function aim(from: THREE.Vector3, to: THREE.Vector3) {
   return { yaw: Math.atan2(-d.x, -d.z), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) };
 }
 
-/** What the rig needs from input: keys and look for fly mode, and control over mouse look / lock. */
-export interface RigInput extends InputSource { lookEnabled: boolean; readonly locked: boolean; exitLock(): void }
+/** The mouse-look parts the rig uses (MouseLook from ./mouseLook, or a fake). */
+export interface MouseControl { readonly locked: boolean; release(): void }
 /** Something that can orbit (OrbitControls, or a fake in tests). */
 export interface Orbiter { enabled: boolean; target: THREE.Vector3; update(): void }
 
@@ -56,20 +57,23 @@ export class CameraRig {
   alpha: () => number = () => 1;
   /** Inside the player's boundary (where dropping into walk mode is allowed). */
   walkable: ((x: number, z: number) => boolean) | null = null;
-  private sens = 0.0022;
+  /** Mouse look, attached after construction (it reads and writes the rig's look). */
+  mouse: MouseControl | null = null;
   onModeChange?: (mode: Mode) => void;
 
-  constructor(public camera: THREE.PerspectiveCamera, public orbit: Orbiter, private input: RigInput) {}
+  constructor(public camera: THREE.PerspectiveCamera, public orbit: Orbiter, private keys: InputSource) {}
 
-  get locked() { return this.input.locked; }
-  get sensitivity() { return this.sens; }
-  set sensitivity(s: number) { this.sens = s; if (this.player) this.player.sensitivity = s; }
+  get locked() { return this.mouse?.locked ?? false; }
+  /** The head direction mouse look turns: the player's in walk mode, the fly camera's otherwise. */
+  getLook(): Look { return this.mode === 'walk' && this.player ? { yaw: this.player.yaw, pitch: this.player.pitch } : { yaw: this.yaw, pitch: this.pitch }; }
+  setLook(l: Look) {
+    if (this.mode === 'walk' && this.player) { this.player.yaw = l.yaw; this.player.pitch = l.pitch; } else { this.yaw = l.yaw; this.pitch = l.pitch; }
+  }
 
   setMode(m: Mode) {
     const prev = this.mode;
     this.mode = m;
-    if (m === 'orbit') this.input.exitLock();
-    this.input.lookEnabled = m !== 'orbit';
+    if (m === 'orbit') this.mouse?.release();
     this.orbit.enabled = m === 'orbit';
     this.player?.setActive(m === 'walk');
     if (m === 'walk' && prev !== 'walk') this.enterWalk();
@@ -128,10 +132,7 @@ export class CameraRig {
   update(dt: number) {
     if (this.mode === 'orbit') { this.orbit.update(); return; }
     if (this.mode === 'walk' && this.player) { this.player.frame(this.alpha(), dt); return; }
-    const [dx, dy] = this.input.look();
-    this.yaw -= dx * this.sens;
-    this.pitch = THREE.MathUtils.clamp(this.pitch - dy * this.sens, -1.5, 1.5);
-    const k = (...c: string[]) => this.input.down(...c);
+    const k = (...c: string[]) => this.keys.down(...c);
     const fwd = (k('KeyW', 'ArrowUp') ? 1 : 0) - (k('KeyS', 'ArrowDown') ? 1 : 0);
     const str = (k('KeyD', 'ArrowRight') ? 1 : 0) - (k('KeyA', 'ArrowLeft') ? 1 : 0);
     const up = (k('KeyE', 'Space') ? 1 : 0) - (k('KeyQ', 'KeyC') ? 1 : 0);

@@ -29,9 +29,8 @@ const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 export class PlayerController {
   /** Only the active player reads input and moves (walk mode). */
   active = false;
+  /** Head direction (radians); mouse look (src/camera/mouseLook.ts) writes it in walk mode. */
   yaw = 0; pitch = 0;
-  /** Radians per pixel of mouse movement. */
-  sensitivity = 0.0022;
   spawn = { x: 0, y: 3, z: 0, yaw: 0 };
   surface: Surface = 'grass';
   surfaceTag: string | undefined;
@@ -61,11 +60,6 @@ export class PlayerController {
   get crouched() { return this.motor.crouched; }
 
   setActive(on: boolean) { if (on && !this.active) this.input.take('Space'); this.active = on; }
-
-  look(dx: number, dy: number) {
-    this.yaw -= dx * this.sensitivity;
-    this.pitch = THREE.MathUtils.clamp(this.pitch - dy * this.sensitivity, -1.5, 1.5);
-  }
 
   /** Feet at (x, y, z). Clears velocity and camera smoothing. */
   teleport(x: number, y: number, z: number, yaw?: number, pitch?: number) {
@@ -122,10 +116,8 @@ export class PlayerController {
     this.onFootstep?.(this.surface, f.running, f.strength);
   }
 
-  /** Per rendered frame: apply mouse look, place the camera between the last two ticks. */
+  /** Per rendered frame: place the camera between the last two ticks. */
   frame(alpha: number, dt: number) {
-    const [dx, dy] = this.input.look();
-    if (this.active) this.look(dx, dy);
     const m = this.motor, v = this.view;
     this.eyeH = damp(this.eyeH, m.crouched ? T.crouchEye : T.eye, 12, dt);
     const [bu, bs] = headBob(m.phase, this.bobW, this.runMix);

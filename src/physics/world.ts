@@ -69,18 +69,24 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
   const fixed = new Set<(dt: number) => void>();
   let acc = 0, alpha = 0, triangles = 0, buildMs = 0, characters = 0;
   let stepMs = 0, stepMsMax = 0, ticks = 0;
+  // Rapier only refreshes its query structure in world.step(); queries right after adding colliders
+  // would miss them, so the first query after a change steps once (nothing dynamic lives here)
+  let dirty = false;
+  const fresh = () => { if (dirty) { world.step(); dirty = false; } };
   const timed = <T>(f: () => T): T => { const t = clock.now(); const r = f(); buildMs += clock.now() - t; return r; };
 
   const addSoup = (s: TriSoup, tag: string, grp: number) => {
     if (!s.indices.length) return;
     timed(() => tags.set(world.createCollider(RAPIER.ColliderDesc.trimesh(s.vertices, s.indices).setCollisionGroups(grp).setFriction(0.8)).handle, tag));
     triangles += s.indices.length / 3;
+    dirty = true;
   };
 
   const tick = () => {
     const t = clock.now();
     for (const cb of fixed) cb(DT);
     world.step();
+    dirty = false;
     const ms = clock.now() - t;
     stepMs = ticks ? stepMs * 0.95 + ms * 0.05 : ms; stepMsMax = Math.max(stepMsMax * 0.999, ms); ticks++;
   };
@@ -109,12 +115,14 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       body.setNextKinematicTranslation(c);
     };
     characters++;
+    dirty = true;
     tags.set(collider.handle, 'character');
     let alive = true;
     return {
       id: collider.handle,
       feet: () => [feet[0], feet[1], feet[2]],
       move(d) {
+        fresh();
         kcc.computeColliderMovement(collider, { x: d[0], y: d[1], z: d[2] }, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, G.character);
         const m = kcc.computedMovement();
         const hits: CharacterHit[] = [];
@@ -130,6 +138,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       setHeight(h) { hh = half(h); collider.setHalfHeight(hh); place(true); },
       fits(h) {
         const c = { x: feet[0], y: feet[1] + half(h) + shape.radius + shape.skin + 0.03, z: feet[2] };
+        fresh();
         return !world.intersectionWithShape(c, { x: 0, y: 0, z: 0, w: 1 }, new RAPIER.Capsule(half(h), shape.radius - 0.02), RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, G.character, collider);
       },
       remove() { if (!alive) return; alive = false; characters--; tags.delete(collider.handle); world.removeCharacterController(kcc); world.removeRigidBody(body); },
@@ -182,13 +191,14 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
       const c = world.createCollider(RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]).setCollisionGroups(G.door), body);
       tags.set(c.handle, tag);
+      dirty = true;
       let placed = false, alive = true;
       return {
         setPose(p: V3, q: Quat) {
           if (!alive) return;
           const tr = { x: p[0], y: p[1], z: p[2] }, rot = { x: q[0], y: q[1], z: q[2], w: q[3] };
           // the first pose teleports, later ones move so contacts see a real velocity
-          if (!placed) { body.setTranslation(tr, true); body.setRotation(rot, true); world.propagateModifiedBodyPositionsToColliders(); placed = true; }
+          if (!placed) { body.setTranslation(tr, true); body.setRotation(rot, true); world.propagateModifiedBodyPositionsToColliders(); placed = true; dirty = true; }
           body.setNextKinematicTranslation(tr); body.setNextKinematicRotation(rot);
         },
         remove() { if (!alive) return; alive = false; tags.delete(c.handle); world.removeRigidBody(body); },
@@ -199,6 +209,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       const l = Math.hypot(dir[0], dir[1], dir[2]) || 1;
       ray.origin = { x: from[0], y: from[1], z: from[2] };
       ray.dir = { x: dir[0] / l, y: dir[1] / l, z: dir[2] / l };
+      fresh();
       const hit = world.castRayAndGetNormal(ray, maxDist, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, G.ray);
       if (!hit) return null;
       const d = hit.timeOfImpact;

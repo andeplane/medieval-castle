@@ -14,7 +14,7 @@ function hitEdge(poly: V2[], from: V2, d: V2, start: number, inside: (x: number,
   return 400;
 }
 
-export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (poly: V2[], x: number, z: number) => boolean) {
+export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (poly: V2[], x: number, z: number) => boolean, groundAt?: (x: number, z: number) => number) {
   const r = rngFor('bridge');
   const g = gatehouseFrame();
   const d = norm(add(g.out, [0.12, 0])); // slightly skewed, as old bridges often are
@@ -41,6 +41,16 @@ export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (pol
     }
   };
   block(-1.5, 2.0, deck, false);
+  // the lawn dips by the bridge head: worn stone steps climb from it to the deck, so it can be walked
+  if (groundAt) {
+    const g = Math.min(...[-1.6, -2.5, -3.5, -4.5].map((t) => groundAt(...P(t, 0))));
+    const n = Math.max(0, Math.ceil((deck - g) / 0.19 - 0.6)), rise = (deck - g) / (n + 1);
+    for (let k = 1; k <= n; k++) {
+      // nested blocks: step k runs from its nosing to the abutment face at t = −1.5
+      const L = (n - k + 1) * 0.34, c = P(-1.5 - L / 2, 0), top = g + rise * k, bottom = g - 0.6;
+      B.box('trim', [c[0], (top + bottom) / 2, c[1]], [L, top - bottom, W + 0.4 - 0.04 * k], d);
+    }
+  }
   block(span - 2.0, span + 1.5, deck, false);
   for (const t of piers) block(t - pierW / 2, t + pierW / 2, deck - 0.4, true);
 

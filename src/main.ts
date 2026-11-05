@@ -3,7 +3,7 @@
 // ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
 // ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn).
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, builtinAOContext, screenUV } from 'three/tsl';
+import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
@@ -12,13 +12,14 @@ import { buildRevetment } from './castle/revetment';
 import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
-import { buildTrees } from './world/trees';
+import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
-import { installHooks } from './debug/hooks';
+import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
 import { buildCourse, type CourseInfo } from './debug/testcourse';
-import { BrowserInput, ScriptedInput, MergedInput } from './player/input';
+import { KeyboardInput, ScriptedInput, MergedInput } from './player/input';
+import { MouseLook } from './camera/mouseLook';
 import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -37,7 +38,7 @@ async function main() {
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // soft PCF; PCFSoftShadowMap is deprecated in r187
   document.body.appendChild(renderer.domElement);
   if (params.has('debug')) {
     const { Inspector } = await import('three/addons/inspector/Inspector.js');
@@ -54,7 +55,7 @@ async function main() {
 
   await say('RAISING THE WALLS…');
   const { builder, lights } = buildCastle();
-  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
+  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, heightAt);
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
   const castle = builder.build(mats);
@@ -76,25 +77,43 @@ async function main() {
   scene.add(water);
 
   await say('PLANTING TREES…');
-  let trees: THREE.Group | null = null;
-  try { trees = buildTrees(VIEWS.map((v) => [v.pos[0], v.pos[2]])); scene.add(trees); } catch (e) { console.error('trees failed', e); }
+  let veg: Vegetation | null = null;
+  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
-  // post: GTAO from a single-sampled normal pre-pass, then the main pass (threejs-postprocessing)
+  // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
+  // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
   const pipeline = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
+  let aoTex: THREE.Node | null = null;
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
-    scenePass.contextNode = builtinAOContext(aoPass.getTextureNode().sample(screenUV).r);
+    // metre-scale occlusion so window reveals, corbels and machicolations read with depth
+    aoPass.radius.value = 1.1; aoPass.thickness.value = 1.5; aoPass.scale.value = 1.2; aoPass.distanceExponent.value = 1.3;
+    const aoNode = aoPass.getTextureNode();
+    aoTex = aoNode;
+    // half-res AO turns to noise far away; fade it out with distance (the textures carry their own AO)
+    const aoFar = smoothstep(110, 260, positionView.z.negate());
+    scenePass.contextNode = builtinAOContext(mix(aoNode.sample(screenUV).r, float(1), aoFar));
   }
-  pipeline.outputNode = scenePass;
+  if (params.get('grade') !== '0') {
+    // after tone mapping: a touch less saturation (candy greens and blues read as CG), a gentle
+    // S-curve, warm highlights and neutral shadows (STYLE.md light)
+    pipeline.outputColorTransform = false;
+    const c = renderOutput(scenePass).rgb, l = luminance(c);
+    let g = mix(vec3(l), c, 0.88);
+    g = g.sub(0.5).mul(1.07).add(0.5);
+    g = g.mul(mix(vec3(0.995, 1.0, 1.01), vec3(1.025, 1.0, 0.965), smoothstep(0.35, 0.9, l)));
+    pipeline.outputNode = vec4(clamp(g, 0, 1), 1);
+  } else pipeline.outputNode = scenePass;
+  if (params.has('aoview') && aoTex) { pipeline.outputColorTransform = true; pipeline.outputNode = aoTex; }
   void output;
 
   // physics + player (G.1): colliders are built here, before the ready flag
   await say('LAYING THE FLOORS…');
-  const input = new BrowserInput(window, document, renderer.domElement);
+  const input = new KeyboardInput(window);
   const scripted = new ScriptedInput();
   const footsteps = new Footsteps(browserAudio(window));
   const interior = (window as unknown as { __game?: { interior?: InteriorCollision } }).__game?.interior ?? null;
@@ -112,8 +131,16 @@ async function main() {
   rig.player = player;
   rig.alpha = () => physics.alpha;
   rig.walkable = play.walkable;
-  player.sensitivity = rig.sensitivity;
-  try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) rig.sensitivity = s; } catch { /* storage blocked */ }
+  const mouse = new MouseLook({
+    el: renderer.domElement, doc: document,
+    enabled: () => rig.mode !== 'orbit',
+    get: () => rig.getLook(), set: (l) => rig.setLook(l),
+    // clear held keys on release so the player does not keep walking after Esc
+    onLockChange: (locked) => { if (!locked) input.clear(); syncMode(); },
+  });
+  rig.mouse = mouse;
+  input.capture = () => mouse.locked;
+  try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) mouse.sensitivity = s; } catch { /* storage blocked */ }
   const tick = (dt: number) => { physics.step(dt); rig.update(dt); };
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
@@ -141,7 +168,6 @@ async function main() {
     help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
     crosshair.hidden = !rig.locked;
   };
-  input.onLockChange = syncMode;
   rig.onModeChange = () => syncMode();
   input.onPress = (code) => {
     footsteps.unlock();
@@ -163,8 +189,8 @@ async function main() {
   modeRow.appendChild(time);
   const sens = document.createElement('label');
   sens.innerHTML = 'Mouse <input type="range" min="0.0008" max="0.006" step="0.0001">';
-  const sensIn = sens.querySelector('input')!; sensIn.value = String(rig.sensitivity);
-  sensIn.oninput = () => { rig.sensitivity = Number(sensIn.value); try { localStorage.setItem('mouseSens', sensIn.value); } catch { /* private mode */ } };
+  const sensIn = sens.querySelector('input')!; sensIn.value = String(mouse.sensitivity);
+  sensIn.oninput = () => { mouse.sensitivity = Number(sensIn.value); try { localStorage.setItem('mouseSens', sensIn.value); } catch { /* private mode */ } };
   modeRow.appendChild(sens);
   for (const v of VIEWS) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => { rig.go(v); syncMode(); }; viewRow.appendChild(b); }
   ui.append(modeRow, viewRow);
@@ -178,14 +204,14 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
-    renderNow: async () => { pipeline.render(); },
+    renderNow: async () => { veg?.update(camera); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior,
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       physics: { ...physics.stats(), ...play.timings },
     }),
-  });
+  }, window as unknown as HookWindow, systemClock);
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
@@ -202,6 +228,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     tick(dt);
+    veg?.update(camera);
     pipeline.render();
   });
   // two frames, then reveal

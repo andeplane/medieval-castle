@@ -7,9 +7,17 @@ import { VIEWS } from '../camera/controls';
 import type { Physics } from '../physics/world';
 import type { PlayerController } from '../player/controller';
 import type { ScriptedInput } from '../player/input';
+import type { Clock } from '../core/clock';
+
+/** The window the hooks live on (injected; tests pass a fake). */
+export interface HookWindow {
+  addEventListener(type: 'error', l: (e: { message: string }) => void): void;
+  addEventListener(type: 'unhandledrejection', l: (e: { reason: unknown }) => void): void;
+  __game?: unknown; render_game_to_text?: () => string;
+}
 
 export interface HookDeps {
-  renderer: THREE.WebGPURenderer; camera: THREE.PerspectiveCamera; rig: CameraRig;
+  renderer: Pick<THREE.WebGPURenderer, 'backend'>; camera: THREE.PerspectiveCamera; rig: CameraRig;
   setTime(h: number): void; getTime(): number; renderNow(): Promise<void>; stats(): Record<string, unknown>;
   tick(dt: number): void;
   physics: Physics; player: PlayerController; input: ScriptedInput;
@@ -17,12 +25,12 @@ export interface HookDeps {
 }
 
 const r = (n: number) => Math.round(n * 100) / 100;
-const errors: string[] = [];
-addEventListener('error', (e) => errors.push(String(e.message)));
-addEventListener('unhandledrejection', (e) => errors.push(String(e.reason)));
 
-export function installHooks(d: HookDeps) {
+export function installHooks(d: HookDeps, w: HookWindow, clock: Clock) {
   const { player, physics, input } = d;
+  const errors: string[] = [];
+  w.addEventListener('error', (e) => errors.push(String(e.message)));
+  w.addEventListener('unhandledrejection', (e) => errors.push(String(e.reason)));
   const hooks = {
     version: 2,
     ready: false,
@@ -38,6 +46,8 @@ export function installHooks(d: HookDeps) {
     views: () => VIEWS.map((v) => v.name),
     setCamera: (name: string) => { const v = VIEWS.find((x) => x.name === name); if (v) d.rig.go(v); return !!v; },
     setMode: (m: 'orbit' | 'fly' | 'walk') => d.rig.setMode(m),
+    /** free camera pose for close-up material checks: setPose([x,y,z],[tx,ty,tz]) */
+    setPose: (pos: [number, number, number], target: [number, number, number]) => d.rig.go({ name: 'pose', label: 'pose', mode: 'fly', pos, target }),
     setTime: (h: number) => d.setTime(h),
     step: async (n = 1) => { for (let i = 0; i < n; i++) { d.tick(1 / 60); await d.renderNow(); } },
     player: {
@@ -66,9 +76,9 @@ export function installHooks(d: HookDeps) {
       const trace: [number, number, number, boolean][] = [];
       let groundedTicks = 0, maxMs = 0, sum = 0;
       for (let i = 0; i < n; i++) {
-        const t = performance.now();
+        const t = clock.now();
         physics.tick();
-        const dt = performance.now() - t; sum += dt; maxMs = Math.max(maxMs, dt);
+        const dt = clock.now() - t; sum += dt; maxMs = Math.max(maxMs, dt);
         if (player.grounded) groundedTicks++;
         if (opts.traceEvery && i % opts.traceEvery === 0) trace.push([r(player.feet[0]), r(player.feet[1]), r(player.feet[2]), player.grounded]);
       }
@@ -80,10 +90,9 @@ export function installHooks(d: HookDeps) {
     course: d.course,
     interior: d.interior,
   };
-  const w = window as unknown as Record<string, unknown>;
   // keep anything another module already published (e.g. __game.interior from the shell)
-  const prev = (w.__game ?? {}) as Record<string, unknown>;
-  w.__game = Object.assign(prev, hooks);
+  const game = Object.assign((w.__game ?? {}) as Record<string, unknown>, hooks) as typeof hooks;
+  w.__game = game;
   w.render_game_to_text = () => JSON.stringify(hooks.state());
-  return w.__game as typeof hooks;
+  return game;
 }
