@@ -4,12 +4,16 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { heightAt, islandWalkable } from '../world/terrain';
-import { castleCentre } from '../castle/layout';
+import { castleCentre, gatehouseFrame } from '../castle/layout';
+import { GATEHOUSE, GROUND } from '../castle/spec';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
 export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
 
 const C = castleCentre();
+// in front of the main gate, a little off-axis, looking into the gate passage
+const GF = gatehouseFrame(), gAt = (s: number, d: number) => [GF.base[0] + GF.dir[0] * s + GF.out[0] * d, GF.base[1] + GF.dir[1] * s + GF.out[1] * d];
+const gEye = gAt(1.4, GATEHOUSE.project + 6.5), gLook = gAt(0, GATEHOUSE.project - 1.5);
 export const VIEWS: View[] = [
   { name: 'hero', label: 'Hero', mode: 'orbit', pos: [118, 52, 132], target: [C[0], 22, C[1]] },
   { name: 'aerial', label: 'Aerial', mode: 'orbit', pos: [-150, 150, 175], target: [C[0], 12, C[1]] },
@@ -20,6 +24,7 @@ export const VIEWS: View[] = [
   { name: 'courtyard', label: 'Courtyard', mode: 'walk', pos: [-11, 0, 4], target: [12, 22, -8] },
   { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-24, 56, -16], target: [80, 20, 160] },
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
+  { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
 ];
 
 export class CameraRig {
@@ -29,6 +34,10 @@ export class CameraRig {
   private yaw = 0; private pitch = 0;
   private dragging = false;
   speed = { fly: 22, walk: 4.2 };
+  /** Where walk mode may step (doors widen this into an open gate passage). */
+  canWalk: (x: number, z: number) => boolean = islandWalkable;
+  /** Ground height under the camera (walk eye height, fly floor). */
+  groundAt: (x: number, z: number) => number = heightAt;
 
   constructor(public camera: THREE.PerspectiveCamera, dom: HTMLElement) {
     this.orbit = new OrbitControls(camera, dom);
@@ -61,12 +70,13 @@ export class CameraRig {
 
   go(v: View) {
     const p = new THREE.Vector3(...v.pos);
-    if (v.mode === 'walk') p.y = heightAt(p.x, p.z) + 1.7;
+    if (v.mode === 'walk') p.y = this.groundAt(p.x, p.z) + 1.7;
     this.camera.position.copy(p);
     this.camera.lookAt(new THREE.Vector3(...v.target));
     this.orbit.target.set(...v.target);
     this.setMode(v.mode);
-    this.orbit.update();
+    // OrbitControls.update() would push a close walk/fly bookmark out to minDistance
+    if (v.mode === 'orbit') this.orbit.update();
   }
 
   update(dt: number) {
@@ -83,7 +93,7 @@ export class CameraRig {
       const moveDir = new THREE.Vector3().addScaledVector(look, fwd).addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion), str);
       moveDir.y += v.y;
       this.camera.position.addScaledVector(moveDir, this.speed.fly * fast * dt);
-      const floor = heightAt(this.camera.position.x, this.camera.position.z) + 1.0;
+      const floor = this.groundAt(this.camera.position.x, this.camera.position.z) + 1.0;
       if (this.camera.position.y < floor) this.camera.position.y = floor;
     } else {
       const f = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)), rgt = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -92,9 +102,9 @@ export class CameraRig {
       const p = this.camera.position;
       // slide along obstacles: try full step, then each axis
       for (const s of [step, new THREE.Vector3(step.x, 0, 0), new THREE.Vector3(0, 0, step.z)]) {
-        if (islandWalkable(p.x + s.x, p.z + s.z)) { p.x += s.x; p.z += s.z; break; }
+        if (this.canWalk(p.x + s.x, p.z + s.z)) { p.x += s.x; p.z += s.z; break; }
       }
-      const target = heightAt(p.x, p.z) + 1.7;
+      const target = this.groundAt(p.x, p.z) + 1.7;
       p.y += (target - p.y) * Math.min(1, dt * 12);
     }
   }

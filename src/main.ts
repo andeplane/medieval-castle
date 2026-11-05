@@ -8,13 +8,16 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildTrees } from './world/trees';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
+import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
+import { createInteraction } from './game/interact';
+import { DoorAudio } from './game/doorAudio';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
@@ -22,6 +25,7 @@ const say = (s: string) => { loading.textContent = s; return new Promise((r) => 
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(); }
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -50,6 +54,11 @@ async function main() {
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(castle);
+  // the main gate: two leaves with a wicket, and the portcullis (until the shell emits all DoorSpecs)
+  const audio = new DoorAudio(camera);
+  const gateSpecs = gateDoorSpecs();
+  const doors = buildDoors(gateSpecs, M, undefined, { portcullis: [gatePortcullisSpec()], sound: audio, initial: params.has('doors') ? Number(params.get('doors')) : undefined });
+  scene.add(doors.object);
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
@@ -75,6 +84,16 @@ async function main() {
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
+  // walk mode may step into the gate passage when the leaves and portcullis let you
+  const feet = new THREE.Vector3();
+  rig.canWalk = (x, z) => {
+    feet.set(x, camera.position.y - 0.8, z);
+    if (doors.blocksPlayer(feet)) return false;
+    return islandWalkable(x, z) || gateSpecs.some((d) => inDoorway(d, x, z));
+  };
+  // the passage floor is the gate sill, not the terrain under the gatehouse
+  rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
@@ -88,8 +107,8 @@ async function main() {
   const help = document.getElementById('help')!;
   const helpText: Record<Mode, string> = {
     orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'WASD move · E/Q up/down · Shift fast · drag (or double-click to lock) to look',
-    walk: 'WASD walk · Shift run · drag (or double-click to lock) to look',
+    fly: 'WASD move · E/Q up/down · Shift fast · drag (or double-click to lock) to look · click (locked) to use',
+    walk: 'WASD walk · Shift run · drag (or double-click to lock) to look · E to open the gate',
   };
   const syncMode = () => { for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode); help.textContent = helpText[rig.mode]; };
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
@@ -115,8 +134,11 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { pipeline.render(); },
+    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    use: () => interaction.use(),
+    doors,
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
@@ -136,6 +158,8 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    doors.update(dt, camera.position);
+    interaction.update();
     pipeline.render();
   });
   // two frames, then reveal

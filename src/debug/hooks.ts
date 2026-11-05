@@ -7,6 +7,11 @@ import { VIEWS } from '../camera/controls';
 export interface HookDeps {
   renderer: THREE.WebGPURenderer; camera: THREE.PerspectiveCamera; rig: CameraRig;
   setTime(h: number): void; getTime(): number; renderNow(): Promise<void>; stats(): Record<string, unknown>;
+  /** Advance game systems (doors…) by dt without rendering. */
+  tick?(dt: number): void;
+  /** Use whatever is under the crosshair (E). */
+  use?(): boolean;
+  doors?: { state(): Record<string, number>; setOpen(id: string, open: boolean, instant?: boolean): void };
 }
 
 const r = (n: number) => Math.round(n * 100) / 100;
@@ -29,7 +34,15 @@ export function installHooks(d: HookDeps) {
     views: () => VIEWS.map((v) => v.name),
     setCamera: (name: string) => { const v = VIEWS.find((x) => x.name === name); if (v) d.rig.go(v); return !!v; },
     setTime: (h: number) => d.setTime(h),
-    step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); await d.renderNow(); } },
+    step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); d.tick?.(1 / 60); await d.renderNow(); } },
+    /** Use what the crosshair is on; returns whether anything was used. */
+    use: () => d.use?.() ?? false,
+    /** Doors: state() = openness 0..1 per id; setOpen(id, open, instant); tick(seconds) advances without rendering. */
+    doors: d.doors && {
+      state: () => d.doors!.state(),
+      setOpen: (id: string, open: boolean, instant = false) => d.doors!.setOpen(id, open, instant),
+      tick: (seconds = 1) => { for (let t = 0; t < seconds; t += 1 / 60) d.tick?.(1 / 60); return d.doors!.state(); },
+    },
   };
   const w = window as unknown as Record<string, unknown>;
   w.__game = hooks;
