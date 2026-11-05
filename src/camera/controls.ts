@@ -26,6 +26,9 @@ export const VIEWS: View[] = [
   { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-28, 56, -12], target: [80, 20, 160] }, // over the keep's south parapet, clear of the cap house and the corner turret
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
   { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
+  // walk views of the moat edge: by the bridge looking along it, and along the revetment
+  { name: 'bridge', label: 'Bridge', mode: 'walk', pos: [20.7, 0, 53.4], target: [14.5, 1.2, 67.8] },
+  { name: 'rim', label: 'Moat edge', mode: 'walk', pos: [48.4, 0, 32.0], target: [59.5, 1.2, 13.5] },
 ];
 
 export class CameraRig {
