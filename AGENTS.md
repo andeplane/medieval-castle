@@ -5,8 +5,8 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 ## Commands
 - `npm run dev`: dev server (WebGPU; add `?webgl` to force WebGL2).
 - `npm test`: plan and generator tests (fast, < 5 s). `npm run coverage` adds a v8 coverage report with per-folder thresholds (`vitest.config.ts`).
-- `npm run build`: typecheck + production build.
-- `npm run shots [view…]`: with the dev server running, capture camera bookmarks to `shots/` (headless WebGL2). Env: `W`, `H`, `QUERY` (e.g. `ao=0`), `OUT`.
+- `npm run build`: typecheck + production build (pages `index.html` and `props.html`).
+- `npm run shots [view…]`: with the dev server running, capture camera bookmarks to `shots/` (headless WebGL2). Env: `W`, `H`, `QUERY` (e.g. `ao=0`), `OUT`, `URL` (e.g. `http://localhost:5173/props.html` for the prop kit).
 
 ## Rules
 - Coordinates: x east, y up, z south, metres. Moat water y = 0, island ground ≈ 2.6.
