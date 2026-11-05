@@ -7,6 +7,7 @@
 | [andeplane/gamevibing](https://github.com/andeplane/gamevibing) | all 19 `game-*` skills | owner's repo |
 | [CloudAI-X/threejs-skills](https://github.com/CloudAI-X/threejs-skills) | 13 `threejs-*` API skills (fundamentals, materials, shaders, lighting, postprocessing, …) | MIT |
 | [majidmanzarpour/threejs-game-skills](https://github.com/majidmanzarpour/threejs-game-skills) | game director, AAA graphics builder, QA/release, debug profiler, 3D/image/audio generators, gameplay systems, game UI | MIT |
+| [pbakaus/impeccable](https://github.com/pbakaus/impeccable) | `impeccable` frontend design skill (critique, audit, polish, typeset, layout, animate …) for every UI surface: HUD, menus, loading screen, review pages | Apache-2.0 |
 | [gamedev-skills/awesome-gamedev-agent-skills](https://github.com/gamedev-skills/awesome-gamedev-agent-skills) | game-feel, procedural-gen, level-design, physics-tuning, shader-programming, performance-optimization, camera-systems, audio-design, create-game-assets, input-systems (engine-agnostic disciplines only) | Apache-2.0 |
 
 Not vendored (no licence file), install per machine:
@@ -21,4 +22,5 @@ Update everything:
 npx skills add andeplane/gamevibing --skill '*' -a claude-code -y --copy
 npx skills add CloudAI-X/threejs-skills --skill '*' -a claude-code -y --copy
 npx skills add majidmanzarpour/threejs-game-skills --skill '*' -a claude-code -y --copy
+npx skills add pbakaus/impeccable --skill '*' -a claude-code -y --copy
 ```
