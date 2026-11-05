@@ -33,6 +33,11 @@ export function installHooks(d: HookDeps) {
       d.rig.go({ name: 'custom', label: 'Custom', mode, pos, target });
       if (mode === 'fly') d.camera.position.set(...pos); // go() lets the orbit control clamp to its 8 m minimum; same ray, so the look direction holds
     },
+    /** free camera pose for close-up material checks: setPose([x,y,z],[tx,ty,tz]) */
+    setPose: (pos: [number, number, number], target: [number, number, number]) => {
+      d.rig.go({ name: 'pose', label: 'pose', mode: 'fly', pos, target });
+      d.camera.position.set(...pos);
+    },
     setTime: (h: number) => d.setTime(h),
     step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); await d.renderNow(); } },
   };
