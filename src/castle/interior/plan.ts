@@ -20,9 +20,9 @@ import { pointInPoly } from '../../core/math2d';
 import { floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND, type Phase, type TowerSpec } from '../spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, castleCentre, islandOutline, moatOuter, outerPoly, type WingQuad } from '../layout';
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
-import { spiralStartFor, validateStair, type StairOpts } from './stairs';
-import { masses, fits, boxOf, type Face } from '../openings';
-import { placeLeaves, leafPoint, leafDepth, m4swing, LIP } from './doorGeom';
+import { spiralStartFor, validateStair, planStair, spiralNosingY, type StairOpts, type SpiralPlan } from './stairs';
+import { masses, fits, boxOf, type Face, type DoorHole } from '../openings';
+import { placeLeaves, leafPoint, leafMatrix, m4apply, leafDepth, m4swing, LIP, doorOutlines, stopPlane, type LeafPlace } from './doorGeom';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -673,27 +673,69 @@ export function planInterior(seed = WORLD_SEED): PlanX {
   return plan;
 }
 
+/** The plan's doors as the castle's walls see them: every wall a door passes through is cut with its outline. */
+export function doorHoles(P: PlanX): DoorHole[] {
+  return P.doors.map((d) => {
+    const { clear, reb } = doorOutlines(d, P.rise[d.id]), leafy = d.leaf && d.kind !== 'gate';
+    return { id: d.id, c: [d.centre[0], d.centre[2]], along: d.along, normal: d.normal, wall: d.wall, clear, reb, swing: leafy ? (d.swingInto === 1 ? 1 : -1) : 0, stop: stopPlane(d) };
+  });
+}
+
 /** Whether a door's leaf, swung through its whole arc, stays in its doorway (with the rebate) or the room it swings into. */
 export function leafSwingFits(P: Pick<InteriorPlan, 'rooms'>, d: DoorSpec): boolean {
   const [pl] = placeLeaves(d), r = P.rooms.find((x) => x.id === d.spaces[d.swingInto]);
   if (!pl || !r) return true;
-  const { zBack } = leafDepth(pl.kind);
-  for (let i = 0; i <= 24; i++) for (let k = 0; k <= 8; k++) for (const z of [zBack, 0]) {
-    const p = leafPoint(pl, m4swing((pl.maxAngle * i) / 24), [(pl.width * k) / 8, 1, z]);
-    const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
-    const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
-    if (Math.abs(across) <= d.width / 2 + LIP && Math.abs(through) <= d.wall / 2 + 0.15) continue;
-    if (!pointInPoly(r.poly, p[0], p[2])) return false;
+  const { zBack } = leafDepth(pl.kind), sx = pl.mirrored ? -1 : 1;
+  // a coarser sweep than the test's (the leaf's ends and middle; rooms are convex where doors meet them)
+  for (let i = 0; i <= 12; i++) {
+    const m = leafMatrix(pl, m4swing((pl.maxAngle * i) / 12));
+    for (let k = 0; k <= 2; k++) for (const z of [zBack, 0]) {
+      const p = m4apply(m, [(sx * pl.width * k) / 2, 1, z]);
+      const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
+      const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
+      if (Math.abs(across) <= d.width / 2 + LIP && Math.abs(through) <= d.wall / 2 + 0.15) continue;
+      if (!pointInPoly(r.poly, p[0], p[2])) return false;
+    }
   }
   return true;
 }
 
-/** Hang a leaf on its other jamb when, opened, it would swing into the room's side wall (a door near a corner). */
+/** Does a point lie in a leaf's sweep: the sector its board passes through from shut to fully open? */
+function inSweep(q: V3, L: LeafPlace): boolean {
+  const dx = q[0] - L.pivot[0], dz = q[2] - L.pivot[2];
+  const x = dx * L.eU[0] + dz * L.eU[1], z = dx * L.eV[0] + dz * L.eV[1], a = Math.atan2(z, x);
+  return q[1] > L.pivot[1] - 0.05 && q[1] < L.pivot[1] + L.height + 0.05 && Math.hypot(x, z) < L.width + 0.05 && a > -0.15 && a < L.maxAngle + 0.15;
+}
+/** Do two leaves' sweeps cross (one leaf, somewhere in its swing, inside the other's)? */
+function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
+  if (Math.hypot(a.pivot[0] - b.pivot[0], a.pivot[2] - b.pivot[2]) > a.width + b.width + 0.2 || Math.abs(a.pivot[1] - b.pivot[1]) > Math.max(a.height, b.height)) return false;
+  for (const [p, q] of [[a, b], [b, a]]) for (let i = 0; i <= 12; i++) for (let k = 1; k <= 4; k++) for (const y of [0.1, p.height / 2]) {
+    if (inSweep(leafPoint(p, m4swing((p.maxAngle * i) / 12), [(p.width * k) / 4, y, 0]), q)) return true;
+  }
+  return false;
+}
+
+/**
+ * Hang each leaf so that it opens: on its other jamb when it would swing into the room's side wall (a door
+ * near a corner) or across another leaf's swing; failing both, swing it into the other room.
+ */
 export function fitHinges(P: Pick<InteriorPlan, 'rooms' | 'doors'>): void {
+  const leaf = new Map(P.doors.map((d) => [d, placeLeaves(d)[0]]));
+  const ok = (d: DoorSpec) => {
+    const pl = leaf.get(d);
+    return !pl || (leafSwingFits(P, d) && !P.doors.some((o) => o !== d && leaf.get(o) && sweepsCross(pl, leaf.get(o)!)));
+  };
   for (const d of P.doors) {
-    if (leafSwingFits(P, d)) continue;
-    d.hinge = d.hinge === 'left' ? 'right' : 'left';
-    if (!leafSwingFits(P, d)) d.hinge = d.hinge === 'left' ? 'right' : 'left';
+    if (!leaf.get(d) || ok(d)) continue;
+    const was = { hinge: d.hinge, swingInto: d.swingInto };
+    const tries: Pick<DoorSpec, 'hinge' | 'swingInto'>[] = [{ hinge: d.hinge === 'left' ? 'right' : 'left', swingInto: d.swingInto }];
+    if (P.rooms.some((r) => r.id === d.spaces[1 - d.swingInto])) for (const hinge of ['left', 'right'] as const) tries.push({ hinge, swingInto: d.swingInto === 1 ? 0 : 1 });
+    let fixed = false;
+    for (const t of tries) {
+      Object.assign(d, t); leaf.set(d, placeLeaves(d)[0]);
+      if (ok(d)) { fixed = true; break; }
+    }
+    if (!fixed) { Object.assign(d, was); leaf.set(d, placeLeaves(d)[0]); }
   }
 }
 
@@ -740,6 +782,25 @@ export function doorHeadFits(P: PlanX, d: DoorSpec, rise = P.rise[d.id] ?? headR
   return archOutline(0, d.centre[1], d.width, d.height, d.head, rise).every(([u, y]) => tops.every((t) => y <= t(u) - HEAD_CLEAR + 1e-9));
 }
 
+/**
+ * Whether a door into a spiral stair, with its rebate (where the leaf's top goes), stays under the steps of the
+ * turn above it: in the doorway and 0.6 m into the drum, every point of the outline below their soffits.
+ */
+export function doorUnderSteps(sp: SpiralPlan, d: DoorSpec, rise = headRise(d.head, d.width)): boolean {
+  const T = Math.PI * 2, c: V2 = [d.centre[0], d.centre[2]], k = d.spaces.indexOf(sp.id) === 0 ? -1 : 1;
+  const lip = d.leaf && d.kind !== 'gate' ? LIP : 0;
+  for (const [u, y] of archOutline(0, d.centre[1], d.width + 2 * lip, d.height + lip, d.head, rise + lip)) for (let t = 0; t <= d.wall / 2 + 0.6; t += 0.1) {
+    const p = add(add(c, scale(d.along, u)), scale(d.normal, k * t)), ex = p[0] - sp.c[0], ez = p[1] - sp.c[1], r = Math.hypot(ex, ez);
+    if (r < sp.rn || r > sp.R) continue;
+    const prog0 = (Math.atan2(ez, ex) - sp.theta0) * sp.dir;
+    for (const st of sp.steps) {
+      const prog = prog0 + Math.round((st.a0 - prog0) / T) * T;
+      if (prog >= st.a0 && prog <= st.a1 && st.y > y && !st.solid && y > spiralNosingY(sp, prog) - sp.T - 0.02) return false;
+    }
+  }
+  return true;
+}
+
 /** Options the shell builds a plan's stair with (and the validator checks it with). */
 export function stairOpts(P: InteriorPlan, s: StairSpec): StairOpts {
   const r = P.rooms.find((x) => x.id === s.id);
@@ -756,10 +817,13 @@ export const HEAD_CLEAR = 0.15;
  */
 export function fitDoorHeads(P: PlanX): void {
   const flatter: Record<Head, Head | null> = { round: 'segmental', pointed: 'segmental', segmental: 'flat', flat: null };
+  const spirals = P.stairs.filter((s) => s.kind === 'spiral').map((s) => planStair(s, stairOpts(P, s)) as SpiralPlan);
   for (const d of P.doors) {
     let rise = P.rise[d.id] ?? headRise(d.head, d.width);
     let changed = false;
-    for (let it = 0; it < 200 && !doorHeadFits(P, d, rise); it++) {
+    const stairs = spirals.filter((sp) => d.spaces.includes(sp.id));
+    const fit = () => doorHeadFits(P, d, rise) && stairs.every((sp) => doorUnderSteps(sp, d, rise));
+    for (let it = 0; it < 200 && !fit(); it++) {
       if (d.height > 2.0 + 1e-6) d.height = Math.max(2.0, d.height - 0.05);
       else if (d.leaf) {
         // leaves take their head shape from DoorSpec.head alone, so flatten the head type instead

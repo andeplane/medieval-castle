@@ -15,6 +15,7 @@
 //   HEAD_RISE.segmental·w, flat 0. `openingOutline` gives the clear outline the shell should cut.
 import type { DoorSpec, V3 } from './types';
 import type { V2 } from '../../core/math2d';
+import { archOutline } from './geom';
 
 export const LIP = 0.08;          // rebate recess beyond the clear opening (per side and at the head)
 export const GROW = 0.05;         // leaf beyond the clear opening: how far it laps the stop
@@ -61,6 +62,27 @@ export function openingOutline(head: DoorSpec['head'], w: number, h: number, seg
   if (head === 'flat') return [...pts, [W / 2, h + grow], [-W / 2, h + grow]];
   for (let i = 0; i <= seg * 2; i++) { const s = W / 2 - (W * i) / (seg * 2); pts.push([s, top(s)]); }
   return pts;
+}
+
+/**
+ * The two outlines of a door, in (u across along `DoorSpec.along`, y absolute): the clear opening, and the
+ * rebate recess round a leaf (the clear outline grown by LIP with the same arc centres, point for point;
+ * the clear outline for a door without a leaf). Every wall the door passes through is cut with one of
+ * them, and its reveals follow them: the shell's room faces and reveals, the castle's wall faces
+ * (openings.ts doorHoles) and the leaf (inset from the rebate by LIP − GROW).
+ * `rise` overrides the head's rise for an open arch (PlanX.rise); leaves always take headRise.
+ */
+export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2[] } {
+  const leafy = d.leaf && d.kind !== 'gate', y = d.centre[1];
+  const clear = archOutline(0, y, d.width, d.height, d.head, leafy ? headRise(d.head, d.width) : rise ?? headRise(d.head, d.width));
+  if (!leafy) return { clear, reb: clear };
+  const grown = headTop(d.head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
+  return { clear, reb: clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)])) };
+}
+
+/** Where the stop is, from the wall's mid-plane toward the swing side (0 for a door without a leaf). */
+export function stopPlane(d: DoorSpec): number {
+  return d.leaf && d.kind !== 'gate' ? d.wall / 2 - stopDepth(d, d.kind) : 0;
 }
 
 // ------------------------------------------------------------------------------------- frames

@@ -5,6 +5,7 @@ import * as THREE from 'three/webgpu';
 import { ShapeUtils, Vector2 } from 'three/webgpu';
 import type { V2 } from '../core/math2d';
 import type { StoneFace, Exclusion } from './stones/layout';
+import { doorHoleOn, type DoorHole } from './openings';
 
 export type MatKey = 'old' | 'new' | 'trim' | 'slate' | 'lead' | 'wood' | 'iron' | 'void' | 'glass';
 export const TILE: Record<MatKey, number> = { old: 4, new: 4, trim: 2, slate: 2, lead: 4, wood: 2, iron: 1, void: 1, glass: 1 };
@@ -61,6 +62,8 @@ const convexAt = (p: V2[], i: number) => {
 export class Builder {
   walls: WallRecord[] = [];
   curved: CurvedRecord[] = [];
+  /** The plan's doors: stones keep off their holes in every wall face (the interior carves the holes themselves). */
+  doorHoles: DoorHole[] = [];
   bins: Record<BinKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin(), pave: new Bin() };
 
   // Stone records (src/castle/stones): every rubble/ashlar wall face, and every solid that stands proud
@@ -111,7 +114,8 @@ export class Builder {
     this.planar(mat, f, [[0, y0], [L, y0], [L, y1], [0, y1]], 0, openings.map((o) => o.pts), u0);
     for (const o of openings) this.openingInsides(f, o);
     if (this.stoneOn && (mat === 'old' || mat === 'new') && L >= 0.4 && y1 - Math.max(y0, this.stoneFloor) >= 0.3) {
-      this.stoneFaces.push({ mat, geom: { kind: 'plane', o: f.o, r: f.r, n: f.n }, s0: 0, s1: L, y0: Math.max(y0, this.stoneFloor), y1, u0, holes: openings.map((o) => o.pts), ends, sil: this.stoneSil, owner: this.owner });
+      const doors = this.doorHoles.map((h) => doorHoleOn({ a, b, out, y0, y1 }, h)).filter((h): h is V2[] => !!h);
+      this.stoneFaces.push({ mat, geom: { kind: 'plane', o: f.o, r: f.r, n: f.n }, s0: 0, s1: L, y0: Math.max(y0, this.stoneFloor), y1, u0, holes: [...openings.map((o) => o.pts), ...doors], ends, sil: this.stoneSil, owner: this.owner });
     }
     return f;
   }

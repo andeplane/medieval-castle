@@ -20,6 +20,7 @@ import { GATEHOUSE } from '../src/castle/spec';
 import { buildDoors } from '../src/castle/interior/doors';
 import { portcullisInPlan } from '../src/castle/interior/portcullis';
 import { planInterior } from '../src/castle/interior/plan';
+import { buildInterior } from '../src/castle/interior';
 import { fakeClock, fakeView } from './helpers';
 import { mats, doorMats, terrainObject, islandCastle, ROCK } from './world';
 import type { BridgeInfo } from '../src/physics/boundary';
@@ -44,13 +45,14 @@ describe('walking the island', { timeout: 60_000 }, () => {
     const isl = islandCastle(), builder = isl.builder;
     bridge = isl.bridge;
     stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // the real 3D stones, as main.ts lays them
+    const interior = buildInterior(mats(), builder, { heightAt }); // as main.ts: the doorways (the gate among them) are the interior's cuts
     const castle = builder.build(mats());
     const cb = new Builder();
     course = buildCourse(cb);
     input = new ScriptedInput();
     play = await setupPlay({
       castle, terrain: terrainObject(), bridge, input, view, footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
-      interior: { collision: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 0, -200)], terrainHoles: [] },
+      interior: { collision: interior.collision, terrainHoles: [] },
       furniture: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 5, -200)],
       extra: { object: cb.build(mats()), holes: course.holes },
     });
@@ -61,7 +63,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     const t = play.timings;
     expect(t.castleTris).toBeGreaterThan(50_000);
     expect(t.terrainTris).toBeGreaterThan(10_000);
-    expect(t.interiorTris).toBe(12);
+    expect(t.interiorTris).toBeGreaterThan(10_000);
     expect(play.physics.raycast([-200, 9, -200], [0, -1, 0], 5)?.tag).toBe('furniture');
     expect(t.rockTris).toBe(12); // the near rock only
     expect(play.physics.raycast([ROCK[0], 60, ROCK[1]], [0, -1, 0], 80)?.tag).toBe('rock');
@@ -171,7 +173,13 @@ describe('walking the island', { timeout: 60_000 }, () => {
     stand(44, 27, face([44, 27], [20, -6])); probe(['KeyW', 'ShiftLeft'], 5);           // run at the east wing and slide along it
     stand(s.x, s.z, s.yaw + 0.55); probe(['KeyW'], 4); probe(['KeyW', 'KeyD'], 2);      // into the gatehouse front at an angle
     const gx = g.base[0] + g.out[0] * (GATEHOUSE.project + 1.5) + g.dir[0] * 4.5, gz = g.base[1] + g.out[1] * (GATEHOUSE.project + 1.5) + g.dir[1] * 4.5;
-    stand(gx, gz, face([gx, gz], g.base)); probe(['KeyW', 'ShiftLeft'], 2); probe(['KeyA', 'KeyW'], 2); // into the batter and along it
+    // into the batter square on, beside the gate (the gate itself is open: the plan's gate-main, cut by the interior), and along it
+    stand(gx, gz, face([gx, gz], [gx - g.out[0], gz - g.out[1]])); probe(['KeyW', 'ShiftLeft'], 2); probe(['KeyA', 'KeyW'], 2);
+    // through the gate rubbing each jamb (the gate passage is the interior's: its reveal and walls)
+    for (const [side, key] of [[-1, 'KeyA'], [1, 'KeyD']] as const) {
+      const jx = g.base[0] + g.out[0] * (GATEHOUSE.project + 3) + g.dir[0] * 1.6 * side, jz = g.base[1] + g.out[1] * (GATEHOUSE.project + 3) + g.dir[1] * 1.6 * side;
+      stand(jx, jz, face([jx, jz], [jx - g.out[0], jz - g.out[1]])); probe(['KeyW', key], 3);
+    }
     const b = course.lanes.find((l) => l.name === 'beam')!;
     play.player.teleport(b.x, course.slab, b.z0, 0, 0.5); probe(['KeyW', 'KeyC'], 2.4); probe(['KeyC'], 0.5); // crouched under the beam, looking up
     play.player.teleport(b.x, course.slab, b.z0, 0, 0); probe(['KeyW'], 3);              // head-first into the beam standing

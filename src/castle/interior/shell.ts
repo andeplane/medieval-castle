@@ -3,7 +3,8 @@
 // beams or a stone vault); the walls between cells are never drawn, only cut through:
 // - doors: reveal tunnels from one room face to the other, with a rebate step where the leaf closes;
 // - windows: splayed embrasures from the room face back to every exterior opening that lights it;
-// - the exterior shells are carved wherever an interior space or a doorway passes through them.
+// - the exterior shells are carved wherever an interior space or a doorway passes through them; a doorway
+//   is carved with the outlines its reveal follows (doorGeom doorOutlines), its only cut.
 import type { V2 } from '../../core/math2d';
 import { pointInPoly } from '../../core/math2d';
 import { Builder, wallFrame, type Frame, type MatKey, type Opening, type WallRecord, type CurvedRecord, at } from '../builder';
@@ -14,7 +15,7 @@ import { prismVolume, extrudeVolume, type Volume } from './carve';
 import { buildTunnel } from './tunnel';
 import { buildStair } from './stairs';
 import { grooveFromFront } from './portcullis';
-import { LIP, headTop, stopDepth } from './doorGeom';
+import { doorOutlines, stopPlane } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 
@@ -160,14 +161,10 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   function toEdge(e: Edge, p: V3): V2 { return [dot(sub([p[0], p[2]], e.a), norm(sub(e.b, e.a))), p[1]]; }
 
   function door(d: DoorSpec) {
-    const n = d.normal, al = d.along, c: V2 = [d.centre[0], d.centre[2]], y = d.centre[1];
+    const n = d.normal, al = d.along, c: V2 = [d.centre[0], d.centre[2]];
     const leafy = d.leaf && d.kind !== 'gate';
-    // a leaved door's outlines come from doorGeom, as its leaf does: the clear opening, and the rebate
-    // recess round the leaf (the clear outline grown by LIP, same arc centres, point for point)
-    const head: Head = d.head, rise = leafy ? headRise(head, d.width) : P.rise[d.id] ?? headRise(head, d.width);
-    const clear = archOutline(0, y, d.width, d.height, head, rise);
-    const grown = headTop(head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
-    const reb = leafy ? clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)])) : clear;
+    // the door's outlines (doorGeom): the same ones cut the castle's walls (openings.ts doorHoles) and place the leaf
+    const { clear, reb } = doorOutlines(d, P.rise[d.id]);
     // faces: for room sides, the room's actual edge (handles skew); for outside/courtyard, the mid-plane ± wall/2
     const sides = d.spaces.map((sp, k) => {
       const sgn = k === 0 ? -1 : 1, r = room.get(sp);
@@ -193,7 +190,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const owner = sides.find((s) => s.r)!.r!;
     const B = groupOf(owner).B;
     // the stop: just behind the shut leaf's back face (doorGeom places the leaf)
-    const rebT = d.leaf && d.kind !== 'gate' ? (swing === 1 ? 1 : -1) * (d.wall / 2 - stopDepth(d, d.kind)) : 0;
+    const rebT = (swing === 1 ? 1 : -1) * stopPlane(d);
     // reveal: from face 0 to the rebate plane with one outline, then the other to face 1
     const ring = (o: V2[], tA: (u: number) => number, tB: (u: number) => number) => {
       for (let i = 0; i < o.length; i++) {
@@ -223,15 +220,15 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       }
     }
     if (d.kind === 'gate') gateDetails(B, d, W, clear);
-    // carve the exterior where the doorway passes (both faces, a little beyond)
+    // the door's one cut through the castle: every castle surface in the doorway (wall faces, round-tower drums,
+    // batters, string courses) is carved with the outlines the reveal follows: the clear one from the non-swing
+    // face to the stop, the rebated one beyond it. castle.ts cuts no doors (openings.ts); windows keep off them.
     const t0 = Math.min(depthOn(0, 0), depthOn(0, -d.width / 2), depthOn(0, d.width / 2)) - (sides[0].r ? 0.05 : 0.02);
     const t1 = Math.max(depthOn(1, 0), depthOn(1, -d.width / 2), depthOn(1, d.width / 2)) + (sides[1].r ? 0.05 : 0.02);
-    const out = d.kind === 'gate' ? 1.4 : 0;
-    // the clear outline from the non-swing face to the stop, the rebated one from there to the swing face
+    const out = d.kind === 'gate' ? 1.4 : 0; // the gate's cut runs on through the batter in front of it
     if (!leafy) carveVols.push(extrudeVolume(c, al, n, clear, t0 - out, t1));
     else if (swing === 1) carveVols.push(extrudeVolume(c, al, n, clear, t0, rebT + 0.002), extrudeVolume(c, al, n, reb, rebT, t1));
     else carveVols.push(extrudeVolume(c, al, n, reb, t0, rebT), extrudeVolume(c, al, n, clear, rebT - 0.002, t1));
-    if (d.kind === 'gate') carveVols.push(extrudeVolume(c, al, n, clear.map(([u, yy]) => [u * 1.0005, yy] as V2), t0 - out, t1));
   }
 
   function gateDetails(B: Builder, d: DoorSpec, W: (u: number, y: number, t: number) => V3, clear: V2[]) {
