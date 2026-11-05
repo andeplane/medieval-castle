@@ -482,7 +482,7 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   const gateW = 3.8, gateY = GROUND - 0.1, archH = 4.0;
   const gate = pointedArch(hw, gateY, gateW, archH, 1.6, 8);
   B.wall('new', fa, fb, g.out, G0, top, [
-    { pts: gate, depth: 2.6, fill: 'wood', reveal: 'trim' },
+    { pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }, // leaves + portcullis: interior/doors.ts
     ...windowOpenings('twin', hw, floorBase(2) + 1.2), ...windowOpenings('rect', hw, floorBase(4) + 1.0), ...windowOpenings('small', hw, floorBase(6) + 1.1),
     ...windowOpenings('slit', hw - 3.3, GROUND + 5.2), ...windowOpenings('slit', hw + 3.3, GROUND + 5.2),
   ]);
@@ -499,20 +499,14 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
     const c = add(m, scale(nrm, -0.32));
     voussoir(B, at(f, c[0], c[1], 0.05), [f.r[0] * d[0], d[1], f.r[2] * d[0]], f.n, len(sub(b, a)) - 0.025, 0.66, 0.1);
   }
-  for (let x = -gateW / 2 + 0.15; x <= gateW / 2 - 0.1; x += 0.32) {
-    // bars stop under the arch outline; portcullis raised to 2.7 m
-    const s = hw + x, ah = archH + Math.sqrt(Math.max(0, 1 - Math.pow((2 * x) / gateW, 2))) * 1.5;
-    const y0 = gateY + 2.7, y1 = gateY + ah;
-    if (y1 > y0) boxOn(B, 'iron', f, s, (y0 + y1) / 2, -0.7, 0.07, y1 - y0, 0.07);
-    boxOn(B, 'iron', f, s, y0 - 0.12, -0.7, 0.05, 0.24, 0.05);
-  }
-  for (let y = gateY + 2.8; y < gateY + archH + 1.3; y += 0.45) boxOn(B, 'iron', f, hw, y, -0.72, gateW - 0.1, 0.06, 0.06);
+  // portcullis grooves in the reveals (the grid itself moves: interior/doors.ts)
+  for (const sg of [-1, 1]) boxOn(B, 'void', f, hw + sg * (gateW / 2 - 0.02), gateY + archH / 2, -0.7, 0.05, archH, 0.12);
   // heraldic panel and bretèche (box machicolation) over the gate
   boxOn(B, 'trim', f, hw, gateY + archH + 2.9, 0.05, 1.5, 1.9, 0.1);
   for (const s of [hw - 1.2, hw, hw + 1.2]) for (let k = 0; k < 3; k++) boxOn(B, 'trim', f, s, floorBase(2) - 2.4 + k * 0.38, 0.2 * (k + 1), 0.4, 0.37, 0.4 * (k + 1));
   // gatehouse top
   corbelParapet(B, r, f, 2 * hw, top, 'new', { ext: [0.6, 0.6] });
-  B.loft('new', offsetPoly(p, 1.2), G0, p, BATTER_TOP);
+  gatehouseBatter(B, g, p, P, gateW);
   stringCourse(B, p, floorBase(1) + 1.6);
   // corbelled corner turrets on the gatehouse front (Gravensteen-style), no full-height drums
   for (const sgn of [-1, 1]) {
@@ -527,6 +521,34 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   }
   // steps down from the gate threshold
   for (let k = 0; k < 3; k++) { const c = at2(hw - hw, P + 0.5 + k * 0.45); B.box('trim', [c[0], GROUND - 0.15 - k * 0.17, c[1]], [gateW + 1.6 + k * 0.6, 0.3, 0.5], g.dir); }
+}
+
+/** The gatehouse's battered plinth, with the gate passage cut through it so you can walk in. */
+function gatehouseBatter(B: Builder, g: ReturnType<typeof gatehouseFrame>, p: V2[], P: number, gateW: number) {
+  const sd = (q: V2) => { const d = sub(q, g.base); return [d[0] * g.dir[0] + d[1] * g.dir[1], d[0] * g.out[0] + d[1] * g.out[1]]; };
+  const pt = (s: number, d: number): V2 => add(add(g.base, scale(g.dir, s)), scale(g.out, d));
+  // split the front edge at the gate jambs so the gap is its own quad
+  const inner: V2[] = [];
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i], b = p[(i + 1) % p.length];
+    inner.push(a);
+    const [sa, da] = sd(a), [sb, db] = sd(b);
+    if (Math.abs(da - P) < 1e-6 && Math.abs(db - P) < 1e-6) for (const s of sa < sb ? [-gateW / 2, gateW / 2] : [gateW / 2, -gateW / 2]) inner.push(pt(s, P));
+  }
+  const T = new Builder();
+  T.loft('new', offsetPoly(inner, 1.2), G0, inner, BATTER_TOP);
+  const src = T.bins.new, dst = B.bins.new;
+  for (let i = 0; i < src.pos.length; i += 9) {
+    const c: V2 = [(src.pos[i] + src.pos[i + 3] + src.pos[i + 6]) / 3, (src.pos[i + 2] + src.pos[i + 5] + src.pos[i + 8]) / 3];
+    const [s, d] = sd(c);
+    if (Math.abs(s) < gateW / 2 - 1e-3 && d > P - 0.01) continue; // the gap
+    dst.pos.push(...src.pos.slice(i, i + 9)); dst.nor.push(...src.nor.slice(i, i + 9)); dst.uv.push(...src.uv.slice((i / 9) * 6, (i / 9) * 6 + 6));
+  }
+  // cheeks closing the plinth either side of the gap
+  for (const sg of [-1, 1]) {
+    const s = (sg * gateW) / 2, o = pt(s, P + 1.2), q = pt(s, P);
+    dst.tri([o[0], G0, o[1]], [q[0], BATTER_TOP, q[1]], [q[0], G0, q[1]], [-sg * g.dir[0], 0, -sg * g.dir[1]], [0, G0 / 4], [1.2 / 4, BATTER_TOP / 4], [1.2 / 4, G0 / 4]);
+  }
 }
 
 function eastTurret(B: Builder, r: Rng, lights: WindowLight[]) {

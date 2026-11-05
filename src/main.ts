@@ -1,6 +1,7 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
 // ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N, ?exposure=N (fixed),
+// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum),
 // ?test=room (no castle: a test hall + chamber for the interior light, debug/roomtest.ts).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
@@ -9,7 +10,7 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
@@ -23,6 +24,9 @@ import { createVisibility } from './world/visibility';
 import { buildRoomTest } from './debug/roomtest';
 import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
 import type { WindowInput } from './render/interiorMath';
+import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
+import { createInteraction } from './game/interact';
+import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
 import { stepProgress, textureProgress } from './loading/model';
 import { setTextureProgress } from './render/texpool';
@@ -35,6 +39,7 @@ const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
   const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
@@ -60,12 +65,29 @@ async function main() {
   await terrainReady;
 
   await say('RAISING THE WALLS…');
-  const testRoom = params.get('test') === 'room';
-  const { builder, lights } = testRoom ? { builder: new Builder(), lights: [] } : buildCastle();
-  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
-  buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  const test = params.get('test');
+  const testRoom = test === 'room';
+  let builder: Builder, lights: unknown[];
+  if (test === 'stairs') {
+    const { buildStairTest } = await import('./debug/stairtest');
+    const t = buildStairTest(params.has('cut'));
+    builder = t.builder; lights = t.lights;
+    for (const l of t.lights) scene.add(l);
+    VIEWS.splice(0, VIEWS.length, ...t.views);
+  } else if (testRoom) {
+    builder = new Builder(); lights = [];
+  } else {
+    ({ builder, lights } = buildCastle());
+    const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
+    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  }
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(castle);
+  // the main gate: two leaves with a wicket, and the portcullis (until the shell emits all DoorSpecs)
+  const audio = new DoorAudio(camera);
+  const gateSpecs = test ? [] : gateDoorSpecs();
+  const doors = buildDoors(gateSpecs, M, undefined, { portcullis: test ? [] : [gatePortcullisSpec()], sound: audio, initial: params.has('doors') ? Number(params.get('doors')) : undefined });
+  scene.add(doors.object);
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
@@ -77,7 +99,7 @@ async function main() {
   // interior: the shell's groups when it lands (buildInterior(IM, …)); the test hall for now
   const interiorLight = createInteriorLight();
   const IM = makeInteriorMaterials(M, sky.sun, interiorLight);
-  let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights };
+  let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights as WindowInput[] };
   const shells: THREE.Object3D[] = [castle];
   if (testRoom) {
     const t = buildRoomTest(M, IM);
@@ -95,7 +117,7 @@ async function main() {
 
   await say('PLANTING TREES…');
   let veg: Vegetation | null = null;
-  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
+  if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
   // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
   // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
@@ -129,6 +151,18 @@ async function main() {
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
+  // walk mode may step into the gate passage when the leaves and portcullis let you
+  const feet = new THREE.Vector3();
+  rig.canWalk = (x, z) => {
+    feet.set(x, camera.position.y - 0.8, z);
+    if (doors.blocksPlayer(feet)) return false;
+    return islandWalkable(x, z) || gateSpecs.some((d) => inDoorway(d, x, z));
+  };
+  // the passage floor is the gate sill, not the terrain under the gatehouse
+  rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
+  // the stair bookmarks are close, upward-looking fly views: lift the orbit clamps that go() applies
+  if (test) { rig.orbit.minDistance = 0.01; rig.orbit.maxPolarAngle = Math.PI; }
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
@@ -146,9 +180,9 @@ async function main() {
   const helpText: Record<Mode, string> = {
     orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
     fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
-    walk: 'Click to look with the mouse · WASD walk · Shift run · Esc releases',
+    walk: 'Click to look with the mouse · WASD walk · Shift run · E to use (gate, portcullis) · Esc releases',
   };
-  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: 'WASD walk · Shift run · Esc to release mouse' };
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · click to use · Esc to release mouse', walk: 'WASD walk · Shift run · E or click to use · Esc to release mouse' };
   const crosshair = document.getElementById('crosshair')!;
   const syncMode = () => {
     for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
@@ -179,8 +213,12 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { veg?.update(camera); vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    use: () => interaction.use(),
+    doors,
     stats: () => ({
       castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       interior: {
         room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
@@ -208,6 +246,8 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    doors.update(dt, camera.position);
+    interaction.update();
     veg?.update(camera);
     vis.update();
     exposure.update(dt, vis.state);
