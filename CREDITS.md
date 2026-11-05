@@ -1,0 +1,10 @@
+# Credits
+
+All castle, terrain, water and sky textures are generated procedurally in `src/render/texgen.ts`.
+
+| Asset | Source | Licence |
+|---|---|---|
+| three.js r187 (renderer, SkyMesh, OrbitControls, GTAO) | https://github.com/mrdoob/three.js | MIT |
+| ez-tree 1.1.0 (tree generator and its bark/leaf textures) | https://github.com/dgreenheck/ez-tree | MIT |
+| simplex-noise 4 | https://github.com/jwagner/simplex-noise.js | MIT |
+| Style reference photos in `art/refs/castle/` | supplied by Anders | reference only, not shipped |
