@@ -1,6 +1,7 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
+// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -15,6 +16,13 @@ import { buildTrees } from './world/trees';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
+import { Builder } from './castle/builder';
+import { buildCourse, type CourseInfo } from './debug/testcourse';
+import { BrowserInput, ScriptedInput, MergedInput } from './player/input';
+import { Footsteps, browserAudio } from './player/footsteps';
+import { systemClock } from './core/clock';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { setupPlay, type InteriorCollision } from './player/setup';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
@@ -48,12 +56,22 @@ async function main() {
   const { builder, lights } = buildCastle();
   const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
-  const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  const castle = builder.build(mats);
   scene.add(castle);
+  let course: { info: CourseInfo; object: THREE.Object3D } | null = null;
+  if (params.get('test') === 'walk') {
+    const cb = new Builder();
+    const info = buildCourse(cb);
+    course = { info, object: cb.build(mats) };
+    course.object.name = 'test-course';
+    scene.add(course.object);
+  }
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
-  scene.add(buildTerrain(M.terrain));
+  const terrain = buildTerrain(M.terrain);
+  scene.add(terrain);
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
@@ -74,11 +92,34 @@ async function main() {
   pipeline.outputNode = scenePass;
   void output;
 
-  const rig = new CameraRig(camera, renderer.domElement);
+  // physics + player (G.1): colliders are built here, before the ready flag
+  await say('LAYING THE FLOORS…');
+  const input = new BrowserInput(window, document, renderer.domElement);
+  const scripted = new ScriptedInput();
+  const footsteps = new Footsteps(browserAudio(window));
+  const interior = (window as unknown as { __game?: { interior?: InteriorCollision } }).__game?.interior ?? null;
+  const play = await setupPlay({
+    castle, terrain, bridge, interior, input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
+    extra: course ? { object: course.object, holes: course.info.holes } : null,
+  });
+  const { physics, player } = play;
+  console.info('physics ready', play.timings, physics.stats());
+
+  const orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.enableDamping = true; orbit.dampingFactor = 0.08;
+  orbit.minDistance = 8; orbit.maxDistance = 1200; orbit.maxPolarAngle = Math.PI * 0.495;
+  const rig = new CameraRig(camera, orbit, input);
+  rig.player = player;
+  rig.alpha = () => physics.alpha;
+  rig.walkable = play.walkable;
+  player.sensitivity = rig.sensitivity;
+  try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) rig.sensitivity = s; } catch { /* storage blocked */ }
+  const tick = (dt: number) => { physics.step(dt); rig.update(dt); };
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
   rig.go(start);
+  if (params.has('play')) rig.setMode('walk');
 
   // UI
   const ui = document.getElementById('ui')!;
@@ -86,22 +127,33 @@ async function main() {
   const viewRow = document.createElement('div'); viewRow.className = 'row';
   const modeBtns: Record<string, HTMLButtonElement> = {};
   const help = document.getElementById('help')!;
+  const keysText = 'P walk · F fly · O orbit';
+  const walkKeys = 'WASD walk · Shift run · Space jump · C (or Ctrl) crouch · M sound';
   const helpText: Record<Mode, string> = {
-    orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
-    walk: 'Click to look with the mouse · WASD walk · Shift run · Esc releases',
+    orbit: `Drag to orbit · right-drag to pan · scroll to zoom · ${keysText}`,
+    fly: `Click to look with the mouse · WASD move · E/Q up/down · Shift fast · ${keysText}`,
+    walk: `Click to look with the mouse · ${walkKeys} · ${keysText}`,
   };
-  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: 'WASD walk · Shift run · Esc to release mouse' };
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: `${walkKeys} · Esc to release mouse` };
   const crosshair = document.getElementById('crosshair')!;
   const syncMode = () => {
     for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
     help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
     crosshair.hidden = !rig.locked;
   };
-  rig.onLockChange = syncMode;
+  input.onLockChange = syncMode;
+  rig.onModeChange = () => syncMode();
+  input.onPress = (code) => {
+    footsteps.unlock();
+    if (code === 'KeyP') rig.setMode('walk');
+    else if (code === 'KeyF') rig.setMode('fly');
+    else if (code === 'KeyO') rig.setMode('orbit');
+    else if (code === 'KeyM') footsteps.enabled = !footsteps.enabled;
+  };
+  renderer.domElement.addEventListener('pointerdown', () => footsteps.unlock());
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
     const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
-    b.onclick = () => { rig.setMode(m); if (m === 'walk') { const p = camera.position; if (p.y > 30) rig.go(VIEWS.find((v) => v.name === 'gate')!); } syncMode(); };
+    b.onclick = () => { rig.setMode(m); syncMode(); b.blur(); };
     modeBtns[m] = b; modeRow.appendChild(b);
   }
   const time = document.createElement('label');
@@ -109,6 +161,11 @@ async function main() {
   const slider = time.querySelector('input')!; slider.value = String(sky.hours);
   slider.oninput = () => setTime(Number(slider.value));
   modeRow.appendChild(time);
+  const sens = document.createElement('label');
+  sens.innerHTML = 'Mouse <input type="range" min="0.0008" max="0.006" step="0.0001">';
+  const sensIn = sens.querySelector('input')!; sensIn.value = String(rig.sensitivity);
+  sensIn.oninput = () => { rig.sensitivity = Number(sensIn.value); try { localStorage.setItem('mouseSens', sensIn.value); } catch { /* private mode */ } };
+  modeRow.appendChild(sens);
   for (const v of VIEWS) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => { rig.go(v); syncMode(); }; viewRow.appendChild(b); }
   ui.append(modeRow, viewRow);
   syncMode();
@@ -120,11 +177,13 @@ async function main() {
 
   const info = renderer.info;
   const hooks = installHooks({
-    renderer, camera, rig, setTime, getTime: () => sky.hours,
+    renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     renderNow: async () => { pipeline.render(); },
+    physics, player, input: scripted, course: course?.info ?? null, interior,
     stats: () => ({
       castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
+      physics: { ...physics.stats(), ...play.timings },
     }),
   });
 
@@ -142,7 +201,7 @@ async function main() {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
-    rig.update(dt);
+    tick(dt);
     pipeline.render();
   });
   // two frames, then reveal

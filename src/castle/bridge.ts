@@ -96,7 +96,8 @@ export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (pol
       }
     }
   }
-  return { start: A, end: Z, dir: d };
+  // width and where the broken span begins (along d from start): the player boundary uses them
+  return { start: A, end: Z, dir: d, width: W, deck, breakAt: piers[0] + pierW / 2 - 0.3 };
 }
 
 function ringStone(B: Builder, c: V3, along: V3, n: V3, L: number, H: number, D: number) {
