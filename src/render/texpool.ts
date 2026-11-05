@@ -14,6 +14,10 @@ async function inline(jobs: string[]): Promise<Record<string, Out>> {
   return out;
 }
 
+/** Called with (done, total) as texture jobs finish; the loading screen listens. */
+export let onTextureProgress: ((done: number, total: number) => void) | null = null;
+export const setTextureProgress = (f: typeof onTextureProgress) => { onTextureProgress = f; };
+
 export async function generateTextures(jobs: string[]): Promise<Record<string, Out>> {
   try { return await viaWorkers(jobs); } catch (e) { console.warn('texture workers unavailable, generating inline', e); return inline(jobs); }
 }
@@ -32,6 +36,7 @@ function viaWorkers(jobs: string[]): Promise<Record<string, Out>> {
       const job = jobs[next++];
       w.onmessage = (e) => {
         results[job] = e.data.out;
+        onTextureProgress?.(jobs.length - pending + 1, jobs.length);
         if (--pending === 0) { clearTimeout(timer); workers.forEach((x) => x.terminate()); resolve(results); } else feed(w);
       };
       w.onerror = (e) => { clearTimeout(timer); fail(e); };

@@ -5,4 +5,9 @@ shots/
 .DS_Store
 art/refs/**/*.png
 art/refs/**/*.jpg
+<<<<<<< HEAD
 coverage/
+=======
+coverage
+.claude/worktrees/
+>>>>>>> origin/main
