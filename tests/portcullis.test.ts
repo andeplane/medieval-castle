@@ -57,6 +57,7 @@ describe('portcullis placement (plan gate-main)', () => {
     const w = spec.winch!;
     const room = roomAbove(P.rooms, spec.centre, gate.centre[1] - SEAT + spec.height + spec.lift)!;
     expect(room.zone).toBe('gate');
+    expect(w.room).toBe(room.id);
     expect(w.floor).toBeCloseTo(room.y0 - gate.centre[1], 9);
     expect(gate.centre[1] + w.floor).toBeGreaterThan(gate.centre[1] - SEAT + spec.height + spec.lift); // raised grid stays under the floor
     expect(ropeLength(spec, spec.lift)).toBeGreaterThan(0.5);
@@ -333,6 +334,19 @@ describe('the gate in the door system', () => {
     expect(xLen(after.coil)).toBeGreaterThan(xLen(before.coil));
     // hemp, not oak
     expect(wood.cols.get(rope1)).toEqual(wood.cols.get(coil1));
+  });
+
+  it('hides with its cells: the grille with the gate, drum and ropes with the winch room, fixtures with either', () => {
+    const { sys, fb } = build();
+    const [wood, iron] = fb.made;
+    const hidden = () => [[...wood.hidden].sort(), [...iron.hidden].sort()];
+    // wood: fixtures 0, drum 1, ropes and coils 2–5; iron: fixtures 0, dark slots 1, grille 2, drum 3
+    sys.setVisible('gate-main', false);
+    expect(hidden()).toEqual([[], [2]]);
+    sys.setVisible('gate-main:winch', false);
+    expect(hidden()).toEqual([[0, 1, 2, 3, 4, 5], [0, 1, 2, 3]]);
+    sys.setVisible('gate-main', true);
+    expect(hidden()).toEqual([[1, 2, 3, 4, 5], [3]]);
   });
 
   it('lets any agent work it from the gate or the winch, not from afar', () => {

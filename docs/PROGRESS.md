@@ -53,6 +53,35 @@ Known issues
 - The rivet heads are small (2.2 cm) and read as dots from a few metres away.
 - The windlass has no collider: the player walks through the drum and frames.
 
+## 2026-11-05: interior light, eye adaptation, cell visibility, see-through windows (branch `interior-light`)
+
+Done
+- `src/render/interiorLight.ts`: `makeInteriorMaterials(M, sun | null, light)` clones stone/timber/iron/glass with `lightsNode = lights([sun])` (no outdoor hemisphere or sky IBL indoors) and their own irradiance; `sun: null` is the cellar/tunnel set (no direct sun underground). `setDynamicLights(lights)` (non-enumerable) adds the fire rig's light pool. `bakeInteriorLight(groups, occluder, { plan, windows, sun, light })` tags every interior triangle with its room, turns the castle window lights and the plan's doors into apertures, checks each window's sun with three-mesh-bvh, solves split-flux bounce per room (stairs and open doors carry light on) and packs one float table; `update()` on time of day, `setDoorOpen(id, 0..1)` from `doors.state()` every physics tick. `buildShadowSkins` adds hidden casters inside walls and above ceilings; the interior meshes themselves cast no sun shadow.
+- `src/render/interiorShader.ts`: per pixel, each aperture of the room is an area light with its exact form factor, clipped to the glass the point sees through its splayed embrasure; plus bounce and a readability floor.
+- `src/render/exposure.ts`: eye adaptation from a 32×18 log-luminance reduction of the HDR scene pass; 0.72 outdoors, up to +2.5 stops in rooms and +3.2 underground. `?exposure=` fixes it; `?shot` sets it from where the camera is.
+- `src/world/visibility.ts` (`visibleSet`, pure and unit-tested): inside, the camera room's group plus the groups of rooms joined by a door or stair and stairs within 12 m; outside, windowed groups within 40 m whose openings face the camera; underground, terrain, water, vegetation, the castle exterior, its stones and the gate are hidden. `register(obj, roomOf)` and `isRoomVisible(id)` for NPCs, door leaves and the fire rig. Door leaves follow their rooms through `DoorSystem.setVisible(id, v)` (BatchedMesh instance visibility).
+- `src/render/windowGlass.ts`: exterior glass is tagged per triangle with the visibility group behind it (only where the shell built an embrasure pane). Shown group: main's see-through leaded glass. Culled group or no room: the opaque dark pane. Rooms with firelight glow warm in the quarries after sunset (full on the dark pane, half over see-through glass). One material, a per-group flag texture.
+- `src/render/interiorFire.ts`: fire sources for `src/light`: the furniture's emitters and flames with `?furniture=1`, otherwise one wall torch per hall, gate room and undercroft and one every ~10 m in tunnels. `LightRig` (8 plain lights, no shadow-casting ones) lights the nearest fires in shown groups; flames via `makeFlameSprites(linkFlames(...))`.
+- `?test=room` (`src/debug/roomtest.ts`): a 12 × 8 × 6 m hall and a chamber for tuning the light.
+
+Numbers (headless WebGL2, SwiftShader): bake over the shell 206 rooms / 767 apertures / 240k triangles ≈ 0.45 s in the browser (room tagging dominates; box cull + group fast path took it from 7.2 s in node), BVH over 366k triangles ≈ 0.26–0.5 s. Draw calls / triangles per bookmark (`__game.state()`, 1600×900, before = main as reviewed, all 85 groups drawn):
+
+| bookmark | before | after | interior groups shown |
+|---|---|---|---|
+| gate | 2,068 / 9.2 M (main after #17) | 522 / 6.0 M | 9 |
+| courtyard | 1,400–1,900 / 5–7.4 M | 710 / 5.8 M | 43 |
+| hall (N1-2) | 1,400–1,900 / 5–7.4 M | 356 / 5.0 M | 3 |
+| tunnel | 168 / 2.6 M | 25 / 0.05 M | 3 |
+| hero | 1,400–1,900 / 5–7.4 M | 612 / 4.8 M | 0 |
+| cellar (N-c1) | – | 45 / 0.13 M (54 / 0.19 M with furniture) | 5 |
+
+Known issues / next
+- Exterior cost is now the bulk: the hero view with no interior group shown is ~600 calls / 4.8 M triangles (stones, vegetation, shadow cascades, AO pre-pass).
+- Faint diagonal banding on cellar floors remains with no sun and with `?ao=0`; cause not found yet.
+- Furniture props keep the outdoor materials (hemisphere light), so at +3 stops underground light props such as sacks blow out to white; they should move to the interior lighting.
+- Window records with real embrasure sizes from the shell would beat the guessed ones; windows whose embrasure was skipped stay opaque.
+- Portals between rooms are uniform; rooms that are not convex get light through their own corners.
+
 
 ## 2026-11-05: window placement (no more openings cut by a wall junction)
 
@@ -205,7 +234,7 @@ Captures (1600×900, `QUERY=exposure=1.6`): gatepass, hall, chamber, towerroom, 
 Known issues / next
 - Draw calls: all 296 interior meshes together exceed the ~250 budget. The visibility work has to switch groups off, because only a few cells should render at once.
 - Exterior windows enclosed by other masses get no embrasure. Two-door landings are not supported by the stair planner, so the stair tower opens onto N or E on each floor, not both.
-- Interior light is still flat (interior-light agent).
+- Interior light: wired to the shell in `interior-light` (see the section above).
 
 ## 2026-11-05: procedural prop kit (furniture, not yet placed in the castle)
 

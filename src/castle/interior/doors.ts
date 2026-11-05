@@ -39,6 +39,9 @@ export interface DoorSystem {
   blocksPlayer(p: Vec3Like): boolean;
   /** Triangles in one copy of every part placed (for budgets). */
   triangles: number;
+  /** Show or hide a door's leaf and fixed iron with its rooms (cell visibility); for a portcullis, `id` is
+   *  its grille and `id + ':winch'` its windlass, and the fixtures shared by both stay while either is shown. */
+  setVisible(id: string, visible: boolean): void;
 }
 
 export interface DoorOptions {
@@ -165,6 +168,10 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
   const iron: BatchLike = makeBatch('doors-iron', M.iron, ironI, ironV);
   object.add(wood.object, iron.object);
   const ids = new Map<string, { wood: number; iron: number; fixed: number }>();
+  // batch instances by the visibility keys they follow (a door id, or '<portcullis>:winch'), for setVisible;
+  // an instance with several keys is shown while any of them is
+  const parts = new Map<string, { keys: string[]; wood: number[]; iron: number[] }[]>(), shown = new Map<string, boolean>();
+  const part = (keys: string[]) => { const g = { keys, wood: [] as number[], iron: [] as number[] }; for (const k of keys) parts.set(k, [...(parts.get(k) ?? []), g]); return g; };
   for (const [k, v] of variants) ids.set(k, { wood: v.wood.pos.length ? wood.addGeometry(v.wood) : -1, iron: v.iron.pos.length ? iron.addGeometry(v.iron) : -1, fixed: v.fixed.pos.length ? iron.addGeometry(v.fixed) : -1 });
   for (const { leaf, vk } of pending) {
     const id = ids.get(vk)!, v = variants.get(vk)!;
@@ -176,22 +183,30 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       wood.setColorAt(leaf.wood, [k * (1 - grey * 0.12), k * (0.9 - grey * 0.02), k * (0.8 + grey * 0.12)]);
     }
     if (id.iron >= 0) leaf.iron = iron.addInstance(id.iron);
-    if (id.fixed >= 0) iron.setMatrixAt(iron.addInstance(id.fixed), leafMatrix(leaf.place, m4swing(0)));
+    const own = part([leaf.place.door]);
+    if (leaf.wood >= 0) own.wood.push(leaf.wood);
+    if (leaf.iron >= 0) own.iron.push(leaf.iron);
+    if (id.fixed >= 0) { const f = iron.addInstance(id.fixed); own.iron.push(f); iron.setMatrixAt(f, leafMatrix(leaf.place, m4swing(0))); }
   }
   const ropeId = anyWinch ? wood.addGeometry(rope) : -1, coilId = anyWinch ? wood.addGeometry(coil) : -1;
   const initialLift = (p: PortcullisSpec) => p.lift * (opts.initial ?? 1);
   const ports: Port[] = portSpecs.map((spec, i) => {
     const g = portGeom[i], F0 = portFrame(spec);
-    const fixedAt = (b: BatchLike, bin: PartBin, rgb?: V3) => { if (!bin.pos.length) return; const k = b.addInstance(b.addGeometry(bin)); b.setMatrixAt(k, F0); if (rgb) b.setColorAt(k, rgb); };
+    // cell visibility: the grille goes with the gate, the drum and ropes with the windlass room, and the
+    // fixtures (sill sockets and soffit slot below, frames and floor slot above) with either
+    const gate = part([spec.id]), winch = part([spec.id + ':winch']), both = part([spec.id, spec.id + ':winch']);
+    const fixedAt = (b: BatchLike, bin: PartBin, rgb?: V3) => { if (!bin.pos.length) return; const k = b.addInstance(b.addGeometry(bin)); b.setMatrixAt(k, F0); if (rgb) b.setColorAt(k, rgb); (b === wood ? both.wood : both.iron).push(k); };
     fixedAt(wood, g.fixed.wood, [0.62, 0.55, 0.48]); fixedAt(iron, g.fixed.iron); fixedAt(iron, g.fixed.dark, [0.03, 0.03, 0.03]);
     tris += vcount(g.grille, g.fixed.wood, g.fixed.iron, g.fixed.dark) / 3;
     const p: Port = { spec, s: portAt(initialLift(spec), spec.lift), grille: iron.addInstance(iron.addGeometry(g.grille)), drum: [], ropes: [], coils: [], body: null };
+    gate.iron.push(p.grille);
     if (g.drum) {
       tris += (vcount(g.drum.wood, g.drum.iron) + 2 * vcount(rope, coil)) / 3;
       p.drum = [wood.addInstance(wood.addGeometry(g.drum.wood)), iron.addInstance(iron.addGeometry(g.drum.iron))];
       wood.setColorAt(p.drum[0], [0.62, 0.55, 0.48]);
       for (let k = 0; k < 2; k++) { p.ropes.push(wood.addInstance(ropeId)); p.coils.push(wood.addInstance(coilId)); }
       for (const j of [...p.ropes, ...p.coils]) wood.setColorAt(j, HEMP);
+      winch.wood.push(p.drum[0], ...p.ropes, ...p.coils); winch.iron.push(p.drum[1]);
     }
     return p;
   });
@@ -372,6 +387,14 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       }
     },
     setOpen,
+    setVisible(id, visible) {
+      shown.set(id, visible);
+      for (const g of parts.get(id) ?? []) {
+        const v = g.keys.some((k) => shown.get(k) ?? true);
+        for (const i of g.wood) wood.setVisibleAt(i, v);
+        for (const i of g.iron) iron.setVisibleAt(i, v);
+      }
+    },
     state() {
       const o: Record<string, number> = {};
       for (const u of units) o[u.id] = Math.round(openness(u) * 1000) / 1000;

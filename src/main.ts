@@ -1,8 +1,9 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
 // ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?interior=0, ?shot (hide UI; add ?ui=locked,tools,card to keep the HUD), ?debug (three Inspector), ?seed=N,
-// ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn),
-// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
+// ?exposure=N (fixed), ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn),
+// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum),
+// ?test=room (no castle: a test hall + chamber for the interior light, debug/roomtest.ts).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -27,6 +28,17 @@ import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
+import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
+import { createAutoExposure, gpuLumaReader } from './render/exposure';
+import { createVisibility } from './world/visibility';
+import { fromFurniture, wallTorches } from './render/interiorFire';
+import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
+import { LightRig } from './light/rig';
+import { threeLightFactory, makeFlameSprites } from './light/three';
+import { linkFlames, flameBrightness } from './light/flames';
+import { buildRoomTest } from './debug/roomtest';
+import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
+import type { WindowInput } from './render/interiorMath';
 import { buildCourse, type CourseInfo } from './debug/testcourse';
 import { KeyboardInput, ScriptedInput, MergedInput } from './player/input';
 import { MouseLook } from './camera/mouseLook';
@@ -82,7 +94,8 @@ async function main() {
 
   await say('Raising the walls…');
   const test = params.get('test');
-  let builder, lights: unknown[];
+  const testRoom = test === 'room';
+  let builder: Builder, lights: unknown[];
   let bridgeTriangles = 0, revetmentTriangles = 0, revetment: ReturnType<typeof revetmentPlan> | undefined, bridge: BridgePlan | undefined;
   if (test === 'stairs') {
     const { buildStairTest } = await import('./debug/stairtest');
@@ -90,6 +103,8 @@ async function main() {
     builder = t.builder; lights = t.lights;
     for (const l of t.lights) scene.add(l);
     VIEWS.splice(0, VIEWS.length, ...t.views);
+  } else if (testRoom) {
+    builder = new Builder(); lights = [];
   } else {
     ({ builder, lights } = buildCastle());
     bridge = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
@@ -110,7 +125,6 @@ async function main() {
     const [{ furnish }, { makePropMaterials }, T] = await Promise.all([import('./props/furnish'), import('./props/render'), import('./props/textures')]);
     const pm = makePropMaterials({ wood: T.woodTex(), iron: T.ironTex(), cloth: T.clothTex(), straw: T.strawTex(), ceramic: T.ceramicTex() });
     furniture = furnish(interior.plan, pm);
-    for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
   }
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
@@ -140,6 +154,59 @@ async function main() {
   }
   const water = makeWater(sky.sunDir);
   scene.add(water);
+
+  // interior light (render/interiorLight.ts): the shell's meshes switch to the sun-only interior
+  // materials; the test cell (?test=room) brings its own hall and chamber
+  const interiorLight = createInteriorLight();
+  const IM = makeInteriorMaterials(M, sky.sun, interiorLight);
+  const IMu = makeInteriorMaterials(M, null, interiorLight); // cellars and tunnels: no direct sun
+  const keys = ['old', 'new', 'trim', 'wood', 'iron', 'glass'] as const;
+  const swap = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IM[k]]));
+  const swapUnder = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IMu[k]]));
+  let lit: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: [] };
+  const shells: THREE.Object3D[] = [castle];
+  if (interior) {
+    // interior meshes cast no sun shadow: the hidden shadow skins (buildShadowSkins) shape the light
+    // through the windows, and each mesh would otherwise be drawn again into every shadow cascade
+    for (const g of interior.groups) {
+      const sw = g.floor < 0 ? swapUnder : swap;
+      g.object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.material = sw.get(m.material as THREE.Material) ?? m.material; m.castShadow = false; } });
+    }
+    // castle.ts window lights ({p, n, w, h}); the embrasure behind each one is fitted to its room
+    lit = { groups: interior.groups, plan: interior.plan, windows: lights as WindowInput[] };
+  }
+  if (testRoom) {
+    const t = buildRoomTest(M, IM);
+    scene.add(t.exterior); shells.push(t.exterior);
+    for (const g of t.groups) scene.add(g.object);
+    VIEWS.push(...t.views);
+    lit = t;
+  }
+  const tB = performance.now();
+  const occluder = bvhOccluder([...shells, ...lit.groups.map((g) => g.object)]);
+  const bvhMs = performance.now() - tB;
+  const bake = bakeInteriorLight(lit.groups, occluder, { plan: lit.plan, windows: lit.windows, sun: sunStateOf(sky.sun), light: interiorLight });
+  if (lit.plan.rooms.length) scene.add(buildShadowSkins(lit.plan, bake.apertures));
+  console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, bake ${bake.ms.toFixed(1)} ms, BVH ${bvhMs.toFixed(1)} ms over ${occluder.triangles} tris`);
+  // leaf doors (gate, wicket, portcullis) pass daylight on as they open: re-solve when one moves
+  const doorLit: Record<string, number> = {};
+  const syncDoorLight = () => {
+    for (const [id, o] of Object.entries(doors.state())) {
+      const was = doorLit[id];
+      if (was === undefined || Math.abs(was - o) > 0.05 || (o !== was && (o === 0 || o === 1))) { doorLit[id] = o; bake.setDoorOpen(id, o); }
+    }
+  };
+  // props join their groups after the bake: they keep their own materials and are not room-tagged
+  if (furniture && interior) for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
+  // exterior windows (render/windowGlass.ts): see-through into rooms that are shown, a dark pane
+  // (warm at night when the room has firelight) while their group is culled
+  const winFlags = createWindowFlags(Math.max(1, lit.groups.length));
+  const winGlass = makeWindowGlass(M.glass, winFlags);
+  const paneSoup: number[] = [];
+  for (const g of lit.groups) g.object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.material === IM.glass) paneSoup.push(...(m.geometry.attributes.position.array as Float32Array)); });
+  const panes = triFrames(paneSoup), roomGroup = groupIndexOfRooms(lit.groups);
+  let winTagged = 0;
+  for (const s of shells) s.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.material === M.glass) { winTagged += tagWindowGroups(m.geometry, lit.plan.rooms, roomGroup, panes); m.material = winGlass; } });
 
   await say('Planting trees…');
   let veg: Vegetation | null = null;
@@ -216,8 +283,9 @@ async function main() {
   const gateDoor = plan?.doors.find((d) => d.id === 'gate-main');
   const gateSpecs = gateDoor ? [gateDoor] : [];
   const doorSets = playDoors([], interior?.plan.doors ?? []);
+  const port = gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [];
   const doors = buildDoors(doorSets.active, M, physics, {
-    portcullis: gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [], sound: audio, characters: play.characters,
+    portcullis: port, sound: audio, characters: play.characters,
     initial: params.has('doors') ? Number(params.get('doors')) : undefined,
   });
   scene.add(doors.object);
@@ -237,9 +305,46 @@ async function main() {
     // walls between you and a door stop the use ray; door leaves themselves do not
     occluder: (f, dir, max) => { const h = physics.raycast([f.x, f.y, f.z], [dir.x, dir.y, dir.z], max); return h && !h.tag?.startsWith('door:') ? h.dist : null; },
   });
-  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
+  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); winFlags.night.value = nightOf(sky.sunDir.y); };
   setTime(Number(params.get('time') ?? 15.5));
-  const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
+  const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
+  // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
+  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt });
+  // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
+  // rig lights the nearest ones in shown groups, and the interior materials take its light pool
+  const groupOf = new Map<string, string>(), groupIx = new Map(lit.groups.map((g, i) => [g.key, i]));
+  for (const g of lit.groups) for (const id of g.rooms) groupOf.set(id, g.key);
+  const fire = furniture ? fromFurniture(furniture.emitters, furniture.flames) : wallTorches(lit.plan, (id) => groupOf.get(id));
+  const fireLights = threeLightFactory(scene);
+  // no shadow-casting fire lights: one cube shadow redraws everything near it six times (+700 calls)
+  const fireRig = new LightRig(fireLights, { shadows: 0, lights: 8 });
+  fireRig.setEmitters(fire.emitters);
+  IM.setDynamicLights(fireLights.lights); IMu.setDynamicLights(fireLights.lights);
+  const flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
+  const sprites = makeFlameSprites(flames);
+  scene.add(sprites.group);
+  const fireShown = (id: number) => vis.state.visible[groupIx.get(fire.group[id]) ?? -1] ?? false;
+  let fireT = 0;
+  const fireGroups = lit.groups.map((g) => fire.group.includes(g.key));
+  // door leaves follow their rooms: shown while either side is shown (outside counts when not deep)
+  // the portcullis follows the gate's spaces and its windlass the room it stands in (doors.setVisible)
+  const portCells = port.flatMap((p) => [{ id: p.id, spaces: gateDoor!.spaces }, ...(p.winch?.room ? [{ id: p.id + ':winch', spaces: [p.winch.room, p.winch.room] }] : [])]);
+  const doorCells = [...doorSets.active.map((d) => [doors, d] as const), ...doorSets.locked.map((d) => [locked, d] as const), ...portCells.map((d) => [doors, d] as const)];
+  const doorShown = new Map<string, boolean>();
+  const syncDoorVis = () => {
+    for (const [sys, d] of doorCells) {
+      const v = vis.isRoomVisible(d.spaces[0]) || vis.isRoomVisible(d.spaces[1]);
+      if (doorShown.get(d.id) !== v) { doorShown.set(d.id, v); sys.setVisible(d.id, v); }
+    }
+  };
+  const updateFire = (dt: number) => {
+    syncDoorVis();
+    fireT += dt;
+    winFlags.set(vis.state.visible, fireGroups);
+    fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z], fireShown);
+    sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);
+  };
+  const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
   if (params.has('play')) rig.setMode('walk');
 
@@ -248,7 +353,7 @@ async function main() {
     walkFrom: { above: 30, view: 'gate', height: () => camera.position.y },
   });
   rig.onModeChange = () => ui.sync();
-  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); ui.sync(); };
+  const tick = (dt: number) => { physics.step(dt); syncDoorLight(); rig.update(dt); interaction.update(); ui.sync(); };
   input.onPress = (code) => {
     footsteps.unlock();
     if (code === 'KeyP') rig.setMode('walk');
@@ -267,7 +372,7 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
-    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
@@ -278,10 +383,20 @@ async function main() {
       castleTriangles: castle.userData.triangles, bridgeTriangles, revetmentTriangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: { ...doors.state(), ...locked.state() }, target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
+      light: {
+        room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
+        groupsShown: vis.state.visible.filter(Boolean).length, groups: lit.groups.length, meshesShown: lit.groups.reduce((s, g, i) => s + (vis.state.visible[i] ? g.object.children.length : 0), 0),
+        exposure: Math.round(exposure.state.exposure * 1000) / 1000, meanLog2: Math.round(exposure.state.meanLog2 * 100) / 100,
+        bakeMs: Math.round(bake.ms * 10) / 10, bvhMs: Math.round(bvhMs * 10) / 10, apertures: bake.apertures.length,
+      },
+      windowsSeeThrough: winTagged,
+      fire: { ...fireRig.stats(), flames: flames.length, source: furniture ? 'furniture' : 'wall torches' },
       physics: { ...physics.stats(), ...play.timings },
     }),
   }, window as unknown as HookWindow, systemClock);
 
+  // the doors module reports leaf positions here: __game.interiorLight.setDoorOpen(id, 0..1)
+  (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state, visibility: vis };
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
   (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
@@ -300,7 +415,11 @@ async function main() {
     tick(dt);
     stones.update(camera.position);
     veg?.update(camera);
+    vis.update();
+    updateFire(dt);
+    exposure.update(dt, vis.state);
     pipeline.render();
+    exposure.measure();
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));

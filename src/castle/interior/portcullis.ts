@@ -35,7 +35,7 @@ export interface PortcullisSpec {
   winch: WinchSpec | null;
 }
 /** The windlass in the room above, in the port frame (y above the sill). */
-export interface WinchSpec { floor: number; drumY: number; ropeAt: number; frameAt: number }
+export interface WinchSpec { floor: number; drumY: number; ropeAt: number; frameAt: number; /** plan room it stands in */ room?: string }
 
 /** Distance of the groove from the outer (spaces[0]) face. */
 export const grooveFromFront = (d: Pick<DoorSpec, 'wall'>) => d.wall - GROOVE_IN;
@@ -261,5 +261,8 @@ export function coilGeometry(): PartBin { const b = bin(); slabYZ(b, ngon(14, DR
 /** The portcullis for a gate in a plan: the windlass goes in the lowest room over the raised grid, if any. */
 export function portcullisInPlan(d: DoorSpec, rooms: RoomSpec[]): PortcullisSpec {
   const p = portcullisFor(d, null), r = roomAbove(rooms, p.centre, d.centre[1] - SEAT + p.height + p.lift);
-  return r ? portcullisFor(d, r.y0) : p;
+  if (!r) return p;
+  const q = portcullisFor(d, r.y0);
+  q.winch!.room = r.id;
+  return q;
 }
