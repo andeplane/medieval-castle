@@ -4,6 +4,13 @@
 
 Anders: "default should be walk for sure". The page now starts in walk mode at the spawn on the lawn outside the gate, facing it, with the tools panel shut; O switches to orbit and F to fly. A `?view=` bookmark, `?shot` captures and the `?test=` scenes keep their review camera as before, and `?play` still forces walking. I checked it in the real page (headless WebGL2): the default URL reports mode `walk`, the player is grounded at the spawn (5.48, 2.66, 29.79), and the tools panel is closed.
 
+## 2026-11-05: loading tunnel in a worker, time-based progress
+
+- Anders: loading lagged with no animation, the light came the wrong way, and the bar sat at 90 % for a long time.
+- The tunnel draws in a worker on an OffscreenCanvas (`src/loading/tunnel.worker.ts` → `worker.ts`, loop in `loop.ts`, main-thread fallback in `backend.ts`), so it animates while the castle build and shader compile block the main thread (checked by blocking the page for 8 s). It draws at 30 fps at most, at half the device pixels. The caption is page DOM and only updates when the main thread is free.
+- Look: fully black at 0 %. The farthest torch strikes first and the light walks toward the viewer. Far torches keep a minimum size on screen. Daylight at the grille only comes up with the final fill.
+- Progress is proportional to time (`src/loading/timeline.ts`). Each boot step gets a share of the bar sized by how long it took on this device last time. Timings are kept in localStorage `moated-castle:boot-ms:v1`, averaged 70/30 with the previous value; the first visit uses defaults. Inside a step, progress moves linearly over the expected time, then slows and never reaches the step's end. main.ts calls `screen.step(label)`, matched without regard to case; unknown labels only change the caption.
+
 ## 2026-11-05: combined build on main checked (after #27–#30)
 
 Main at 39996d7, with interior light and visibility (#27), furniture on interior materials (#28), the portcullis and windlass (#29) and furniture kept off the windlass (#30).

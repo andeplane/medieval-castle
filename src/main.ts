@@ -52,18 +52,16 @@ import { planInterior } from './castle/interior/plan';
 import { createInteraction } from './game/interact';
 import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
-import { stepProgress, textureProgress } from './loading/model';
-import { setTextureProgress } from './render/texpool';
 import { createHud, browserHudDeps } from './ui/hud';
 import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
-// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
-// texture jobs fill "Cutting the stone" → "Raising the walls".
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel,
+// in proportion to how long the step took on this device last time (src/loading/timeline.ts).
 let screen: LoadingScreen;
-const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
+const say = (s: string) => screen.step(s);
 if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 async function main() {
@@ -454,6 +452,5 @@ async function main() {
 /** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
 export function boot(loading: LoadingScreen) {
   screen = loading;
-  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
   return main().catch((e) => { console.error(e); screen.dispose(); showBootError(document, e, () => location.reload()); });
 }
