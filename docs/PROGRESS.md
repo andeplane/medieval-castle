@@ -1,5 +1,44 @@
 # Progress
 
+## 2026-11-05: courtyard paving (branch `courtyard-paving`)
+
+Anders, on `castle-plan/feedback/courtyard-door-cut.png`: "wtf is this". The courtyard floor was the terrain's flat, blurry grey.
+
+Done
+- **Paving** (`src/castle/paving.ts`, pure): one flat polygon over the courtyard in a new Builder bin `pave` (one mesh, one material, no shadow casting), 41 triangles. It covers the courtyard minus the stair tower and the well (convex cuts, `cutConvex`), at `PAVE_Y = GROUND + 0.02`. The terrain under it drops to `COURT_BED = GROUND − 0.15`, below the deepest joint. The interior carve leaves the `pave` bin alone, so the passage plinth no longer eats 146 m² of it.
+- **Stones are texture and parallax, not geometry.** `render/texgen.ts` adds `cobbles`: tileable Voronoi cells (14 cm) cut by a per-cell ellipse, domed and bevelled, set in an earth bed, 4 m repeat at 2048². It also adds `flags`: masonry flags in 0.6–0.9 m courses, 2 m repeat. Both are worker jobs (`texpool`). The `paving` material in `render/materials.ts` uses the same POM with depth offset and self-shadow as the walls. It picks the flag set on the path strip and the cobble set elsewhere, from the path frame in the uvs. Weathering:
+  - earth joints with moss;
+  - damper, darker ground within about 1–2 m of every wall foot, the stair tower and the well (distance from the plan, in the shader);
+  - a worn, smoother track along the path;
+  - per-stone tint, using the walls' close-up detail layer.
+- **Path:** a 2 m flag path runs from the gate passage (`gate-court`) to the N wing's courtyard door (`court>N…`). Both ends come from the interior plan's doors. The path edges fall on a flag joint, with a kerb joint where the flags meet the cobbles.
+- **Well:** it now has a windlass: an oak roller with turns of rope, a rope down to a hooped bucket over the shaft, and an iron crank. Its position is seeded (`rngFor('court-well')`), a little west of the old spot so it stays clear of the path. The "bare crossbar" item is closed.
+- **Leaning slab:** the wings' courtyard-side faces no longer get the battered plinth (`loft` skips that face, and `offsetPoly` takes per-edge offsets). The uncarved batter by the stair tower was the odd leaning slab. The outer faces keep their batter.
+- Footsteps on the paving are stone: the collider tag is `castle-pave`, which `surfaceAt` resolves to stone. Key path 1 walks onto it and asserts `surfaceTag === 'castle-pave'` and `surface === 'stone'`.
+- New bookmarks:
+  - `court-ground` (walk, the ground about 1.5 m ahead);
+  - `court-close` (fly, 0.5 m above the cobbles);
+  - `gatepass-court` (walk, the passage looking in);
+  - `court-stair` (walk, the stair tower foot).
+- Fixed in `controls.ts`: a fly bookmark reached from walk mode kept the player's look. It now takes its own yaw and pitch, and `clamp: false` lets it go below eye height.
+
+Numbers (headless WebGL2, `__game.state()`, 1600×900)
+- castleTriangles: 128,085 → 128,177.
+- Same view and frame, paving shown vs hidden: +4 draw calls and +164 triangles. That is the one paving mesh (41 triangles) in each of the four passes that draw it (main, AO pre-pass, water reflector and one more), and it is the same in every view.
+- Per bookmark, before (main) → after: courtyard 716 → 726, gate 542 → 550, gatepass-court 446 → 442, court-ground 718 → 726, court-close 380 → 390. The paving accounts for 4 of each difference. The rest is not pinned down: the well dressing goes into existing bins, and the first frame after a camera jump also re-renders shadows, so the counts move by a few between runs.
+
+Captures: `castle-plan/courtyard/` holds before/after pairs of `court-ground`, `court-close`, `gatepass-court`, `courtyard`, `gate` and `court-stair`.
+
+Assumptions (Anders can veto)
+- Rounded cobbles set in earth everywhere, with a flag path from the gate to the N door. There is no drain or gutter.
+- The well moved about 1 m west.
+- The courtyard faces have no battered plinth.
+
+Not checked / still open
+- Only headless WebGL2 (SwiftShader) was checked. WebGPU and the frame rate on the M4 were not measured. The paving is a full-screen POM surface at eye height, so run `?bench` on the courtyard and the run-courtyard walk.
+- There is a 12 cm step at the passage arch: the passage floor is at 2.5 and the paving at 2.62. This was already there.
+- The passage floor's own flat look is out of scope here (interior materials).
+
 ## 2026-11-05: frame rate fixes (AO pre-pass at half size, dynamic resolution)
 
 Measured after deploy (`?bench`, Anders' M4, Chrome WebGPU, 1200×897 CSS px, devicePixelRatio 2, 120 Hz; fps / p95 frame ms):
