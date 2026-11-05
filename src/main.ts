@@ -453,6 +453,8 @@ async function main() {
     return { rows, table, render: renderInfo() };
   };
   (hooks as Record<string, unknown>).bench = bench;
+  // for profiling from the console or Playwright: per-pass GPU times live in the backend's timestamp pools
+  (hooks as Record<string, unknown>).render = { renderer, scene, camera, pipeline };
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
