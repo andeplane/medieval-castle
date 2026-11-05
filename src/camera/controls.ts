@@ -9,7 +9,7 @@ import { GATEHOUSE, GROUND } from '../castle/spec';
 import { MouseLook } from './mouseLook';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
-export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
+export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number]; clamp?: boolean }
 
 const C = castleCentre();
 // in front of the main gate, a little off-axis, looking into the gate passage
@@ -33,6 +33,8 @@ export class CameraRig {
   orbit: OrbitControls;
   private keys = new Set<string>();
   private yaw = 0; private pitch = 0;
+  /** Keep the fly camera above the terrain (off for interior bookmarks: cellars and tunnels lie below it). */
+  clampFly = true;
   speed = { fly: 22, walk: 4.2 };
   /** Where walk mode may step (doors widen this into an open gate passage). */
   canWalk: (x: number, z: number) => boolean = islandWalkable;
@@ -77,6 +79,7 @@ export class CameraRig {
   go(v: View) {
     const p = new THREE.Vector3(...v.pos);
     if (v.mode === 'walk') p.y = this.groundAt(p.x, p.z) + 1.7;
+    this.clampFly = v.clamp !== false;
     this.camera.position.copy(p);
     this.camera.lookAt(new THREE.Vector3(...v.target));
     this.orbit.target.set(...v.target);
@@ -102,7 +105,7 @@ export class CameraRig {
       moveDir.y += v.y;
       this.camera.position.addScaledVector(moveDir, this.speed.fly * fast * dt);
       const floor = this.groundAt(this.camera.position.x, this.camera.position.z) + 1.0;
-      if (this.camera.position.y < floor) this.camera.position.y = floor;
+      if (this.clampFly && this.camera.position.y < floor) this.camera.position.y = floor;
     } else {
       const f = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)), rgt = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
       const step = new THREE.Vector3().addScaledVector(f, fwd).addScaledVector(rgt, str);
