@@ -1,6 +1,7 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N.
+// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -52,9 +53,19 @@ async function main() {
   await terrainReady;
 
   await say('RAISING THE WALLS…');
-  const { builder, lights } = buildCastle();
-  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
-  buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  const test = params.get('test');
+  let builder, lights: unknown[];
+  if (test === 'stairs') {
+    const { buildStairTest } = await import('./debug/stairtest');
+    const t = buildStairTest(params.has('cut'));
+    builder = t.builder; lights = t.lights;
+    for (const l of t.lights) scene.add(l);
+    VIEWS.splice(0, VIEWS.length, ...t.views);
+  } else {
+    ({ builder, lights } = buildCastle());
+    const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
+    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  }
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(castle);
 
@@ -67,7 +78,7 @@ async function main() {
 
   await say('PLANTING TREES…');
   let veg: Vegetation | null = null;
-  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
+  if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
   // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
   // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
@@ -101,6 +112,8 @@ async function main() {
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
+  // the stair bookmarks are close, upward-looking fly views: lift the orbit clamps that go() applies
+  if (test) { rig.orbit.minDistance = 0.01; rig.orbit.maxPolarAngle = Math.PI; }
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
