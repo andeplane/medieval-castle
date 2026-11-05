@@ -34,8 +34,8 @@ export interface TexSet { size: number; albedo: Uint8Array; normal: Uint8Array; 
 
 const sstep = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
-/** Height (0..1) to a tangent-space normal map. */
-function heightToNormal(h: Float32Array, N: number, strength: number) {
+/** Height (0..1) to a tangent-space normal map. `alpha` (optional) fills the A channel. */
+function heightToNormal(h: Float32Array, N: number, strength: number, alpha?: Uint8Array) {
   const out = new Uint8Array(N * N * 4);
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
     const l = h[y * N + ((x + N - 1) % N)], r = h[y * N + ((x + 1) % N)];
@@ -44,7 +44,7 @@ function heightToNormal(h: Float32Array, N: number, strength: number) {
     let nx = (l - r) * strength, ny = (u - d) * strength, nz = 1;
     const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
     const i = (y * N + x) * 4;
-    out[i] = (nx * 0.5 + 0.5) * 255; out[i + 1] = (ny * 0.5 + 0.5) * 255; out[i + 2] = (nz * 0.5 + 0.5) * 255; out[i + 3] = 255;
+    out[i] = (nx * 0.5 + 0.5) * 255; out[i + 1] = (ny * 0.5 + 0.5) * 255; out[i + 2] = (nz * 0.5 + 0.5) * 255; out[i + 3] = alpha ? alpha[y * N + x] : 255;
   }
   return out;
 }
@@ -61,9 +61,15 @@ export interface MasonryOpts {
   face: number;                                        // face roughness (height noise)
   pinning: number;                                     // small pinning stones in wide joints (rubble)
   chip: number; cracks: number;                        // arris chipping (m), crack frequency
+  dome: number;                                        // pillowed faces: extra height toward the stone centre
   strength: number;
 }
 
+/**
+ * Coursed masonry. Outputs: albedo (sRGB); normal (RGB tangent normal, A = the stone's centre along u,
+ * so shaders can tell repeats of the same stone apart); data = [height, ao, stone id, mortar mask].
+ * Height is what the parallax shader marches: mortar ~0.05–0.2, stone arrises ~0.3, faces up to ~0.95.
+ */
 export function masonry(o: MasonryOpts): TexSet {
   const N = o.size, px = N / o.tile, r = mulberry32(hashSeed(o.name));
   const noise = new TileNoise(hashSeed(o.name + 'n'));
@@ -95,7 +101,7 @@ export function masonry(o: MasonryOpts): TexSet {
     courses.push({ off, stones });
   }
 
-  const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4);
+  const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4), centre = new Uint8Array(N * N);
   const jw = o.joint * px * 0.5, bev = o.bevel * px, wp = o.warp * px;
   for (let y = 0; y < N; y++) {
     const v = y / N;
@@ -109,6 +115,7 @@ export function masonry(o: MasonryOpts): TexSet {
       let xx = ((wx % N) + N) % N; if (xx < course.off) xx += N;
       let s = 0; while (s < course.stones.length - 1 && course.stones[s].x1 <= xx) s++;
       const st = course.stones[s];
+      centre[y * N + x] = ((((st.x0 + st.x1) * 0.5) % N) / N) * 255;
       let top = cy[c], bot = cy[c + 1], id = st.id;
       if (st.split) { const m = top + (bot - top) * st.split; if (yy < m) bot = m; else { top = m; id = (id * 7.31) % 1; } }
       const dx = Math.min(xx - st.x0, st.x1 - xx), dy = Math.min(yy - top, bot - yy);
@@ -124,7 +131,8 @@ export function masonry(o: MasonryOpts): TexSet {
       let h: number, col: RGB, ao: number, mortar = 0;
       if (d <= 0) {
         mortar = 1;
-        h = 0.1 + 0.06 * grain + 0.05 * g;
+        // raked joints: recessed most in the middle of the joint, rough
+        h = 0.11 + 0.05 * grain + 0.04 * g - 0.05 * Math.min(1, -d / Math.max(1, jv));
         const pin = o.pinning > 0 && noise.n(u, v, 128) > 1 - o.pinning * 2 && -d < jv * 0.9;
         if (pin) { h = 0.33 + 0.1 * grain; col = [0.2, 0.2, 0.195]; mortar = 0; }
         else { const k = 0.8 + 0.14 * grain + 0.1 * g; col = [o.mortar[0] * k, o.mortar[1] * k, o.mortar[2] * k]; }
@@ -133,11 +141,13 @@ export function masonry(o: MasonryOpts): TexSet {
         const prof = Math.pow(sstep(0, bev, d), 0.55);
         const facey = (yy - (top + bot) / 2) / Math.max(1, bot - top);
         const mott = noise.fbm(u + id * 13.7, v + id * 5.1, 24, 3);
-        const crack = id < 0.3 * o.cracks && Math.abs(noise.fbm(u + id * 7.7, v + id * 2.3, 12, 2)) < 0.01 ? 1 : 0;
-        h = 0.3 + 0.5 * prof * st.bulge + o.face * (0.5 * g + 0.3 * noise.fbm(u + id, v, 128, 2) + 0.2 * mott) + st.tilt * facey * prof - crack * 0.12;
+        // hairline cracks: short open segments of a noise contour (whole contours read as drawn loops)
+        const crack = id < 0.14 * o.cracks && Math.abs(noise.fbm(u + id * 7.7, v + id * 2.3, 12, 2)) < 0.008 && noise.n(u + id * 3.3, v, 24) > 0.25 ? 1 : 0;
+        const dome = Math.sqrt(Math.min(1, d / Math.max(1, 0.5 * Math.min(st.x1 - st.x0, bot - top))));
+        h = 0.3 + 0.45 * prof * st.bulge + o.dome * dome * st.bulge + o.face * (0.5 * g + 0.3 * noise.fbm(u + id, v, 128, 2) + 0.2 * mott) + st.tilt * facey * prof - crack * 0.12;
         const pit = noise.n(u * 1.0 + id, v, 1024) > 0.8 ? -0.07 : 0;
         h += pit;
-        const k = (0.86 + 0.1 * g + 0.06 * grain + 0.2 * mott) * (0.7 + 0.3 * prof) + pit * 1.5 - crack * 0.25;
+        const k = (0.86 + 0.1 * g + 0.06 * grain + 0.2 * mott) * (0.78 + 0.22 * prof) + pit * 0.8 - crack * 0.2;
         col = [st.col[0] * k, st.col[1] * k, st.col[2] * k];
         ao = 0.5 + 0.5 * prof - crack * 0.3;
       }
@@ -146,7 +156,7 @@ export function masonry(o: MasonryOpts): TexSet {
       data[i4] = Math.max(0, Math.min(255, h * 255)); data[i4 + 1] = ao * 255; data[i4 + 2] = id * 255; data[i4 + 3] = mortar * 255;
     }
   }
-  return { size: N, albedo, normal: heightToNormal(height, N, o.strength), data };
+  return { size: N, albedo, normal: heightToNormal(height, N, o.strength, centre), data };
 }
 
 export const STONE_GREYS = {
@@ -162,16 +172,16 @@ export const STONE_GREYS = {
 
 export const ashlarSet = () => masonry({
   name: 'ashlar', size: 2048, tile: 4, course: [0.26, 0.44], stone: [0.42, 1.05], joint: 0.016, bevel: 0.03, warp: 0.014,
-  split: 0.04, palette: STONE_GREYS.ashlar, mortar: [0.33, 0.32, 0.3], bright: 0.14, face: 0.2, pinning: 0, chip: 0.022, cracks: 1, strength: 8,
+  split: 0.04, palette: STONE_GREYS.ashlar, mortar: [0.4, 0.39, 0.36], bright: 0.14, face: 0.2, pinning: 0, chip: 0.022, cracks: 1, dome: 0.08, strength: 8,
 });
 export const rubbleSet = () => masonry({
   name: 'rubble', size: 2048, tile: 4, course: [0.16, 0.4], stone: [0.18, 0.75], joint: 0.035, bevel: 0.05, warp: 0.05,
-  split: 0.12, palette: STONE_GREYS.rubble, mortar: [0.31, 0.3, 0.28], bright: 0.18, face: 0.3, pinning: 0.07, chip: 0.05, cracks: 1.5, strength: 10,
+  split: 0.12, palette: STONE_GREYS.rubble, mortar: [0.35, 0.34, 0.31], bright: 0.18, face: 0.2, pinning: 0.07, chip: 0.05, cracks: 1.5, dome: 0.13, strength: 9,
 });
 export const dressedSet = () => masonry({
   name: 'dressed', size: 1024, tile: 2, course: [0.3, 0.42], stone: [0.55, 0.95], joint: 0.01, bevel: 0.015, warp: 0.004,
   split: 0, palette: [{ c: [0.36, 0.355, 0.34], w: 3 }, { c: [0.32, 0.32, 0.315], w: 2 }, { c: [0.39, 0.375, 0.35], w: 1 }],
-  mortar: [0.34, 0.335, 0.31], bright: 0.12, face: 0.1, pinning: 0, chip: 0.008, cracks: 0.5, strength: 6,
+  mortar: [0.4, 0.395, 0.37], bright: 0.12, face: 0.1, pinning: 0, chip: 0.008, cracks: 0.5, dome: 0.04, strength: 6,
 });
 
 /** Overlapping slates: rows of 0.2 m exposure, staggered, varied widths and shades, moss in the laps. */
