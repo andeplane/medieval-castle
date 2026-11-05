@@ -26,6 +26,16 @@ export const VIEWS: View[] = [
   { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-28, 56, -12], target: [80, 20, 160] }, // over the keep's south parapet, clear of the cap house and the corner turret
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
   { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
+  // close-up material checks (texture at 1–3 m): old rubble in sun, new ashlar, north face in shade, a quoin corner.
+  { name: 'closeup-rubble', label: 'Rubble 1 m', mode: 'fly', pos: [-17.04, 7.0, 22.6], target: [-25.29, 5.58, 19.29] },
+  { name: 'closeup-ashlar', label: 'Ashlar 1.5 m', mode: 'fly', pos: [-7.71, 6.8, 19.37], target: [-14.14, 5.45, 13.21] },
+  { name: 'closeup-shade', label: 'Shade 2 m', mode: 'fly', pos: [-5.65, 7.0, -22.68], target: [-0.13, 5.85, -15.67] },
+  { name: 'closeup-corner', label: 'Quoin 3 m', mode: 'fly', pos: [-25.16, 8.0, 24.51], target: [-19.66, 6.81, 17.49] },
+  // Anders' live screenshot (2026-11-05): on foot at the base of the S wing (ashlar), 1.1 m out, looking west along it
+  { name: 'closeup-walk', label: 'Wall foot', mode: 'walk', pos: [-9.157, 0, 19.096], target: [-12.638, GROUND + 2.3, 18.288] },
+  // walk views of the moat edge: by the bridge looking along it, and along the revetment
+  { name: 'bridge', label: 'Bridge', mode: 'walk', pos: [20.7, 0, 53.4], target: [14.5, 1.2, 67.8] },
+  { name: 'rim', label: 'Moat edge', mode: 'walk', pos: [48.4, 0, 32.0], target: [59.5, 1.2, 13.5] },
 ];
 
 export class CameraRig {

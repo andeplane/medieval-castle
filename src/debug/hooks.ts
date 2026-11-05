@@ -12,6 +12,8 @@ export interface HookDeps {
   /** Use whatever is under the crosshair (E). */
   use?(): boolean;
   doors?: { state(): Record<string, number>; setOpen(id: string, open: boolean, instant?: boolean): void };
+  /** The HUD (src/ui/hud.ts), so captures can show it locked, with the card or the tools. */
+  hud?: unknown;
 }
 
 const r = (n: number) => Math.round(n * 100) / 100;
@@ -52,6 +54,8 @@ export function installHooks(d: HookDeps) {
       dispatchEvent(new KeyboardEvent('keyup', { code }));
       return hooks.state().camera;
     },
+    /** HUD API for captures: hud.setLocked(true), hud.showControls(Infinity), hud.setToolsOpen(true)… */
+    hud: d.hud,
     /** Use what the crosshair is on; returns whether anything was used. */
     use: () => d.use?.() ?? false,
     /** Doors: state() = openness 0..1 per id; setOpen(id, open, instant); tick(seconds) advances without rendering. */

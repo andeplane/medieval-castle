@@ -17,6 +17,8 @@ import { openingOutline } from '../castle/interior/doorGeom';
 import type { DoorSpec } from '../castle/interior/types';
 import { createInteraction } from '../game/interact';
 import { DoorAudio } from '../game/doorAudio';
+import { createHud, browserHudDeps } from '../ui/hud';
+import { wireGameHud } from '../ui/gameHud';
 import type { V2 } from '../core/math2d';
 import type { LoadingScreen } from '../loading/tunnel';
 
@@ -80,7 +82,7 @@ export async function runDoorTest(screen: LoadingScreen) {
   document.body.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 30000);
-  void screen.progress(0.3, 'CUTTING THE OAK…');
+  void screen.progress(0.3, 'Cutting the oak…');
   const M = await makeMaterials();
 
   const { doors: specs, x0, x1, z } = doorTestSpecs();
@@ -136,29 +138,20 @@ export async function runDoorTest(screen: LoadingScreen) {
     return (!inWall || specs.some((d) => inDoorway(d, x, zz, 0.3, 0.3))) && Math.abs(zz - z) < 9.5 && x > x0 - 5 && x < x1 + 5;
   };
   rig.go(views.find((w) => w.name === (params.get('view') ?? 'door-all')) ?? views[0]);
-  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
-  const xh = document.getElementById('crosshair'); if (xh) xh.hidden = false;
-
-  // a compact UI: walk/fly and the bookmarks
-  const ui = document.getElementById('ui')!, row = document.createElement('div'); row.className = 'row';
-  const help = document.getElementById('help')!;
-  for (const m of ['walk', 'fly'] as const) {
-    const b = document.createElement('button'); b.textContent = m === 'walk' ? 'Walk' : 'Fly';
-    b.onclick = () => { rig.setMode(m); help.textContent = m === 'walk' ? 'WASD walk · Shift run · double-click to lock the mouse · E or click to open' : 'WASD · E/Q up/down · click (locked) to use'; };
-    row.appendChild(b);
-  }
-  for (const w of views) { const b = document.createElement('button'); b.textContent = w.label; b.onclick = () => rig.go(w); row.appendChild(b); }
-  ui.appendChild(row);
-  help.textContent = 'Walk to a door and press E · double-click to lock the mouse';
+  // the castle page's HUD with walk/fly and these bookmarks
+  const hud = createHud(browserHudDeps(), { onToolsOpen: () => rig.look.release() });
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly', view: hud.promptView });
+  const ui = wireGameHud(hud, { rig, views, modes: ['walk', 'fly'], search: location.search, title: 'Door test' });
+  rig.onLockChange = ui.sync;
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   const info = renderer.info;
   await renderer.compileAsync(scene, camera);
   const hooks = installHooks({
     renderer, camera, rig, setTime: (h) => sky.setTime(h), getTime: () => sky.hours,
     renderNow: async () => { pipeline.render(); },
-    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); ui.sync(); },
     use: () => interaction.use(),
-    doors,
+    doors, hud,
     stats: () => ({ scene: 'test=doors', drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, wallTriangles: wall.userData.triangles, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6) }),
   });
   if (params.has('shot')) { screen.dispose(); hooks.ready = true; return; }
@@ -168,6 +161,7 @@ export async function runDoorTest(screen: LoadingScreen) {
     rig.update(dt);
     doors.update(dt, camera.position);
     interaction.update();
+    ui.sync();
     pipeline.render();
   });
   hooks.ready = true;

@@ -1,7 +1,7 @@
 // Firelight review page (lights.html): a vaulted cellar and a torch-lit tunnel dressed with the prop
 // kit, lit only by fire through the shared light system. Same window.__game contract as the castle
 // page, so `URL=http://localhost:5173/lights.html npm run shots` captures every bookmark.
-// URL flags: ?webgl, ?shot, ?view=<name>, ?t=<seconds> (freeze time), ?exposure, ?bloom, ?fill, ?haze,
+// URL flags: ?webgl, ?shot (add ?ui to keep the tools), ?view=<name>, ?t=<seconds> (freeze time), ?exposure, ?bloom, ?fill, ?haze,
 // ?gi=0 (no bounce bake), ?shadows=N, ?lights=N, ?still (no flicker), ?seed=N.
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, emissive, texture, uv, vec3, vec4, float, mix, clamp, smoothstep, luminance, renderOutput, screenUV, length, normalView, builtinAOContext } from 'three/tsl';
@@ -19,10 +19,12 @@ import { LightRig } from './rig';
 import { linkFlames, flameBrightness } from './flames';
 import { threeLightFactory, makeFlameSprites } from './three';
 import { WARM_INTERIOR, lookFromParams, whiteBalance } from './look';
+import { createHud, browserHudDeps } from '../ui/hud';
+import { showBootError } from '../ui/error';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
-if (params.has('shot')) document.body.classList.add('shot');
+if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 const look = lookFromParams(WARM_INTERIOR, (k) => params.get(k));
 
 function dataTex(data: Uint8Array, N: number, srgb: boolean) {
@@ -67,7 +69,7 @@ async function main() {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  loading.textContent = 'CUTTING THE STONE…';
+  loading.textContent = 'Cutting the stone…';
   const t0 = performance.now();
   const T = await generateTextures(['rubble', 'dressed']);
   const wallM = stoneMat(T.rubble as unknown as TexSet, 0x9c958c, 0.88), floorM = stoneMat(T.dressed as unknown as TexSet, 0x8a8178, 0.72);
@@ -76,7 +78,7 @@ async function main() {
   (mats.wax as THREE.MeshStandardNodeMaterial).emissiveNode = vec3(0.09, 0.04, 0.012);
   const tTex = performance.now() - t0;
 
-  loading.textContent = 'LIGHTING THE TORCHES…';
+  loading.textContent = 'Lighting the torches…';
   const stage = lightStage(Number(params.get('seed') ?? 1));
   if (!params.has('nowalls')) scene.add(surfMesh(stage.walls, wallM, 'walls'), surfMesh(stage.floors, floorM, 'floors')); // ?nowalls: flames on black for tuning
   const { mesh, emitters } = mergePlaced(stage.placed);
@@ -146,12 +148,10 @@ async function main() {
   };
   go(params.get('view') ?? 'cellar');
 
-  const ui = document.getElementById('ui')!;
-  const row = document.createElement('div'); row.className = 'row';
-  for (const v of stage.views) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => go(v.name); row.appendChild(b); }
-  ui.appendChild(row);
-  const help = document.getElementById('help')!;
-  help.textContent = 'Drag to look around · scroll to move closer';
+  // UI: the castle page's tools panel (` toggles it) with one button per view
+  const hud = createHud(browserHudDeps());
+  hud.setHelp([{ keys: 'Drag', action: 'look around' }, { keys: 'Scroll', action: 'move closer' }, { keys: '`', action: 'tools' }]);
+  hud.tools({ title: 'Firelight', sections: [{ kind: 'actions', id: 'views', label: 'Views', options: stage.views.map((v) => ({ id: v.name, label: v.label })), onPick: go }] }, true);
 
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
@@ -190,4 +190,4 @@ async function main() {
   hooks.ready = true;
 }
 
-main().catch((e) => { loading.textContent = 'FAILED: ' + (e as Error).message; console.error(e); });
+main().catch((e) => { console.error(e); loading.remove(); showBootError(document, e, () => location.reload(), 'The firelight page'); });

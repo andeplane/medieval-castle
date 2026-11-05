@@ -130,3 +130,21 @@ export function previewLayout(seed = 1): PreviewLayout {
   );
   return { placed, stages: v.stages, walls, views };
 }
+
+/** World-space triangle soup (non-indexed xyz) of the box colliders of placed props, for static physics. */
+export function colliderSoup(items: Placed[]): number[] {
+  const out: number[] = [];
+  const F = [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]];
+  for (const it of items) {
+    if (!it.prop.kind.blocksNav) continue;
+    for (const c of it.prop.meta.colliders) {
+      const v: V3[] = [];
+      for (const y of [-1, 1]) for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const [x, z] = yawXZ(c.centre[0] + sx * c.half[0], c.centre[2] + sz * c.half[2], it.yaw);
+        v.push([it.at[0] + x, it.at[1] + c.centre[1] + y * c.half[1], it.at[2] + z]);
+      }
+      for (const [a, b, cc, d] of F) out.push(...v[a], ...v[b], ...v[cc], ...v[a], ...v[cc], ...v[d]);
+    }
+  }
+  return out;
+}

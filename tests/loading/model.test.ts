@@ -20,7 +20,7 @@ describe('LoadingModel', () => {
     expect(m.ignite.every((x) => x === null)).toBe(true);
     expect(m.torch(0, 0)).toBe(0);
     expect(m.fill()).toBe(0);
-    expect(m.caption).toBe('DOWN TO THE CELLAR…  0%');
+    expect(m.caption).toBe('Down to the cellar… 0%');
   });
 
   it('eases toward the target no faster than needed and never goes backwards', () => {
@@ -97,7 +97,7 @@ describe('boot progress mapping', () => {
   it('maps known boot steps in increasing order', () => {
     const v = Object.values(BOOT_STEPS);
     for (let i = 1; i < v.length; i++) expect(v[i]).toBeGreaterThan(v[i - 1]);
-    expect(stepProgress('RAISING THE WALLS…', 0)).toBe(0.62);
+    expect(stepProgress('Raising the walls…', 0)).toBe(0.62);
   });
   it('advances a little for unknown steps without reaching 100 %', () => {
     let p = 0.9;
