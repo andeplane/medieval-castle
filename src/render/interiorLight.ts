@@ -15,7 +15,7 @@ import * as THREE from 'three/webgpu';
 import { IrradianceNode } from 'three/webgpu';
 import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { uniform, lights, uv, vec2, fract, min, float, smoothstep } from 'three/tsl';
+import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix } from 'three/tsl';
 import { interiorIrradiance, paneGlow } from './interiorShader';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
@@ -73,6 +73,9 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
   const t = uv().mul(1 / 0.16), dd = vec2(t.x.add(t.y), t.x.sub(t.y)), f = fract(dd);
   const line = min(min(f.x, float(1).sub(f.x)), min(f.y, float(1).sub(f.y)));
   glass.emissiveNode = paneGlow(light).mul(smoothstep(0.03, 0.07, line).mul(0.85).add(0.03)).mul(light.glow).mul(light.gain.mul(0.3));
+  // see-through between the leads, both ways (the exterior pane, render/windowGlass.ts, sits 2 mm outside)
+  glass.transparent = true;
+  glass.opacityNode = mix(float(0.3), float(1), float(1).sub(smoothstep(0.03, 0.07, line)));
   const set = { old: mk(M.old, 'old'), new: mk(M.new, 'new'), trim: mk(M.trim, 'trim'), wood: mk(M.wood, 'wood'), iron: mk(M.iron, 'iron'), glass };
   let current: THREE.Light[] = [];
   Object.defineProperty(set, 'setDynamicLights', {

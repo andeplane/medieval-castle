@@ -25,6 +25,11 @@ import { Builder } from './castle/builder';
 import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility } from './world/visibility';
+import { fromFurniture, wallTorches } from './render/interiorFire';
+import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
+import { LightRig } from './light/rig';
+import { threeLightFactory, makeFlameSprites } from './light/three';
+import { linkFlames, flameBrightness } from './light/flames';
 import { buildRoomTest } from './debug/roomtest';
 import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
 import type { WindowInput } from './render/interiorMath';
@@ -91,6 +96,14 @@ async function main() {
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
+  // furniture (src/props): off until Anders approves it in the castle; ?furniture=1 turns it on
+  let furniture: import('./props/furnish').Furniture | null = null;
+  if (interior && params.get('furniture') === '1') {
+    await say('FURNISHING THE ROOMS…');
+    const [{ furnish }, { makePropMaterials }, T] = await Promise.all([import('./props/furnish'), import('./props/render'), import('./props/textures')]);
+    const pm = makePropMaterials({ wood: T.woodTex(), iron: T.ironTex(), cloth: T.clothTex(), straw: T.strawTex(), ceramic: T.ceramicTex() });
+    furniture = furnish(interior.plan, pm);
+  }
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
   const layoutMs = Math.round(performance.now() - tStones);
@@ -144,6 +157,17 @@ async function main() {
     }
   };
   syncDoorLight();
+  // props join their groups after the bake: they keep their own materials and are not room-tagged
+  if (furniture && interior) for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
+  // exterior windows (render/windowGlass.ts): see-through into rooms that are shown, a dark pane
+  // (warm at night when the room has firelight) while their group is culled
+  const winFlags = createWindowFlags(Math.max(1, lit.groups.length));
+  const winGlass = makeWindowGlass(M.glass, winFlags);
+  const paneSoup: number[] = [];
+  for (const g of lit.groups) g.object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.material === IM.glass) paneSoup.push(...(m.geometry.attributes.position.array as Float32Array)); });
+  const panes = triFrames(paneSoup), roomGroup = groupIndexOfRooms(lit.groups);
+  let winTagged = 0;
+  for (const s of shells) s.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.material === M.glass) { winTagged += tagWindowGroups(m.geometry, lit.plan.rooms, roomGroup, panes); m.material = winGlass; } });
 
   await say('PLANTING TREES…');
   let veg: Vegetation | null = null;
@@ -193,11 +217,32 @@ async function main() {
   const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
   // the stair bookmarks are close, upward-looking fly views: lift the orbit clamps that go() applies
   if (test) { rig.orbit.minDistance = 0.01; rig.orbit.maxPolarAngle = Math.PI; }
-  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); };
+  const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); winFlags.night.value = nightOf(sky.sunDir.y); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
   // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
   const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt });
+  // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
+  // rig lights the nearest ones in shown groups, and the interior materials take its light pool
+  const groupOf = new Map<string, string>(), groupIx = new Map(lit.groups.map((g, i) => [g.key, i]));
+  for (const g of lit.groups) for (const id of g.rooms) groupOf.set(id, g.key);
+  const fire = furniture ? fromFurniture(furniture.emitters, furniture.flames) : wallTorches(lit.plan, (id) => groupOf.get(id));
+  const fireLights = threeLightFactory(scene);
+  const fireRig = new LightRig(fireLights, { shadows: 1, lights: 8 });
+  fireRig.setEmitters(fire.emitters);
+  IM.setDynamicLights(fireLights.lights);
+  const flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
+  const sprites = makeFlameSprites(flames);
+  scene.add(sprites.group);
+  const fireShown = (id: number) => vis.state.visible[groupIx.get(fire.group[id]) ?? -1] ?? false;
+  let fireT = 0;
+  const fireGroups = lit.groups.map((g) => fire.group.includes(g.key));
+  const updateFire = (dt: number) => {
+    fireT += dt;
+    winFlags.set(vis.state.visible, fireGroups);
+    fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z], fireShown);
+    sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);
+  };
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
 
@@ -243,12 +288,13 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     tick: (dt) => { doors.update(dt, camera.position); syncDoorLight(); interaction.update(); },
     use: () => interaction.use(),
     doors,
     stats: () => ({
       interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
+      furniture: furniture ? { props: furniture.props, triangles: furniture.triangles, groups: furniture.objects.size, emitters: [...furniture.emitters.values()].reduce((s, e) => s + e.length, 0) } : null,
       castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
@@ -258,12 +304,15 @@ async function main() {
         exposure: Math.round(exposure.state.exposure * 1000) / 1000, meanLog2: Math.round(exposure.state.meanLog2 * 100) / 100,
         bakeMs: Math.round(bake.ms * 10) / 10, bvhMs: Math.round(bvhMs * 10) / 10, apertures: bake.apertures.length,
       },
+      windowsSeeThrough: winTagged,
+      fire: { ...fireRig.stats(), flames: flames.length, source: furniture ? 'furniture' : 'wall torches' },
     }),
   });
 
   // the doors module reports leaf positions here: __game.interiorLight.setDoorOpen(id, 0..1)
   (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state, visibility: vis };
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+  (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
@@ -287,6 +336,7 @@ async function main() {
     interaction.update();
     veg?.update(camera);
     vis.update();
+    updateFire(dt);
     exposure.update(dt, vis.state);
     pipeline.render();
     exposure.measure();
