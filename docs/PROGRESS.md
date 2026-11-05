@@ -29,6 +29,12 @@ Known issues / next
 - The test course does not cut the render terrain; the tunnel hole is visible only from the physics.
 - Collider build time should be measured on the M4; if it is long, split the castle trimesh or build it in a worker.
 
+## 2026-11-05: see-through window glass
+
+Done
+- `glass` (src/render/materials.ts) is transparent: the diamond quarries are ~20 % opaque, the lead cames stay solid, double-sided, no depth write. From the courtyard you now see the room behind a window (floor, walls, ceiling beams); from inside, the trees outside. Checked with captures from 4 m and 1 m outside a N-wing courtyard window, the gate bookmark and the towerroom bookmark (headless WebGL2). Not checked on WebGPU.
+- Visual review findings (opaque windows, wicket gate, no interior door leaves, sunlit cellar, pillow stones, draw calls) went to the castle thread.
+
 ## 2026-11-05: furniture in the castle rooms (behind `?furniture=1`)
 
 Done

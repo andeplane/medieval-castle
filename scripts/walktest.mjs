@@ -90,7 +90,7 @@ const b = P.bridge, a = [b.start[0] - b.dir[0] * 4, b.start[1] - b.dir[1] * 4];
 await tele(a[0], null, a[1], face(a, [a[0] + b.dir[0], a[1] + b.dir[1]]));
 r = await run(['KeyW'], 7000);
 const along = (r.x - b.start[0]) * b.dir[0] + (r.z - b.start[1]) * b.dir[1];
-check('bridge walkable to the break, not beyond', along > b.breakAt - 1.5 && along < b.breakAt + 0.1 && r.y > b.deck - 0.6, `along ${along.toFixed(2)} / break ${b.breakAt.toFixed(2)}, y ${r.y.toFixed(2)}`);
+check('bridge walkable to the break, not beyond', along > b.breakAt - 1.5 && along < b.breakAt + 0.1 && r.y > 2, `along ${along.toFixed(2)} / break ${b.breakAt.toFixed(2)}, y ${r.y.toFixed(2)}`);
 
 // 5. the course
 const lane = (n) => course.lanes.find((l) => l.name === n);

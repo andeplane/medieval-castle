@@ -203,8 +203,9 @@ export async function makeMaterials(): Promise<Materials> {
   const iron = new THREE.MeshStandardNodeMaterial({ color: 0x1a1a1b, roughness: 0.55, metalness: 0.7 });
   const voidM = new THREE.MeshStandardNodeMaterial({ color: 0x050505, roughness: 1 });
 
-  // Leaded glass: diamond quarries, slightly uneven panes that catch the sky
-  const glass = new THREE.MeshStandardNodeMaterial({ roughness: 0.12, metalness: 0.0 });
+  // Leaded glass: diamond quarries, slightly uneven panes that catch the sky. The quarries are
+  // see-through (the rooms behind show), the lead cames are opaque.
+  const glass = new THREE.MeshStandardNodeMaterial({ roughness: 0.12, metalness: 0.0, transparent: true, depthWrite: false, side: THREE.DoubleSide });
   {
     const t = uv().mul(1 / 0.16);
     const d = vec2(t.x.add(t.y), t.x.sub(t.y));
@@ -215,6 +216,7 @@ export async function makeMaterials(): Promise<Materials> {
     glass.colorNode = mix(vec3(0.03, 0.035, 0.04).mul(wobble.add(0.6)), vec3(0.025, 0.025, 0.025), leadMask);
     glass.roughnessNode = mix(float(0.06).add(wobble.mul(0.12)), float(0.7), leadMask);
     glass.metalnessNode = mix(float(0.15), float(0.4), leadMask);
+    glass.opacityNode = mix(float(0.18).add(wobble.mul(0.1)), float(1), leadMask);
   }
 
   const terrain = makeTerrainMaterial(T.ground as unknown as GroundData, macro);
