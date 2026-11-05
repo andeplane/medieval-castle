@@ -44,7 +44,8 @@ export type InteriorMaterialSet = InteriorMaterials & {
 /** The room table the shader reads and the artist knobs (live-tweakable from __game.interiorLight). */
 export interface InteriorLight {
   table: THREE.DataTexture; maxRooms: number;
-  /** irradiance floor so unlit stone never goes pure black (cellars, tunnels) */
+  /** irradiance floor so unlit stone never goes pure black (cellars, tunnels); slightly cool, and
+   * strong enough that stone away from a torch keeps its grey instead of the fire's colour */
   floor: THREE.UniformNode<'vec3', THREE.Vector3>;
   /** daylight gain indoors: the eye adapts further than the 2.5-stop exposure range allows */
   gain: THREE.UniformNode<'float', number>;
@@ -55,7 +56,7 @@ export interface InteriorLight {
 export function createInteriorLight(maxRooms = 1024): InteriorLight {
   const table = new THREE.DataTexture(new Float32Array(TEX_W * maxRooms * 4), TEX_W, maxRooms, THREE.RGBAFormat, THREE.FloatType);
   table.minFilter = table.magFilter = THREE.NearestFilter; table.generateMipmaps = false; table.needsUpdate = true;
-  return { table, maxRooms, floor: uniform(new THREE.Vector3(0.05, 0.05, 0.055)), gain: uniform(12), glow: uniform(1) };
+  return { table, maxRooms, floor: uniform(new THREE.Vector3(0.145, 0.145, 0.155)), gain: uniform(12), glow: uniform(1) };
 }
 
 /**

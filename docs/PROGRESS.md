@@ -1,5 +1,51 @@
 # Progress
 
+## 2026-11-05: firelight on grey stone, not sepia (branch `interior-colour`)
+
+Anders sent `castle-plan/feedback/door-prompt-floor.png`: an empty interior room in one saturated orange-brown. Measured on his screenshot: mean sRGB (87, 45, 13), HSV saturation 0.87, blue/red 0.15, and the same hue (25°) on every wall and the floor.
+
+Cause (measured in the game, not guessed):
+- **The torch colour had no blue at all.** `toSource` lit every fire with the 1800 K black body as a daylight-balanced camera records it: linear (1, 0.21, 0). Grey stone times that is pure orange whatever its own colour, so every fire-lit pixel had saturation ≈ 1.0 and blue/red ≈ 0.02. The eye's partial white balance to firelight (`WARM_INTERIOR.grade.adapt`) existed only on the review page (lights.html), as a whole-frame gain, and a gain cannot bring back a blue channel that is zero.
+- **Torches lit the neighbouring rooms through the walls.** Fire lights cast no shadows, and a wall torch's range was 7 × √3 ≈ 12 m. The undercrofts' torches are about 5.5 m apart, so each room was lit by its own torch and its neighbours'. The whole room was in torchlight, with no unlit stone left to show its grey. The chamber next to the hall had a warm glow from the hall's torch.
+- **The readability floor (0.05) was invisible.** At +2.5 stops it sits in the toe of the neutral tone map, which subtracts most of the darkest channel and makes dark warm pixels browner still. Bounce and fill could not counter the torch.
+
+Changes (tuning only, no new system):
+- `src/light/blackbody.ts` `seenKelvin(k, adapt)`: chromatic adaptation along the Planckian locus, linear in mired towards 6500 K.
+- `src/light/rig.ts`: `toSource` and `LightRig` colour every fire with it (`RigOptions.adapt`, default `WARM_INTERIOR.grade.adapt`).
+- `src/light/look.ts`: `grade.adapt` goes from 0.18 to 0.55, so a 1800 K torch reads about 3000 K (linear 1, 0.44, 0.15), a hearth about 2700 K and a candle about 3050 K. The flames themselves keep their own 1800 K ramp, so they still look orange against the stone.
+- lights.html now uses the same adaptation through the rig, instead of a frame gain (`whiteBalance` is removed).
+- `src/light/flicker.ts`: torch range goes from 7 to 4, which gives about 6.9 m for a wall torch (intensity 3), about one room.
+- `src/render/interiorLight.ts`: the readability floor goes from (0.05, 0.05, 0.055) to (0.145, 0.145, 0.155), near neutral. A first try at (0.14, 0.145, 0.16), with green above red, turned the darkest stone olive in the tone-map toe.
+
+Before/after, measured on headless WebGL2 walk-mode captures (`?shot`: +2.5 stops in rooms, +3.2 deep). Fire lights are held at their mean brightness, with no flicker or fade-in, so each pair differs only by the change. Values are mean sRGB, HSV saturation and blue/red over a region:
+
+| view, region | before | sat | B/R | after | sat | B/R |
+|---|---|---|---|---|---|---|
+| undercroft N0-2, torch wall | (202, 117, 57) | 0.77 | 0.28 | (198, 143, 93) | 0.57 | 0.47 |
+| undercroft N0-2, side wall | (136, 63, 3) | 0.98 | 0.02 | (117, 75, 33) | 0.74 | 0.28 |
+| undercroft N0-2, floor | (128, 60, 1) | 0.99 | 0.01 | (104, 67, 19) | 0.83 | 0.18 |
+| 0.5 m from the wall, 1 m from the torch * | (215, 114, 44) | 0.82 | 0.21 | (215, 149, 89) | 0.61 | 0.41 |
+| 0.5 m from the far wall, 5.7 m from the torch | (130, 61, 3) | 0.98 | 0.02 | (68, 44, 16) | 0.79 | 0.23 |
+| cellar N-c1, torch wall | (171, 104, 49) | 0.80 | 0.29 | (162, 123, 72) | 0.66 | 0.44 |
+| cellar N-c1, far vault | (124, 59, 3) | 0.98 | 0.03 | (98, 66, 29) | 0.71 | 0.30 |
+| hall N1-2 (windows + torch), torch wall | (151, 102, 79) | 0.44 | 0.52 | (148, 120, 98) | 0.31 | 0.66 |
+| hall N1-2, wall away from the torch | (104, 78, 65) | 0.42 | 0.62 | (82, 78, 72) | 0.24 | 0.88 |
+| chamber N1-1 (window, no fire) * | (88, 71, 62) | 0.28 | 0.71 | (84, 82, 79) | 0.07 | 0.93 |
+
+Rows marked * were captured with the first floor value, (0.14, 0.145, 0.16); every other row moved by at most 0.01 between the two floor values.
+
+Captures (`castle-plan/interior-colour/`, `before-*` / `after-*`): under-room, under-near-wall (close range, 0.5 m), under-far-wall (0.5 m), cellar-room, hall-room, hall-near-wall, chamber-room; the bookmarks hall, undercroft and cellar; gate and courtyard (after only); and lights.html cellar and supper.
+
+Checked:
+- `npm run coverage`: 649 tests pass, and `src/light` coverage is 100 % lines. `npm run build` passes. The key-path tests are in the suite.
+- I looked at the captures as a player would. Rooms with daylight (the hall, the chamber) now read as grey stone with a warm pool round the torch. The windowless undercroft and cellar read as warm stone rather than sepia, darker and browner away from the torch.
+
+Still open:
+- Windowless rooms are still warm all over (far wall saturation 0.78). Nothing neutral reaches them, and the neutral tone map's toe browns dark warm pixels. Two levers remain if Anders wants greyer: a dark-tone desaturation in the grade, or a stronger fill. Either changes the outdoor look or flattens rooms, so neither is done here.
+- The `undercroft` and `cellar` bookmarks render only a couple of frames, so their torches have not faded in. They show mostly the fill: dark, slightly olive stone. The walk captures above hold the fires at full.
+- `?shot` gives the hall's north wall +3.2 stops ("deep") when you stand 0.5 m from it, so that close-up is blown out. This is the shot exposure path; live auto-exposure was not checked.
+- lights.html is a little darker than before: shorter torch range, and no frame gain. At its exposure of 0.58 the page sits in the tone-map toe, and it is still saturated (0.97).
+- Not checked on WebGPU or on a Mac; with flicker on; at night; with `?furniture=1` (hearths, braziers and candles keep their old ranges, 9 / 7.5 / 3.5 m, and still reach through walls).
 ## 2026-11-05: frame rate fixes (AO pre-pass at half size, dynamic resolution)
 
 Measured after deploy (`?bench`, Anders' M4, Chrome WebGPU, 1200×897 CSS px, devicePixelRatio 2, 120 Hz; fps / p95 frame ms):
