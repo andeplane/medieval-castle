@@ -4,12 +4,17 @@
 export const N_TORCH = 8;
 /** The last stretch of progress raises the fill light and the daylight at the far grille. */
 export const FILL_FROM = 0.93;
+/** While waiting on a step, progress creeps at CREEP_RATE per second up to CREEP_MAX past it. */
+export const CREEP_RATE = 0.012, CREEP_MAX = 0.07;
 
-/** Progress at which each torch strikes, nearest first, spread evenly up to just before the fill. */
+/** Progress at which each torch strikes (torch 0 is the farthest), spread evenly up to just before the fill. */
 export function torchThresholds(n = N_TORCH, fillFrom = FILL_FROM): number[] {
   if (n === 1) return [0.03];
   return Array.from({ length: n }, (_, i) => 0.03 + (i * (fillFrom - 0.06)) / (n - 1));
 }
+
+/** Caption under the title: step label and percent. */
+export const caption = (label: string, shown: number) => `${label.toUpperCase()}  ${Math.round(shown * 100)}%`;
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -48,6 +53,12 @@ export class LoadingModel {
    */
   tick(now: number, dt: number) {
     if (this.shown < this.target) this.shown = Math.min(this.target, this.shown + Math.max(dt * 0.45, (this.target - this.shown) * dt * 3));
+    else if (!this.fixed && this.target < 1) {
+      // creep a little past the last real step while the main thread is busy, so a long step
+      // (shader compile) still brings the next light closer; never into the final fill
+      const ceil = Math.min(this.target + CREEP_MAX, FILL_FROM - 0.001);
+      if (this.shown < ceil) this.shown = Math.min(ceil, this.shown + dt * CREEP_RATE);
+    }
     for (let i = 0; i < this.n; i++) {
       // a fixed preview shows torches already burning steadily
       if (this.ignite[i] === null && this.shown >= this.thresholds[i]) this.ignite[i] = this.fixed ? -Infinity : now;
@@ -68,7 +79,7 @@ export class LoadingModel {
   fill(): number { return smooth(clamp01((this.shown - FILL_FROM) / (1 - FILL_FROM))); }
 
   get percent() { return Math.round(this.shown * 100); }
-  get caption() { return `${this.label.toUpperCase()}  ${this.percent}%`; }
+  get caption() { return caption(this.label, this.shown); }
   get done() { return this.shown >= 1; }
 }
 

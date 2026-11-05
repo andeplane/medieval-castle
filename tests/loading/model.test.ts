@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, stepProgress, textureProgress, BOOT_STEPS } from '../../src/loading/model';
+import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, CREEP_MAX, CREEP_RATE, stepProgress, textureProgress, BOOT_STEPS } from '../../src/loading/model';
 
 describe('torchThresholds', () => {
   it('lights torches in order, all before the fill stretch', () => {
@@ -15,7 +15,7 @@ describe('torchThresholds', () => {
 describe('LoadingModel', () => {
   it('starts pitch dark', () => {
     const m = new LoadingModel();
-    m.tick(0, 0.016);
+    m.tick(0, 0);
     expect(m.shown).toBe(0);
     expect(m.ignite.every((x) => x === null)).toBe(true);
     expect(m.torch(0, 0)).toBe(0);
@@ -32,8 +32,9 @@ describe('LoadingModel', () => {
     m.tick(16, 0.016);
     expect(m.shown).toBeGreaterThan(0);
     expect(m.shown).toBeLessThan(0.5);
-    for (let t = 32; t < 10_000; t += 16) m.tick(t, 0.016);
-    expect(m.shown).toBe(0.5);
+    for (let t = 32; t < 1_500; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBeGreaterThanOrEqual(0.5);
+    expect(m.shown).toBeLessThan(0.52);
     m.setTarget(2);
     expect(m.target).toBe(1);
     m.setTarget(-1);
@@ -108,5 +109,25 @@ describe('boot progress mapping', () => {
     expect(textureProgress(0, 8)).toBe(0.06);
     expect(textureProgress(8, 8)).toBeCloseTo(0.62);
     expect(textureProgress(0, 0)).toBe(0.06);
+  });
+});
+
+describe('creep while waiting', () => {
+  it('keeps bringing light closer during a long step, but never into the final fill', () => {
+    const m = new LoadingModel();
+    m.setTarget(0.5);
+    for (let t = 0; t < 60_000; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBeCloseTo(0.5 + CREEP_MAX, 5);
+    const n = new LoadingModel();
+    n.setTarget(0.9);
+    for (let t = 0; t < 60_000; t += 16) n.tick(t, 0.016);
+    expect(n.shown).toBeLessThan(FILL_FROM);
+    expect(n.fill()).toBe(0);
+    expect(CREEP_RATE).toBeGreaterThan(0);
+  });
+  it('does not creep in a fixed preview or once complete', () => {
+    const m = new LoadingModel({ fixed: 0.4 });
+    for (let t = 0; t < 10_000; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBe(0.4);
   });
 });

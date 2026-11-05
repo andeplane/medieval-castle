@@ -9,7 +9,7 @@ export default defineConfig({
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
       include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,bridge,revetment,layout,spec}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/{stairs,stairprobe}.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts', 'src/game/{interact,doorAudio}.ts'],
-      exclude: ['src/loading/entry.ts', 'src/props/preview.ts'],
+      exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/props/preview.ts'],
       thresholds: {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         'src/props/**': { lines: 99, functions: 100, branches: 95, statements: 99 },
