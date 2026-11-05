@@ -1,14 +1,23 @@
-// Loading screen: a pitch-dark tunnel under the moat where load progress lights the wall torches one
-// by one, nearest first, and the last step brings up a soft fill and daylight through the far grille.
-// It runs on its own small WebGL2 canvas so it is up within a frame, long before the castle's
-// renderer, textures and shaders exist. Without WebGL2 the caption alone carries progress.
-// Everything time-, frame- or GPU-related is injected (`LoadingDeps`) so tests drive it directly.
-import { LoadingModel } from './model';
-import { createTunnelRenderer, type GLLike, type TunnelRenderer, type Palette } from './gl';
+// Loading screen: a pitch-black tunnel under the moat. Load progress strikes the wall torches one by
+// one, starting far down the tunnel and coming toward the viewer; the last stretch brings up a soft
+// fill and daylight through the far grille. The tunnel is drawn by a worker on an OffscreenCanvas
+// (backend.ts) so it keeps animating while the main thread builds the castle; without workers it
+// falls back to the main thread, and without WebGL2 the caption alone carries progress.
+// Everything time-, frame-, GPU- or worker-related is injected (`LoadingDeps`).
+import { caption } from './model';
+import { Timeline, localTimeStore, type TimeStore } from './timeline';
+import { renderSize } from './loop';
+import { createTunnelRenderer, type Palette } from './gl';
+import { localBackend, workerBackend, type BackendInit, type TunnelBackend } from './backend';
+import type { FromWorker } from './protocol';
 import { STONE_GREYS } from '../render/texgen';
 
+export { renderSize };
+
 export interface LoadingScreen {
-  /** Set load progress 0..1 and an optional caption, then yield a frame so the new light is drawn. */
+  /** A named boot step began (see timeline.ts): progress moves with time through its share. */
+  step(label: string): Promise<void>;
+  /** Set load progress 0..1 directly and an optional caption, then yield a frame so the page can paint. */
   progress(p: number, label?: string): Promise<void>;
   /** Light the rest, hold a moment, fade out and free the GPU context. */
   finish(): Promise<void>;
@@ -19,35 +28,56 @@ export interface LoadingScreen {
 
 export interface LoadingDeps {
   now(): number;
+  /** where this device's boot-step timings are remembered */
+  store: TimeStore | null;
   raf(cb: (t: number) => void): number;
   caf(id: number): void;
   wait(ms: number): Promise<void>;
-  /** one frame plus a macrotask, so a following synchronous step does not swallow the draw */
+  /** one frame plus a macrotask, so a following synchronous step does not swallow the paint */
   nextFrame(): Promise<void>;
   reducedMotion: boolean;
   viewport(): { w: number; h: number; dpr: number };
-  getGL(canvas: HTMLCanvasElement): GLLike | null;
   /** pointer position in -1..1 for a little parallax; returns an unsubscribe */
   onPointer(cb: (x: number, y: number) => void): () => void;
-  makeRenderer(gl: GLLike, pal: Palette, reduced: boolean): TunnelRenderer | null;
+  /** window resize; returns an unsubscribe */
+  onResize(cb: () => void): () => void;
+  /** start drawing the tunnel into this canvas */
+  backend(canvas: HTMLCanvasElement, init: BackendInit): TunnelBackend;
 }
 
 /* v8 ignore start -- thin browser bindings, exercised by the captures */
+export function browserBackend(canvas: HTMLCanvasElement, init: BackendInit): TunnelBackend {
+  if ('transferControlToOffscreen' in canvas && typeof Worker !== 'undefined') {
+    try {
+      const w = new Worker(new URL('./tunnel.worker.ts', import.meta.url), { type: 'module' });
+      return workerBackend(canvas.transferControlToOffscreen(), {
+        post: (m, transfer) => w.postMessage(m, transfer ?? []),
+        listen: (onMessage, onError) => { w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data); w.onerror = onError; },
+        terminate: () => w.terminate(),
+      }, init);
+    } catch (e) { console.warn('tunnel worker unavailable, drawing on the main thread', e); }
+  }
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+  const clock = { now: () => performance.now(), raf: (cb: (t: number) => void) => requestAnimationFrame(cb), caf: (id: number) => cancelAnimationFrame(id) };
+  return localBackend(canvas, gl, init, clock, createTunnelRenderer);
+}
+
 export const browserDeps = (): LoadingDeps => ({
   now: () => performance.now(),
+  store: localTimeStore((() => { try { return localStorage; } catch { return null; } })()),
   raf: (cb) => requestAnimationFrame(cb),
   caf: (id) => cancelAnimationFrame(id),
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   nextFrame: () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))),
   reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
   viewport: () => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }),
-  getGL: (c) => c.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' }),
   onPointer: (cb) => {
     const f = (e: PointerEvent) => cb((e.clientX / innerWidth) * 2 - 1, -((e.clientY / innerHeight) * 2 - 1));
     addEventListener('pointermove', f);
     return () => removeEventListener('pointermove', f);
   },
-  makeRenderer: createTunnelRenderer,
+  onResize: (cb) => { addEventListener('resize', cb); return () => removeEventListener('resize', cb); },
+  backend: browserBackend,
 });
 /* v8 ignore stop */
 
@@ -57,20 +87,13 @@ export const PALETTE: Palette = {
   mortar: [0.35, 0.34, 0.31],
 };
 
-/** Render at ~0.75 of device pixels (DPR capped at 2): the scene is soft and dark, it upscales well. */
-export const renderSize = (v: { w: number; h: number; dpr: number }) => {
-  const s = Math.min(v.dpr, 2) * 0.75;
-  return { w: Math.max(2, Math.round(v.w * s)), h: Math.max(2, Math.round(v.h * s)) };
-};
-
 export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } = {}, d: LoadingDeps = browserDeps()): LoadingScreen {
-  const m = new LoadingModel({ fixed: opts.fixed, reduced: d.reducedMotion });
   const doc = root.ownerDocument;
   root.textContent = '';
   root.classList.remove('plain'); // the static placeholder's look
   const canvas = doc.createElement('canvas');
-  const caption = doc.createElement('div');
-  caption.className = 'cap';
+  const cap = doc.createElement('div');
+  cap.className = 'cap';
   const title = doc.createElement('div');
   title.className = 'title';
   title.textContent = 'Moated Castle';
@@ -82,55 +105,55 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
   const pctEl = doc.createElement('span');
   pctEl.className = 'pct';
   labelEl.append(stepEl, pctEl);
-  caption.append(title, labelEl);
-  root.append(canvas, caption);
+  cap.append(title, labelEl);
+  root.append(canvas, cap);
   root.setAttribute('role', 'progressbar');
   root.setAttribute('aria-label', 'Loading Moated Castle');
   root.setAttribute('aria-valuemin', '0');
   root.setAttribute('aria-valuemax', '100');
+
+  const sz = renderSize(d.viewport());
+  const be = d.backend(canvas, { ...sz, reduced: d.reducedMotion, fixed: opts.fixed, palette: PALETTE });
+  const plan = new Timeline(d.now, d.store);
+  const startSpan = (sp: { start: number; end: number; ms: number }) => { if (opts.fixed === undefined) be.span(sp.start, sp.end, sp.ms); };
+  startSpan(plan.first());
+  let label = 'Down to the cellar…', disposed = false;
   const syncLabel = () => {
-    stepEl.textContent = m.label;
-    pctEl.textContent = `${m.percent}%`;
-    root.setAttribute('aria-valuenow', String(m.percent));
-    root.setAttribute('aria-valuetext', m.caption);
+    const pct = Math.round(be.shown * 100);
+    stepEl.textContent = label;
+    pctEl.textContent = `${pct}%`;
+    root.setAttribute('aria-valuenow', String(pct));
+    root.setAttribute('aria-valuetext', caption(label, be.shown));
   };
-
-  const gl = d.getGL(canvas);
-  const renderer = gl ? d.makeRenderer(gl, PALETTE, d.reducedMotion) : null;
-  const look: [number, number] = [0, 0];
-  const unPointer = d.onPointer((x, y) => { look[0] = x; look[1] = y; });
-  const torches = new Float32Array(m.n);
-  const t0 = d.now();
-  let last = t0, raf = 0, disposed = false;
-
-  const tick = (now: number) => {
-    if (disposed) return;
-    m.tick(now, Math.min(0.1, Math.max(0, (now - last) / 1000)));
-    last = now;
-    syncLabel();
-    if (renderer) {
-      const { w, h } = renderSize(d.viewport());
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      for (let i = 0; i < m.n; i++) torches[i] = m.torch(i, now);
-      const f = m.fill();
-      // a little daylight at the far grille from the start, so the dark has a direction
-      renderer.draw({ w, h, time: (now - t0) / 1000, torches, fill: f * 0.3, day: 0.04 + 0.96 * f, look });
-    }
-    raf = d.raf(tick);
-  };
+  const unPointer = d.onPointer((x, y) => be.look(x, y));
+  const unResize = d.onResize(() => { const s = renderSize(d.viewport()); be.resize(s.w, s.h); });
+  // the caption lives in the page, so it only updates when the main thread is free; the tunnel does not wait for it
+  let raf = 0;
+  const tick = () => { if (disposed) return; syncLabel(); raf = d.raf(tick); };
   raf = d.raf(tick);
   syncLabel();
 
   const screen: LoadingScreen = {
-    get shown() { return m.shown; },
-    async progress(p, label) {
-      m.setTarget(p, label);
+    get shown() { return be.shown; },
+    async step(l) {
+      const sp = plan.enter(l);
+      if (sp) startSpan(sp);
+      label = l;
+      syncLabel();
+      await d.nextFrame();
+    },
+    async progress(p, l) {
+      be.progress(p);
+      if (l) label = l;
       syncLabel();
       await d.nextFrame();
     },
     async finish() {
-      m.setTarget(1, 'The castle awaits');
-      while (!disposed && !m.done) await d.nextFrame();
+      label = 'The castle awaits';
+      plan.finish();
+      be.progress(1);
+      await be.whenDone();
+      syncLabel();
       await d.wait(d.reducedMotion ? 200 : 900);
       root.style.opacity = '0';
       await d.wait(d.reducedMotion ? 0 : 700);
@@ -141,7 +164,8 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
       disposed = true;
       d.caf(raf);
       unPointer();
-      renderer?.dispose();
+      unResize();
+      be.dispose();
       root.remove();
     },
   };

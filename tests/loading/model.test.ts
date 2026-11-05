@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, stepProgress, textureProgress, BOOT_STEPS } from '../../src/loading/model';
+import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, spanProgress, caption } from '../../src/loading/model';
 
 describe('torchThresholds', () => {
   it('lights torches in order, all before the fill stretch', () => {
@@ -15,7 +15,7 @@ describe('torchThresholds', () => {
 describe('LoadingModel', () => {
   it('starts pitch dark', () => {
     const m = new LoadingModel();
-    m.tick(0, 0.016);
+    m.tick(0, 0);
     expect(m.shown).toBe(0);
     expect(m.ignite.every((x) => x === null)).toBe(true);
     expect(m.torch(0, 0)).toBe(0);
@@ -40,7 +40,7 @@ describe('LoadingModel', () => {
     expect(m.target).toBe(1);
   });
 
-  it('strikes torches one after another, nearest first', () => {
+  it('strikes torches one after another in order (torch 0 is the farthest)', () => {
     const m = new LoadingModel();
     m.setTarget(1);
     const order: number[] = [];
@@ -93,20 +93,40 @@ describe('LoadingModel', () => {
   });
 });
 
-describe('boot progress mapping', () => {
-  it('maps known boot steps in increasing order', () => {
-    const v = Object.values(BOOT_STEPS);
-    for (let i = 1; i < v.length; i++) expect(v[i]).toBeGreaterThan(v[i - 1]);
-    expect(stepProgress('Raising the walls…', 0)).toBe(0.62);
+describe('caption', () => {
+  it('reads step then percent', () => expect(caption('Cutting the stone…', 0.426)).toBe('Cutting the stone… 43%'));
+});
+
+describe('spanProgress', () => {
+  const s = { start: 0.2, end: 0.6, ms: 1000, t0: 500 };
+  it('moves linearly with time over the expected duration', () => {
+    expect(spanProgress(s, 500)).toBe(0.2);
+    expect(spanProgress(s, 0)).toBe(0.2);
+    expect(spanProgress(s, 1000)).toBeCloseTo(0.4);
+    expect(spanProgress(s, 1250)).toBeCloseTo(0.5);
   });
-  it('advances a little for unknown steps without reaching 100 %', () => {
-    let p = 0.9;
-    for (let i = 0; i < 20; i++) { const n = stepProgress('NEW STEP…', p); expect(n).toBeGreaterThanOrEqual(p); p = n; }
-    expect(p).toBeLessThan(0.93);
+  it('slows past the expected time but never reaches the end', () => {
+    const a = spanProgress(s, 1500), b = spanProgress(s, 3000), c = spanProgress(s, 60_000);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
+    expect(c).toBeLessThan(0.6);
   });
-  it('spreads texture jobs between cutting and raising', () => {
-    expect(textureProgress(0, 8)).toBe(0.06);
-    expect(textureProgress(8, 8)).toBeCloseTo(0.62);
-    expect(textureProgress(0, 0)).toBe(0.06);
+});
+
+describe('LoadingModel spans', () => {
+  it('follows the running step in time, without creeping when there is none', () => {
+    const m = new LoadingModel();
+    for (let t = 0; t < 2000; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBe(0);
+    m.setSpan(0, 0.5, 4000, 2000);
+    for (let t = 2000; t <= 4000; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBeCloseTo(0.25, 1);
+    m.setSpan(0.5, 0.9, 1000, 4000);
+    for (let t = 4000; t <= 4500; t += 16) m.tick(t, 0.016);
+    expect(m.shown).toBeGreaterThan(0.5);
+    expect(m.shown).toBeLessThan(0.75);
+    expect(m.span!.ms).toBe(1000);
+    m.setSpan(0.9, 0.95, 0, 4500);
+    expect(m.span!.ms).toBe(1);
   });
 });

@@ -8,130 +8,111 @@ const root = () => { document.body.innerHTML = '<div id="loading">BUILDING THE C
 /** "step | pct" as the two parts of the caption line show them */
 const label = () => { const l = document.querySelector('#loading .label'); return l ? `${l.querySelector('.step')?.textContent} | ${l.querySelector('.pct')?.textContent}` : undefined; };
 
-describe('renderSize', () => {
-  it('renders at 0.75 of device pixels with DPR capped at 2', () => {
-    expect(renderSize({ w: 1000, h: 500, dpr: 3 })).toEqual({ w: 1500, h: 750 });
-    expect(renderSize({ w: 1000, h: 500, dpr: 1 })).toEqual({ w: 750, h: 375 });
-    expect(renderSize({ w: 0, h: 0, dpr: 1 })).toEqual({ w: 2, h: 2 });
-  });
-});
-
 describe('PALETTE', () => {
   it('uses the castle rubble greys, most common first', () => {
     const top = [...STONE_GREYS.rubble].sort((a, b) => b.w - a.w)[0].c;
     expect(PALETTE.stone[0]).toEqual(top);
     expect(PALETTE.stone).toHaveLength(6);
   });
+  it('re-exports renderSize', () => expect(renderSize({ w: 100, h: 100, dpr: 1 })).toEqual({ w: 50, h: 50 }));
 });
 
 describe('createLoadingScreen', () => {
-  it('replaces the text placeholder with a canvas, title and an accessible progress caption', () => {
+  it('replaces the placeholder with a canvas, title and accessible caption, and starts the backend', () => {
     const el = root();
     const d = fakeDeps();
-    createLoadingScreen(el, {}, d);
+    createLoadingScreen(el, { fixed: 0.4 }, d);
     expect(el.querySelector('canvas')).not.toBeNull();
     expect(el.querySelector('.title')?.textContent).toBe('Moated Castle');
     expect(label()).toBe('Down to the cellar… | 0%');
     expect(el.getAttribute('aria-label')).toBe('Loading Moated Castle');
     expect(el.getAttribute('aria-valuetext')).toBe('Down to the cellar… 0%');
     expect(el.getAttribute('role')).toBe('progressbar');
-    expect(el.getAttribute('aria-valuenow')).toBe('0');
+    expect(d.be.init).toEqual({ w: 800, h: 400, reduced: false, fixed: 0.4, palette: PALETTE });
   });
 
-  it('lights torches as progress arrives and sizes the canvas to the viewport', async () => {
-    const el = root();
+  it('forwards progress, pointer and resize to the backend and shows its progress in the caption', async () => {
     const d = fakeDeps();
-    const s = createLoadingScreen(el, {}, d);
-    d.frame();
-    expect(d.gl!.uniforms.get('uI')).toEqual(new Array(8).fill(0));
+    createLoadingScreen(root(), {}, d);
+    const s = createLoadingScreen(root(), {}, d);
     await s.progress(0.3, 'Cutting the stone…');
-    for (let i = 0; i < 120; i++) d.frame();
-    expect(s.shown).toBeCloseTo(0.3);
-    expect(label()).toBe('Cutting the stone… | 30%');
-    const lit = (d.gl!.uniforms.get('uI') as number[]).filter((x) => x > 0).length;
-    expect(lit).toBe(3);
-    const c = el.querySelector('canvas')!;
-    expect([c.width, c.height]).toEqual([1200, 600]);
-    expect(d.gl!.uniforms.get('uDay')).toBeCloseTo(0.04);
+    expect(d.be.progresses).toContain(0.3);
+    d.be.shownValue = 0.25;
+    d.clock.frame();
+    expect(label()).toBe('Cutting the stone… | 25%');
+    expect(s.shown).toBe(0.25);
+    expect(document.getElementById('loading')!.getAttribute('aria-valuenow')).toBe('25');
+    await s.progress(0.4);
+    expect(label()).toBe('Cutting the stone… | 25%');
     d.pointer!(0.5, -0.25);
-    d.frame();
-    expect(d.gl!.uniforms.get('uLook')).toEqual([0.5, -0.25]);
+    expect(d.be.looks).toEqual([[0.5, -0.25]]);
+    d.view = { w: 400, h: 200, dpr: 1 };
+    d.resize!();
+    expect(d.be.sizes).toEqual([[200, 100]]);
   });
 
-  it('finishes: lights everything, raises fill and daylight, fades and cleans up', async () => {
+  it('finishes: waits for the backend to reach 100 %, holds, fades and cleans up', async () => {
     const el = root();
     const d = fakeDeps();
     const s = createLoadingScreen(el, {}, d);
-    const gl = d.gl!;
-    await s.finish();
-    expect(s.shown).toBe(1);
+    const fin = s.finish();
+    expect(d.be.progresses).toEqual([1]);
+    expect(d.waits).toEqual([]);
+    d.be.finishNow();
+    await fin;
     expect(d.waits).toEqual([900, 700]);
     expect(el.style.opacity).toBe('0');
     expect(el.isConnected).toBe(false);
-    expect(gl.lost).toBe(true);
-    expect(d.unsubscribed).toBe(true);
-    expect(d.frames).toHaveLength(0);
-    expect(label()).toBeUndefined();
+    expect(d.be.disposed).toBe(true);
+    expect(d.unsubscribed).toBe(2);
+    expect(d.clock.frames).toHaveLength(0);
   });
 
   it('shortens the hold and fade for reduced motion', async () => {
     const d = fakeDeps({ reducedMotion: true });
-    await createLoadingScreen(root(), {}, d).finish();
+    const s = createLoadingScreen(root(), {}, d);
+    d.be.finishNow();
+    await s.finish();
     expect(d.waits).toEqual([200, 0]);
+    expect(d.be.init!.reduced).toBe(true);
   });
 
-  it('reaches full fill light before fading', async () => {
+  it('dispose is idempotent and stops the caption loop', () => {
     const d = fakeDeps();
     const s = createLoadingScreen(root(), {}, d);
-    const fills: number[] = [];
-    const draw = d.gl!.drawArrays;
-    d.gl!.drawArrays = (...a) => { fills.push(d.gl!.uniforms.get('uFill') as number); draw(...a); };
-    await s.finish();
-    expect(Math.max(...fills)).toBeCloseTo(0.3);
-  });
-
-  it('dispose is idempotent and stops drawing', () => {
-    const d = fakeDeps();
-    const s = createLoadingScreen(root(), {}, d);
+    const pending = d.clock.frames[0];
     s.dispose();
     s.dispose();
-    const n = d.gl!.calls.length;
-    d.frame();
-    expect(d.gl!.calls.length).toBe(n);
-  });
-
-  it('stops a finish in progress when disposed', async () => {
-    const d = fakeDeps();
-    const s = createLoadingScreen(root(), {}, d);
-    d.nextFrame = async () => { s.dispose(); };
-    await s.finish();
-    expect(s.shown).toBeLessThan(1);
-  });
-
-  it('a stale frame callback after dispose does nothing', () => {
-    const d = fakeDeps();
-    const s = createLoadingScreen(root(), {}, d);
-    const pending = d.frames[0];
-    s.dispose();
+    expect(d.unsubscribed).toBe(2);
     pending(100);
-    expect(d.frames).toHaveLength(0);
+    expect(d.clock.frames).toHaveLength(0);
   });
+});
 
-  it('keeps the caption working without WebGL2 or when the shader fails', async () => {
-    for (const d of [fakeDeps({ gl: null }), fakeDeps({ makeRenderer: () => null })]) {
-      const s = createLoadingScreen(root(), {}, d);
-      await s.progress(0.5);
-      for (let i = 0; i < 100; i++) d.frame();
-      expect(label()).toBe('Down to the cellar… | 50%');
-      s.dispose();
-    }
-  });
-
-  it('holds a fixed progress for previews', () => {
+describe('boot steps on a time axis', () => {
+  it('starts the download step at once and moves through steps by time; fixed previews get none', async () => {
     const d = fakeDeps();
-    createLoadingScreen(root(), { fixed: 1 }, d);
-    d.frame();
-    expect(d.gl!.uniforms.get('uI')).toEqual(new Array(8).fill(1));
-    expect(d.gl!.uniforms.get('uDay')).toBeCloseTo(1);
+    const s = createLoadingScreen(root(), {}, d);
+    expect(d.be.spans).toHaveLength(1);
+    expect(d.be.spans[0][0]).toBe(0);
+    d.clock.time = 1000;
+    await s.step('Cutting the stone…');
+    expect(d.be.spans).toHaveLength(2);
+    expect(d.be.spans[1][0]).toBeCloseTo(d.be.spans[0][1]);
+    expect(label()).toMatch(/^Cutting the stone… \|/);
+    await s.step('FURNISHING THE ROOMS…');   // case-insensitive
+    await s.step('Something new…');          // unknown: caption only
+    expect(d.be.spans).toHaveLength(3);
+    expect(label()).toMatch(/^Something new… \|/);
+    d.clock.time = 5000;
+    d.be.finishNow();
+    await s.finish();
+    expect(d.memory.saves).toBe(1);
+    expect(Object.keys(d.memory.data!)).toEqual(['down to the cellar…', 'cutting the stone…', 'furnishing the rooms…']);
+
+    const f = fakeDeps();
+    const p = createLoadingScreen(root(), { fixed: 0.5 }, f);
+    await p.step('Cutting the stone…');
+    expect(f.be.spans).toHaveLength(0);
   });
 });
