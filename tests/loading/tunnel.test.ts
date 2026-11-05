@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest';
-import { createLoadingScreen, loadingScreen, resetLoadingScreen, renderSize, PALETTE } from '../../src/loading/tunnel';
+import { describe, it, expect } from 'vitest';
+import { createLoadingScreen, renderSize, PALETTE } from '../../src/loading/tunnel';
 import { STONE_GREYS } from '../../src/render/texgen';
-import { fakeDeps, fakeGL } from './fakes';
+import { fakeDeps } from './fakes';
 
 const root = () => { document.body.innerHTML = '<div id="loading">BUILDING THE CASTLE…</div>'; return document.getElementById('loading')!; };
 const label = () => document.querySelector('#loading .label')?.textContent;
@@ -130,21 +130,5 @@ describe('createLoadingScreen', () => {
     d.frame();
     expect(d.gl!.uniforms.get('uI')).toEqual(new Array(8).fill(1));
     expect(d.gl!.uniforms.get('uDay')).toBeCloseTo(1);
-  });
-});
-
-describe('loadingScreen singleton', () => {
-  beforeEach(() => resetLoadingScreen());
-  it('returns the same screen to entry and main, reading ?loading', () => {
-    const el = root();
-    const d = fakeDeps();
-    const a = loadingScreen('?loading=0.5', el, d);
-    expect(loadingScreen()).toBe(a);
-    expect(a.shown).toBe(0.5);
-  });
-  it('treats demo and absent as a live load', () => {
-    expect(loadingScreen('?loading=demo', root(), fakeDeps()).shown).toBe(0);
-    resetLoadingScreen();
-    expect(loadingScreen('', root(), fakeDeps({ gl: fakeGL() })).shown).toBe(0);
   });
 });

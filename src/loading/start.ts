@@ -2,18 +2,25 @@
 // big chunk) behind it. ?loading=demo loops a fake load for review; ?loading=<0..1> holds a value.
 import type { LoadingScreen } from './tunnel';
 
+/** ?loading=<0..1> holds the tunnel at that progress (art review); demo or absent is a live load. */
+export function screenOpts(search: string): { fixed?: number } {
+  const q = new URLSearchParams(search).get('loading');
+  return q && q !== 'demo' ? { fixed: Number(q) } : {};
+}
+
 export interface EntryDeps {
   search: string;
-  screen(): LoadingScreen;
-  bootGame(): Promise<unknown>;
+  screen(opts: { fixed?: number }): LoadingScreen;
+  /** fetch the castle chunk and boot it behind this screen */
+  bootGame(screen: LoadingScreen): Promise<unknown>;
   every(ms: number, f: () => void): void;
   reload(): void;
 }
 
 export function start(d: EntryDeps) {
-  const screen = d.screen();
+  const screen = d.screen(screenOpts(d.search));
   const preview = new URLSearchParams(d.search).get('loading');
-  if (preview === null) { void d.bootGame(); return 'boot'; }
+  if (preview === null) { void d.bootGame(screen); return 'boot'; }
   if (preview === 'demo') {
     let p = 0;
     d.every(400, () => {

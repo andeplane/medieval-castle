@@ -20,7 +20,7 @@ describe('createTunnelRenderer', () => {
     const r = createTunnelRenderer(gl, PALETTE, false)!;
     expect(r).not.toBeNull();
     expect(gl.uniforms.get('uStone')).toHaveLength(18);
-    expect(gl.uniforms.get('uMortar')).toEqual([0.31, 0.3, 0.28]);
+    expect(gl.uniforms.get('uMortar')).toEqual([0.35, 0.34, 0.31]);
     expect(gl.uniforms.get('uMotion')).toBe(1);
     r.draw({ w: 640, h: 360, time: 2, torches: new Float32Array([1, 0.5]), fill: 0.2, day: 0.4, look: [0.1, -0.2] });
     expect(gl.calls).toContain('viewport 0 0 640 360');

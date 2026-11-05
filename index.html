@@ -29,7 +29,9 @@
       #ui button.on { background: var(--brass); color: var(--ink); border-color: var(--brass); }
       #ui label { color: var(--bone); text-shadow: 0 1px 2px var(--shadow); display: flex; gap: 6px; align-items: center; margin-left: 6px; }
       #help { position: fixed; right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); left: calc(12px + env(safe-area-inset-left, 0px)); color: var(--bone); text-shadow: 0 1px 2px var(--shadow); text-align: right; opacity: 0.85; z-index: 5; pointer-events: none; }
-      body.shot #ui, body.shot #help { display: none; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--bone); box-shadow: 0 0 0 1px var(--shadow); opacity: 0.8; z-index: 5; pointer-events: none; }
+      #crosshair[hidden] { display: none; }
+      body.shot #ui, body.shot #help, body.shot #crosshair { display: none; }
       @media (prefers-reduced-motion: reduce) { #loading { transition: none; } }
     </style>
   </head>
@@ -37,6 +39,7 @@
     <div id="loading">BUILDING THE CASTLE…</div>
     <div id="ui"></div>
     <div id="help"></div>
+    <div id="crosshair" hidden></div>
     <script type="module" src="/src/loading/entry.ts"></script>
   </body>
 </html>

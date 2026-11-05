@@ -54,7 +54,7 @@ export const browserDeps = (): LoadingDeps => ({
 /** The castle's rubble greys (texgen.ts), most common first, and its mortar. */
 export const PALETTE: Palette = {
   stone: [...STONE_GREYS.rubble].sort((a, b) => b.w - a.w).slice(0, 6).map((g) => g.c),
-  mortar: [0.31, 0.3, 0.28],
+  mortar: [0.35, 0.34, 0.31],
 };
 
 /** Render at ~0.75 of device pixels (DPR capped at 2): the scene is soft and dark, it upscales well. */
@@ -134,17 +134,3 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
   };
   return screen;
 }
-
-let single: LoadingScreen | null = null;
-/**
- * The page's one loading screen on #loading, shared by entry.ts (which starts it before the main
- * bundle downloads) and main.ts. ?loading=<0..1> holds it at that progress (art review).
- */
-export function loadingScreen(search = location.search, el = document.getElementById('loading')!, deps?: LoadingDeps): LoadingScreen {
-  if (single) return single;
-  const q = new URLSearchParams(search).get('loading');
-  single = createLoadingScreen(el, q && q !== 'demo' ? { fixed: Number(q) } : {}, deps);
-  return single;
-}
-/** test hook */
-export const resetLoadingScreen = () => { single = null; };

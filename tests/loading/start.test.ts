@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { start, type EntryDeps } from '../../src/loading/start';
+import { start, screenOpts, type EntryDeps } from '../../src/loading/start';
 import type { LoadingScreen } from '../../src/loading/tunnel';
 
 function deps(search: string) {
@@ -7,7 +7,7 @@ function deps(search: string) {
   let tick: (() => void) | null = null;
   const d: EntryDeps = {
     search,
-    screen: () => screen,
+    screen: vi.fn(() => screen),
     bootGame: vi.fn(async () => ({})),
     every: (_ms, f) => { tick = f; },
     reload: vi.fn(),
@@ -19,11 +19,13 @@ describe('entry start', () => {
   it('boots the game behind the tunnel by default', () => {
     const { d } = deps('');
     expect(start(d)).toBe('boot');
-    expect(d.bootGame).toHaveBeenCalledOnce();
+    expect(d.bootGame).toHaveBeenCalledWith(d.screen({}));
+    expect(d.screen).toHaveBeenCalledWith({});
   });
   it('holds a fixed preview without booting', () => {
     const { d } = deps('?loading=0.4');
     expect(start(d)).toBe('hold');
+    expect(d.screen).toHaveBeenCalledWith({ fixed: 0.4 });
     expect(d.bootGame).not.toHaveBeenCalled();
   });
   it('loops a fake load in demo mode', () => {
@@ -38,5 +40,13 @@ describe('entry start', () => {
     run(20);
     expect(d.reload).toHaveBeenCalled();
     expect(d.bootGame).not.toHaveBeenCalled();
+  });
+});
+
+describe('screenOpts', () => {
+  it('reads a fixed preview value and treats demo or absent as live', () => {
+    expect(screenOpts('?loading=0.5')).toEqual({ fixed: 0.5 });
+    expect(screenOpts('?loading=demo')).toEqual({});
+    expect(screenOpts('')).toEqual({});
   });
 });
