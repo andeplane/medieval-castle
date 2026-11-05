@@ -42,8 +42,14 @@ export function wallFrame(a: V2, b: V2, out: V2): Frame {
 }
 
 export interface Opening { pts: V2[]; depth: number; fill: 'glass' | 'void' | 'wood' | 'none'; reveal: MatKey }
+/** Every wall face with its openings, so the interior can cut matching embrasures behind them. */
+export interface WallRecord { mat: MatKey; a: V2; b: V2; out: V2; y0: number; y1: number; openings: Opening[]; frame: Frame }
+/** Surface-mounted openings on curved walls (round towers): centre, radius, angle, sill, size. */
+export interface CurvedRecord { c: V2; R: number; a: number; y: number; w: number; h: number; glass: boolean }
 
 export class Builder {
+  walls: WallRecord[] = [];
+  curved: CurvedRecord[] = [];
   bins: Record<MatKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin() };
 
   /** Flat polygon given in a frame's (s, y) coords, facing frame.n, at depth d. */
@@ -64,6 +70,7 @@ export class Builder {
   /** Vertical wall face from a to b (2D), y0..y1, outward normal out, with openings cut through it. */
   wall(mat: MatKey, a: V2, b: V2, out: V2, y0: number, y1: number, openings: Opening[] = [], u0 = 0) {
     const f = wallFrame(a, b, out), L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    this.walls.push({ mat, a, b, out, y0, y1, openings, frame: f });
     this.planar(mat, f, [[0, y0], [L, y0], [L, y1], [0, y1]], 0, openings.map((o) => o.pts), u0);
     for (const o of openings) this.openingInsides(f, o);
     return f;

@@ -7,7 +7,7 @@ import { heightAt, islandWalkable } from '../world/terrain';
 import { castleCentre } from '../castle/layout';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
-export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
+export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number]; clamp?: boolean }
 
 const C = castleCentre();
 export const VIEWS: View[] = [
@@ -28,6 +28,8 @@ export class CameraRig {
   private keys = new Set<string>();
   private yaw = 0; private pitch = 0;
   private dragging = false;
+  /** Keep the fly camera above the terrain (off for interior bookmarks: cellars and tunnels lie below it). */
+  clampFly = true;
   speed = { fly: 22, walk: 4.2 };
 
   constructor(public camera: THREE.PerspectiveCamera, dom: HTMLElement) {
@@ -62,6 +64,7 @@ export class CameraRig {
   go(v: View) {
     const p = new THREE.Vector3(...v.pos);
     if (v.mode === 'walk') p.y = heightAt(p.x, p.z) + 1.7;
+    this.clampFly = v.clamp !== false;
     this.camera.position.copy(p);
     this.camera.lookAt(new THREE.Vector3(...v.target));
     this.orbit.target.set(...v.target);
@@ -84,7 +87,7 @@ export class CameraRig {
       moveDir.y += v.y;
       this.camera.position.addScaledVector(moveDir, this.speed.fly * fast * dt);
       const floor = heightAt(this.camera.position.x, this.camera.position.z) + 1.0;
-      if (this.camera.position.y < floor) this.camera.position.y = floor;
+      if (this.clampFly && this.camera.position.y < floor) this.camera.position.y = floor;
     } else {
       const f = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)), rgt = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
       const step = new THREE.Vector3().addScaledVector(f, fwd).addScaledVector(rgt, str);

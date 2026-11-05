@@ -13,6 +13,8 @@ import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildTrees } from './world/trees';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
+import { buildInterior } from './castle/interior';
+import { interiorViews } from './camera/interiorViews';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 
@@ -48,8 +50,12 @@ async function main() {
   const { builder, lights } = buildCastle();
   const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
   buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
-  const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
+  const interior = params.get('interior') === '0' ? null : buildInterior(mats, builder, { heightAt });
+  const castle = builder.build(mats);
   scene.add(castle);
+  if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
@@ -117,9 +123,12 @@ async function main() {
     renderNow: async () => { pipeline.render(); },
     stats: () => ({
       castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
+
+  (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
