@@ -9,7 +9,7 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
@@ -23,13 +23,19 @@ import { createVisibility } from './world/visibility';
 import { buildRoomTest } from './debug/roomtest';
 import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
 import type { WindowInput } from './render/interiorMath';
+import type { LoadingScreen } from './loading/tunnel';
+import { stepProgress, textureProgress } from './loading/model';
+import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
-const loading = document.getElementById('loading')!;
-const say = (s: string) => { loading.textContent = s; return new Promise((r) => setTimeout(r, 0)); };
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
+// texture jobs fill CUTTING → RAISING.
+let screen: LoadingScreen;
+const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -51,6 +57,7 @@ async function main() {
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
+  await terrainReady;
 
   await say('RAISING THE WALLS…');
   const testRoom = params.get('test') === 'room';
@@ -62,7 +69,8 @@ async function main() {
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
-  scene.add(buildTerrain(M.terrain));
+  const terrain = buildTerrain(M.terrain);
+  scene.add(terrain);
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
@@ -125,8 +133,7 @@ async function main() {
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
   // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
   const vis = createVisibility(camera, interior.groups, interior.plan, { scene, apertures: bake.apertures, ground: heightAt });
-  const luma = gpuLumaReader(renderer, scenePass.getTexture('output')); (window as unknown as { __luma: unknown }).__luma = luma;
-  const exposure = createAutoExposure({ target: renderer, reader: luma, fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
+  const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
 
   // UI
@@ -172,7 +179,7 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { veg?.update(camera); vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
+      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       interior: {
         room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
@@ -187,7 +194,7 @@ async function main() {
   (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state, visibility: vis };
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
-    loading.remove();
+    screen.dispose();
     hooks.ready = true;
     return;
   }
@@ -208,9 +215,13 @@ async function main() {
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  loading.style.opacity = '0';
-  setTimeout(() => loading.remove(), 700);
   hooks.ready = true;
+  await screen.finish();
 }
 
-main().catch((e) => { console.error(e); loading.textContent = 'Something went wrong: ' + (e?.message ?? e); });
+/** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
+export function boot(loading: LoadingScreen) {
+  screen = loading;
+  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
+  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+}
