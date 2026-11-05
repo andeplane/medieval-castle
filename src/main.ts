@@ -12,13 +12,13 @@ import { buildRevetment } from './castle/revetment';
 import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
-import { buildTrees } from './world/trees';
+import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
-import { makeInteriorMaterials, bakeInteriorLight, interiorLight, type InteriorBake } from './render/interiorLight';
-import { createAutoExposure } from './render/exposure';
+import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
+import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility } from './world/visibility';
 import { buildRoomTest } from './debug/roomtest';
 import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
@@ -67,7 +67,8 @@ async function main() {
   scene.add(water);
 
   // interior: the shell's groups when it lands (buildInterior(IM, …)); the test hall for now
-  const IM = makeInteriorMaterials(M, sky.sun);
+  const interiorLight = createInteriorLight();
+  const IM = makeInteriorMaterials(M, sky.sun, interiorLight);
   let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights };
   if (testRoom) {
     const t = buildRoomTest(M, IM);
@@ -76,12 +77,16 @@ async function main() {
     VIEWS.push(...t.views);
     interior = t;
   }
-  const bake: InteriorBake = bakeInteriorLight(interior.groups, [castle, ...(testRoom ? [scene.getObjectByName('castle')!] : []), ...interior.groups.map((g) => g.object)], { plan: interior.plan, windows: interior.windows, sun: sky.sun });
-  console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, ${bake.ms.toFixed(1)} ms (BVH ${bake.bvhMs.toFixed(1)} ms)`);
+  const tB = performance.now();
+  const occluder = bvhOccluder([castle, ...(testRoom ? [scene.getObjectByName('castle')!] : []), ...interior.groups.map((g) => g.object)]);
+  const bvhMs = performance.now() - tB;
+  const bake = bakeInteriorLight(interior.groups, occluder, { plan: interior.plan, windows: interior.windows, sun: sunStateOf(sky.sun), light: interiorLight });
+  if (interior.plan.rooms.length) scene.add(buildShadowSkins(interior.plan, bake.apertures));
+  console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, bake ${bake.ms.toFixed(1)} ms, BVH ${bvhMs.toFixed(1)} ms over ${occluder.triangles} tris`);
 
   await say('PLANTING TREES…');
-  let trees: THREE.Group | null = null;
-  try { trees = buildTrees(VIEWS.map((v) => [v.pos[0], v.pos[2]])); scene.add(trees); } catch (e) { console.error('trees failed', e); }
+  let veg: Vegetation | null = null;
+  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
   // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
   // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
@@ -120,7 +125,8 @@ async function main() {
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
   // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
   const vis = createVisibility(camera, interior.groups, interior.plan, { scene, apertures: bake.apertures, ground: heightAt });
-  const exposure = createAutoExposure(renderer, () => scenePass.getTexture('output'), { fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
+  const luma = gpuLumaReader(renderer, scenePass.getTexture('output')); (window as unknown as { __luma: unknown }).__luma = luma;
+  const exposure = createAutoExposure({ target: renderer, reader: luma, fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
 
   // UI
@@ -131,10 +137,17 @@ async function main() {
   const help = document.getElementById('help')!;
   const helpText: Record<Mode, string> = {
     orbit: 'Drag to orbit · right-drag to pan · scroll to zoom',
-    fly: 'WASD move · E/Q up/down · Shift fast · drag (or double-click to lock) to look',
-    walk: 'WASD walk · Shift run · drag (or double-click to lock) to look',
+    fly: 'Click to look with the mouse · WASD move · E/Q up/down · Shift fast · Esc releases',
+    walk: 'Click to look with the mouse · WASD walk · Shift run · Esc releases',
   };
-  const syncMode = () => { for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode); help.textContent = helpText[rig.mode]; };
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: 'WASD walk · Shift run · Esc to release mouse' };
+  const crosshair = document.getElementById('crosshair')!;
+  const syncMode = () => {
+    for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
+    help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
+    crosshair.hidden = !rig.locked;
+  };
+  rig.onLockChange = syncMode;
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
     const b = document.createElement('button'); b.textContent = m[0].toUpperCase() + m.slice(1);
     b.onclick = () => { rig.setMode(m); if (m === 'walk') { const p = camera.position; if (p.y > 30) rig.go(VIEWS.find((v) => v.name === 'gate')!); } syncMode(); };
@@ -157,21 +170,21 @@ async function main() {
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { veg?.update(camera); vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       interior: {
         room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
         groupsShown: vis.state.visible.filter(Boolean).length, groups: interior.groups.length,
         exposure: Math.round(exposure.state.exposure * 1000) / 1000, meanLog2: Math.round(exposure.state.meanLog2 * 100) / 100,
-        bakeMs: Math.round(bake.ms * 10) / 10, apertures: bake.apertures.length,
+        bakeMs: Math.round(bake.ms * 10) / 10, bvhMs: Math.round(bvhMs * 10) / 10, apertures: bake.apertures.length,
       },
     }),
   });
 
   // the doors module reports leaf positions here: __game.interiorLight.setDoorOpen(id, 0..1)
-  (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state };
+  (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state, visibility: vis };
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
     loading.remove();
@@ -187,6 +200,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    veg?.update(camera);
     vis.update();
     exposure.update(dt, vis.state);
     pipeline.render();

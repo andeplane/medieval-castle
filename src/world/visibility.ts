@@ -6,7 +6,7 @@
 // Underground (camera below the terrain) the water, far terrain and trees are hidden; deep inside a
 // room with no open way out within 40 m the trees are hidden too (glass glows, it is not see-through).
 // No three.js at runtime here, so the decision is unit-tested (tests/interior.test.ts).
-import type { InteriorGroup, InteriorPlan, V3 } from '../castle/interior/types';
+import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import type { Aperture } from '../render/interiorMath';
 import { roomAt } from '../render/interiorMath';
 
@@ -78,8 +78,8 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
   return { room, inside: room >= 0, deep: deep || underground, underground, visible };
 }
 
-export const HIDE_UNDERGROUND = ['water', 'terrain-far', 'trees', 'far-forest', 'grass'];
-export const HIDE_DEEP = ['trees', 'far-forest', 'grass'];
+export const HIDE_UNDERGROUND = ['water', 'terrain-far', 'trees', 'ground-cover', 'far-forest'];
+export const HIDE_DEEP = ['trees', 'ground-cover', 'far-forest'];
 
 interface Obj { visible: boolean; name: string }
 interface SceneLike { getObjectByName(n: string): Obj | undefined }
@@ -102,9 +102,21 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
   const outdoor = [...new Set([...HIDE_UNDERGROUND, ...HIDE_DEEP])].map((n) => [n, opts.scene?.getObjectByName(n)] as const).filter((x): x is readonly [string, Obj] => !!x[1]);
   const base = new Map(outdoor.map(([, obj]) => [obj, obj.visible]));
   let last: VisResult = { room: -1, inside: false, deep: false, underground: false, visible: groups.map(() => true) };
+  const dynamic = new Set<{ obj: { visible: boolean }; roomOf: () => SpaceId | null }>();
   return {
     get state() { return last; },
     get roomId() { return last.room >= 0 ? plan.rooms[last.room].id : null; },
+    /**
+     * Dynamic things (NPCs, door leaves, dropped props) follow the cells: shown when the room they are
+     * in is shown. `roomOf` returns a room id, or 'outside' / 'courtyard' / null when not in a room.
+     * Returns an unregister function.
+     */
+    register(obj: { visible: boolean }, roomOf: () => SpaceId | null) {
+      const e = { obj, roomOf };
+      dynamic.add(e);
+      obj.visible = roomShown(ctx, last, index.get(roomOf() ?? '') ?? -1);
+      return () => { dynamic.delete(e); };
+    },
     update() {
       const p = camera.position;
       last = visibleSet(ctx, [p.x, p.y, p.z], o);
@@ -113,7 +125,15 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
         const hide = last.underground ? HIDE_UNDERGROUND.includes(name) : last.deep && HIDE_DEEP.includes(name);
         obj.visible = (base.get(obj) ?? true) && !hide;
       }
+      for (const e of dynamic) e.obj.visible = roomShown(ctx, last, index.get(e.roomOf() ?? '') ?? -1);
       return last;
     },
   };
+}
+
+/** Is room `room` (index, -1 = outside / courtyard) shown in this visibility result? */
+export function roomShown(ctx: VisContext, v: VisResult, room: number) {
+  if (room < 0) return !v.underground && !(v.inside && v.deep);
+  if (room === v.room || ctx.doorAdj.get(v.room)?.has(room)) return true;
+  return ctx.groups.some((g, i) => v.visible[i] && g.rooms.includes(room));
 }

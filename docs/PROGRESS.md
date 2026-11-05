@@ -28,6 +28,7 @@ Done
 - Island revetment (`src/castle/revetment.ts`) and the broken south bridge (`src/castle/bridge.ts`).
 - Terrain with moat, banks, farmland, lake and mountains (`src/world/terrain.ts`); sky, sun, IBL, fog (`src/world/sky.ts`); reflective moat (`src/world/water.ts`); ez-tree trees + far forests (`src/world/trees.ts`).
 - Orbit / fly / walk cameras with bookmarks; `window.__game` hooks; `npm run shots`.
+- Walk and fly are FPS-style: click the canvas to grab the mouse (pointer lock), mouse turns the head, WASD moves, Esc releases; crosshair shows while locked. Drag-to-look remains as a fallback.
 
 Numbers (headless WebGL2 capture): castle ~115k triangles; near trees ~2.1M triangles (102 trees) + 11k far canopies; texture generation ~6 s on the container CPU across 3 workers.
 
@@ -37,3 +38,34 @@ Known issues / next
 - Far forests are low-poly blobs; swap for impostor cards.
 - Stone texture could use a close-up detail normal for first-person distance.
 - Courtyard is plain; no doors on the outer walls except the gate.
+
+## 2026-11-05: vegetation
+
+Done
+- Trees (`src/world/trees.ts`, `treePlacement.ts`, `impostors.ts`): 7 ez-tree variants (two oaks, two ashes, pine, two bushes). Each has an L0 mesh within about 28 m, a meshopt-thinned L1 out to about 72 m, and an octahedral-lite impostor beyond that (8 azimuths × 2 elevations, albedo + normal atlas baked at startup). Impostors are drawn in 80 chunked instanced draws.
+- Shadows come from fixed thinned casters on layer 1 within 140 m of the castle. The sun's shadow map now renders once per frame (`autoUpdate = false`, `needsUpdate` each frame) instead of a second time for the reflector camera.
+- Layout is seeded: island groups and bushes clear of the walls and gate path, about 46 copses, hedgerows along a jittered field grid, and forest blocks with bushy edges out to 2.7 km (below h 240). There are about 30k trees in total.
+- Ground cover (`src/world/grass.ts`): near and far grass tufts with TSL wind and gusts, colour drifting with the terrain macro, kept off the paths, the courtyard dirt, the rock and the revetment edge (heights and mask are read from the near terrain mesh). Also wildflower and clover patches, and reeds along both moat edges. Chunks are 12 m, culled per frame and packed nearest-first into one draw per layer.
+- `?veg=0` disables vegetation; `?treeLod=0` forces impostors only. Tests: `tests/vegetation.test.ts`.
+
+Numbers (headless WebGL2, 1600×900, all passes)
+- Before: hero 14.1M triangles / 130 draw calls (trees 2.15M before shadows and AO).
+- After:
+
+  | View | Triangles | Draw calls |
+  |---|---|---|
+  | hero | 2.87M | 245 |
+  | ward | 2.88M | 215 |
+  | moat | 3.54M | 265 |
+  | north | 3.12M | 239 |
+  | aerial | 2.79M | 253 |
+
+- With `?veg=0` the scene alone costs 2.51M / 66, mostly the near terrain and the AO pre-pass.
+
+Known issues / next
+- Moat, north and walk views sit slightly over 3M because of the non-vegetation baseline. Fixes: a lighter near-terrain grid, or keeping vegetation out of the AO pre-pass.
+- The switch from L1 to impostor pops; there is no dithered cross-fade yet.
+- Impostors don't receive shadows.
+- Grass still reads as tufts rather than a sward up close.
+- The WebGPU path is untested; headless captures are WebGL2 only.
+

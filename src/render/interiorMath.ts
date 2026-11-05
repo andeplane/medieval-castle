@@ -272,7 +272,7 @@ export interface ExposureCfg {
   tauDark: number;     // s, adapting to a darker scene (exposure rising)
   tauBright: number;   // s, adapting to a brighter scene
 }
-export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -2.4, strength: 0.85, maxStops: 2.5, deepStops: 3.2, tauDark: 1.4, tauBright: 0.6 };
+export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -3.0, strength: 0.85, maxStops: 2.5, deepStops: 3.2, tauDark: 1.4, tauBright: 0.6 };
 
 /** Target exposure in stops above `base` for a measured mean log2 luminance. */
 export function targetStops(meanLog2: number, deep: boolean, cfg = EXPOSURE) {
@@ -295,4 +295,98 @@ export function meanLog2(px: ArrayLike<number>, w: number, h: number, stride = 4
     s += ((px[(y * w + x) * stride] / 255) * 18 - 14) * wt; ws += wt;
   }
   return s / ws;
+}
+
+// ---------- bake helpers (pure, on plain arrays) ----------
+
+/** Room index per vertex for a non-indexed, world-space triangle soup: each triangle steps 0.25 m off
+ * its face along its normal and takes the nearest room within maxWall; all three vertices share it. */
+export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | null, rooms: RoomSpec[], maxWall: number, prefer?: Set<number>) {
+  const n = Math.floor(pos.length / 3), out = new Float32Array(n).fill(-1);
+  for (let t = 0; t + 2 < n; t += 3) {
+    const p: V3 = [0, 0, 0];
+    let q: V3 = [0, 0, 0];
+    for (let k = 0; k < 3; k++) for (let j = 0; j < 3; j++) { p[j] += pos[(t + k) * 3 + j] / 3; if (nor) q[j] += nor[(t + k) * 3 + j]; }
+    if (!nor) {
+      const e1: V3 = [0, 1, 2].map((j) => pos[(t + 1) * 3 + j] - pos[t * 3 + j]) as V3, e2: V3 = [0, 1, 2].map((j) => pos[(t + 2) * 3 + j] - pos[t * 3 + j]) as V3;
+      q = cross3(e1, e2);
+    }
+    q = norm3(q);
+    const room = nearestRoom(rooms, [p[0] + q[0] * 0.25, p[1] + q[1] * 0.25, p[2] + q[2] * 0.25], maxWall, prefer);
+    out[t] = out[t + 1] = out[t + 2] = room;
+  }
+  return out;
+}
+
+/** Texels per aperture in the shader table, and the table layout: row = room, texel 0 = (count, bounce
+ * rgb), then per aperture (c, depth) (a, w/2) (u, h/2) (L, wi/2) (hi/2, yi, 0, 0). */
+export const AP_TEXELS = 5;
+
+export function packTable(data: Float32Array, texW: number, maxAp: number, roomCount: number, aps: Aperture[], solved: { light: RoomLight[]; radiance: V3[] }) {
+  data.fill(0);
+  const per = Array.from({ length: roomCount }, () => [] as number[]);
+  aps.forEach((a, i) => { if (a.room >= 0 && a.room < roomCount) per[a.room].push(i); });
+  for (let r = 0; r < roomCount; r++) {
+    const sum = (i: number) => solved.radiance[i][0] + solved.radiance[i][1] + solved.radiance[i][2];
+    // brightest (radiance × area) first; the shader integrates maxAp of them
+    const list = per[r].filter((i) => sum(i) > 1e-5).sort((p, q) => sum(q) * aps[q].w * aps[q].h - sum(p) * aps[p].w * aps[p].h).slice(0, maxAp);
+    const base = r * texW * 4, b = solved.light[r].bounce;
+    data.set([list.length, b[0], b[1], b[2]], base);
+    list.forEach((i, k) => {
+      const ap = aps[i], { a, u } = apertureFrame(ap), L = solved.radiance[i];
+      data.set([ap.c[0], ap.c[1], ap.c[2], ap.depth, a[0], a[1], a[2], ap.w / 2, u[0], u[1], u[2], ap.h / 2, L[0], L[1], L[2], ap.wi / 2, ap.hi / 2, ap.yi, 0, 0], base + (1 + k * AP_TEXELS) * 4);
+    });
+  }
+  return data;
+}
+
+export interface SkinQuad { o: V3; r: V3; n: V3; L: number; y0: number; y1: number; holes: [number, number, number, number][] }
+
+/**
+ * Shadow skins: a hidden quad `inset` metres inside each room wall, facing the room, with holes where the
+ * room's apertures pass. Sun shadow maps render back faces, so without it the shadow of a thick wall
+ * starts at its inner face and sunlight leaks in a strip along every floor/wall seam.
+ */
+export function skinQuads(rooms: RoomSpec[], aps: Aperture[], inset = 0.22): SkinQuad[] {
+  const out: SkinQuad[] = [];
+  rooms.forEach((room, ri) => {
+    const poly = room.poly, y0 = room.y0 - 0.6, y1 = room.y1 + 0.7;
+    for (let i = 0; i < poly.length; i++) {
+      const A = poly[i], B = poly[(i + 1) % poly.length], L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      if (L < 0.05) continue;
+      const r: V3 = [(B[0] - A[0]) / L, 0, (B[1] - A[1]) / L];
+      let n: V3 = [-r[2], 0, r[0]];
+      const mx = (A[0] + B[0]) / 2, mz = (A[1] + B[1]) / 2;
+      if (!inPoly(poly, mx + n[0] * 0.02, mz + n[2] * 0.02)) n = [-n[0], 0, -n[2]];
+      const o: V3 = [A[0] - n[0] * inset - r[0] * inset, 0, A[1] - n[2] * inset - r[2] * inset];
+      const len = L + 2 * inset;
+      const holes: [number, number, number, number][] = [];
+      for (const ap of aps) {
+        if (ap.room !== ri) continue;
+        const { nIn } = apertureFrame(ap);
+        if (nIn[0] * n[0] + nIn[2] * n[2] < 0.95) continue;
+        const f: V3 = [ap.c[0] + nIn[0] * ap.depth, ap.c[1], ap.c[2] + nIn[2] * ap.depth];
+        const off = (f[0] - A[0]) * n[0] + (f[2] - A[1]) * n[2];
+        if (Math.abs(off) > 0.35) continue;
+        const s = (f[0] - o[0]) * r[0] + (f[2] - o[2]) * r[2];
+        const k = ap.depth > inset ? (ap.depth - inset) / ap.depth : 0;
+        const w = ap.w + (ap.wi - ap.w) * k + 0.1;
+        let lo = ap.c[1] + ap.yi * k - (ap.h + (ap.hi - ap.h) * k) / 2 - 0.05, hi = ap.c[1] + ap.yi * k + (ap.h + (ap.hi - ap.h) * k) / 2 + 0.05;
+        if (ap.door) { lo = ap.c[1] - ap.h / 2 - 0.05; hi = ap.c[1] + ap.h / 2 + ap.w * 0.6; } // arched heads
+        const h: [number, number, number, number] = [Math.max(0.02, s - w / 2), Math.max(y0 + 0.02, lo), Math.min(len - 0.02, s + w / 2), Math.min(y1 - 0.02, hi)];
+        if (h[2] > h[0] && h[3] > h[1] && !holes.some((q) => q[0] < h[2] && h[0] < q[2] && q[1] < h[3] && h[1] < q[3])) holes.push(h);
+      }
+      out.push({ o, r, n, L: len, y0, y1, holes });
+    }
+  });
+  return out;
+}
+
+/** Horizontal shadow skins just above each room's ceiling (beams and boards touch it from below, so
+ * without them sun leaks along the top of every beam). Outline grown by `inset`; faces down. */
+export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, inset = 0.22): { poly: V2[]; y: number }[] {
+  return rooms.map((r) => {
+    let cx = 0, cz = 0; for (const p of r.poly) { cx += p[0] / r.poly.length; cz += p[1] / r.poly.length; }
+    return { poly: r.poly.map(([x, z]) => { const d = Math.hypot(x - cx, z - cz) || 1; return [x + ((x - cx) / d) * inset, z + ((z - cz) / d) * inset] as V2; }), y: r.y1 + lift };
+  });
 }
