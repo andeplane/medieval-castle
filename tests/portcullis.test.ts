@@ -13,7 +13,7 @@ import {
 } from '../src/castle/interior/portcullis';
 import { m4apply, m4mul, m4translate, m4rotX } from '../src/castle/interior/doorGeom';
 import type { PartBin } from '../src/castle/interior/doorParts';
-import { buildDoors, inDoorway } from '../src/castle/interior/doors';
+import { buildDoors, joinDoors, inDoorway } from '../src/castle/interior/doors';
 import { fakeBatch, fakePhysics, fakeSound, M, run } from './helpers/doorFakes';
 
 const P = planInterior();
@@ -371,5 +371,30 @@ describe('the gate in the door system', () => {
     // without a winch (test scene): the grille is the only interactable
     const bare = buildDoors([], M, undefined, { batch: fakeBatch().factory, portcullis: [portcullisFor(gate, null)] });
     expect(bare.interactables.map((i) => i.id)).toEqual(['gate-main']);
+  });
+
+  it('joins with the leaf doors (one system per material set) and behaves as one', () => {
+    const leaf = P.doors.find((d) => d.id === 'court>W0-2')!, arch = P.doors.find((d) => !d.leaf && d.kind !== 'gate')!;
+    const fb = [fakeBatch(), fakeBatch()], ph = fakePhysics();
+    const leaves = buildDoors([leaf, arch], M, ph.api, { batch: fb[0].factory, initial: 0 });
+    const gateSys = buildDoors([], M, ph.api, { batch: fb[1].factory, portcullis: [spec], initial: 0 });
+    const sys = joinDoors([leaves, gateSys]);
+    expect(sys.object.children).toEqual([leaves.object, gateSys.object]);
+    expect(sys.interactables.map((i) => i.id)).toEqual(['court>W0-2', 'gate-main', 'gate-main:winch']);
+    expect(sys.state()).toEqual({ 'court>W0-2': 0, 'gate-main': 0 });
+    expect(sys.triangles).toBe(leaves.triangles + gateSys.triangles);
+    expect(sys.isOpen(arch.id) && sys.isPassable(arch.id)).toBe(true);
+    expect(sys.isOpen('nope') || sys.isPassable('gate-main')).toBe(false);
+    const under = world(spec, 0, 1, 0);
+    expect(sys.blocksPlayer(under)).toBe(true);
+    sys.setOpen('court>W0-2', true, true);
+    expect(sys.isOpen('court>W0-2')).toBe(true);
+    expect(sys.request('gate-main', true, { pos: under })).toBe(true);
+    expect(sys.request('gate-main', true, { pos: world(spec, 0, 1, 60) })).toBe(false);
+    run(sys, 10);
+    expect(sys.isOpen('gate-main')).toBe(true);
+    sys.setVisible('court>W0-2', false);
+    expect(fb[0].made[0].hidden.size).toBe(1);
+    expect(fb[1].made[0].hidden.size).toBe(0);
   });
 });

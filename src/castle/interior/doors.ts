@@ -424,3 +424,25 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
     },
   };
 }
+
+/**
+ * Several door systems as one, e.g. one per lighting set (a batch has one material: leaves above ground
+ * and in cellars take different interior materials). Door ids are unique across them, so calls go to all.
+ */
+export function joinDoors(systems: DoorSystem[]): DoorSystem {
+  const object = new THREE.Group(); object.name = 'doors';
+  for (const s of systems) object.add(s.object);
+  return {
+    object,
+    interactables: systems.flatMap((s) => s.interactables),
+    update: (dt, p) => { for (const s of systems) s.update(dt, p); },
+    setOpen: (id, o, instant) => { for (const s of systems) s.setOpen(id, o, instant); },
+    state: () => Object.assign({}, ...systems.map((s) => s.state())),
+    request: (id, o, by) => systems.some((s) => s.request(id, o, by)),
+    isOpen: (id) => systems.some((s) => s.isOpen(id)),
+    isPassable: (id) => systems.some((s) => s.isPassable(id)),
+    blocksPlayer: (p) => systems.some((s) => s.blocksPlayer(p)),
+    triangles: systems.reduce((n, s) => n + s.triangles, 0),
+    setVisible: (id, v) => { for (const s of systems) s.setVisible(id, v); },
+  };
+}

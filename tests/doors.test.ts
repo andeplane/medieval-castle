@@ -282,6 +282,8 @@ describe('door system', () => {
     expect((b.object as THREE.BatchedMesh).getVisibleAt(i)).toBe(false);
     const m = new THREE.Matrix4(); (b.object as THREE.BatchedMesh).getMatrixAt(i, m);
     expect(m.elements[13]).toBe(2);
+    // untagged for the interior light: no room's daylight (render/interiorShader.ts reads row −1 as none)
+    expect((b.object as THREE.BatchedMesh).geometry.getAttribute('interiorRoom').getX(0)).toBe(-1);
   });
 
   it('opens fast, settles slowly, and shuts with a thud and a latch', () => {
