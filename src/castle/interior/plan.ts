@@ -497,7 +497,9 @@ export function planInterior(seed = WORLD_SEED): PlanX {
       const poly: V2[] = [local(sP.o, sP.u, sP.v, sGate - hw + tw, -(P - 1.6)), local(sP.o, sP.u, sP.v, sGate + hw - tw, -(P - 1.6)), local(sP.o, sP.u, sP.v, sGate + hw - tw, -0.35), local(sP.o, sP.u, sP.v, sGate - hw + tw, -0.35)];
       const y1 = f === 6 ? GATEHOUSE.top - 0.75 : floorBase(f + 1) - SLAB;
       addRoom({ id: `gate${f}`, zone: 'gate', floor: f, kind: 'chamber', poly, y0: floorBase(f), y1 }, 'new');
-      const s = wingRooms.S[f].find((k) => facings(byId.get(`gate${f}`)!.poly, byId.get(k)!.poly).length);
+      // the S room with the longest stretch of wall facing the gatehouse room
+      const span = (k: SpaceId) => Math.max(0, ...facings(byId.get(`gate${f}`)!.poly, byId.get(k)!.poly).map((fc) => fc.t1 - fc.t0));
+      const s = [...wingRooms.S[f]].sort((a, b) => span(b) - span(a)).find((k) => span(k) > 0);
       if (s) connect(`gate${f}>${s}`, `gate${f}`, s, { pref: g.base });
     }
     const e = eastTurretFrame(), E = wings.E, sT = sOf(E, e.base), ehw = EAST_TURRET.w / 2 - 0.75;

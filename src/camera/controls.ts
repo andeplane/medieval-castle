@@ -75,7 +75,8 @@ export class CameraRig {
     this.camera.lookAt(new THREE.Vector3(...v.target));
     this.orbit.target.set(...v.target);
     this.setMode(v.mode);
-    this.orbit.update();
+    // only orbit needs the controls synced; in walk/fly a damped update would still nudge the camera
+    if (v.mode === 'orbit') this.orbit.update();
   }
 
   update(dt: number) {
