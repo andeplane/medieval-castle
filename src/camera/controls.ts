@@ -12,7 +12,7 @@ import type { PlayerController } from '../player/controller';
 import { TUNING } from '../player/movement';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
-export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
+export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number]; clamp?: boolean }
 
 const C = castleCentre();
 // in front of the main gate, a little off-axis, looking into the gate passage
@@ -26,7 +26,7 @@ export const VIEWS: View[] = [
   { name: 'ward', label: 'East ward', mode: 'walk', pos: [44, 0, 27], target: [20, 22, -6] },
   { name: 'moat', label: 'Across the moat', mode: 'orbit', pos: [-92, 4.8, 58], target: [-10, 20, 4] },
   { name: 'courtyard', label: 'Courtyard', mode: 'walk', pos: [-11, 0, 4], target: [12, 22, -8] },
-  { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-24, 56, -16], target: [80, 20, 160] },
+  { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-28, 56, -12], target: [80, 20, 160] }, // over the keep's south parapet, clear of the cap house and the corner turret
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
   { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
 ];
@@ -55,6 +55,8 @@ export class CameraRig {
   mode: Mode = 'orbit';
   private yaw = 0; private pitch = 0;
   speed = { fly: 22 };
+  /** Keep the fly camera above the terrain (off for interior bookmarks: cellars and tunnels lie below it). */
+  clampFly = true;
   /** The physics player; walk mode drives it. */
   player: PlayerController | null = null;
   /** Physics interpolation factor for the walk camera. */
@@ -83,7 +85,12 @@ export class CameraRig {
     this.orbit.enabled = m === 'orbit';
     this.player?.setActive(m === 'walk');
     if (m === 'walk' && prev !== 'walk') this.enterWalk();
-    if (prev === 'walk' && m !== 'walk' && this.player) { this.yaw = this.player.yaw; this.pitch = this.player.pitch; }
+    if (prev === 'walk' && m !== 'walk' && this.player) {
+      this.yaw = this.player.yaw; this.pitch = this.player.pitch;
+      // flying off from a cellar or tunnel must not snap the camera up through the ground
+      const c = this.camera.position;
+      this.clampFly = c.y > this.groundAt(c.x, c.z);
+    }
     else if (m !== 'orbit' && m !== 'walk') {
       const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
       this.yaw = e.y; this.pitch = e.x;
@@ -102,8 +109,11 @@ export class CameraRig {
     if (!pl) return;
     const p = this.camera.position;
     const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
-    if (p.y < 45 && this.walkable?.(p.x, p.z)) {
-      const y = pl.groundAt(p.x, p.z, p.y, heightAt(p.x, p.z));
+    // a floor just under the camera counts even off the island (the moat tunnel); cellars and tunnels
+    // lie below the terrain, so the floor comes from a ray, never from the terrain height
+    const floor = pl.groundAt(p.x, p.z, p.y, NaN), close = !Number.isNaN(floor) && p.y - floor < 4;
+    if (p.y < 45 && (close || this.walkable?.(p.x, p.z))) {
+      const y = Number.isNaN(floor) ? heightAt(p.x, p.z) : floor;
       pl.teleport(p.x, y, p.z, e.y, THREE.MathUtils.clamp(e.x, -0.6, 0.6));
     } else this.toSpawn();
   }
@@ -128,11 +138,14 @@ export class CameraRig {
     }
     const p = new THREE.Vector3(...v.pos);
     if (v.mode === 'walk') p.y = this.groundAt(p.x, p.z) + TUNING.eye;
+    this.clampFly = v.clamp !== false;
     this.camera.position.copy(p);
     this.camera.lookAt(target);
     this.orbit.target.copy(target);
     this.setMode(v.mode);
-    // OrbitControls.update() would push a close walk/fly bookmark out to minDistance
+    // only orbit views go through the orbit control: its update pushes a close bookmark out to
+    // minDistance and clamps the polar angle, which lifted walk views looking up at the walls to the
+    // target's height (the courtyard view ended up inside the west wing)
     if (v.mode === 'orbit') this.orbit.update();
   }
 
@@ -151,6 +164,6 @@ export class CameraRig {
     move.y += up;
     this.camera.position.addScaledVector(move, this.speed.fly * fast * dt);
     const floor = this.groundAt(this.camera.position.x, this.camera.position.z) + 1.0;
-    if (this.camera.position.y < floor) this.camera.position.y = floor;
+    if (this.clampFly && this.camera.position.y < floor) this.camera.position.y = floor;
   }
 }

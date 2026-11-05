@@ -1,6 +1,6 @@
 // The old bridge across the south moat, with its middle span fallen into the water. It explains why
 // the player cannot leave the island and gives the moat view a focal point.
-import { rngFor } from '../core/rng';
+import { rngFor, type Rng } from '../core/rng';
 import { type V2, add, scale, sub, norm, len, edgeDist } from '../core/math2d';
 import { Builder, wallFrame, at, type Frame } from './builder';
 import { GROUND } from './spec';
@@ -14,8 +14,8 @@ function hitEdge(poly: V2[], from: V2, d: V2, start: number, inside: (x: number,
   return 400;
 }
 
-export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (poly: V2[], x: number, z: number) => boolean, groundAt?: (x: number, z: number) => number) {
-  const r = rngFor('bridge');
+/** `groundAt` (optional) adds landward steps from the lawn up to the deck so the bridge can be walked. */
+export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (poly: V2[], x: number, z: number) => boolean, r: Rng = rngFor('bridge'), groundAt?: (x: number, z: number) => number) {
   const g = gatehouseFrame();
   const d = norm(add(g.out, [0.12, 0])); // slightly skewed, as old bridges often are
   const from = g.centre;
@@ -90,7 +90,8 @@ export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (pol
       B.prism('old', [P(a, -W / 2), P(b, -W / 2), P(b, W / 2), P(a, W / 2)], deck - 0.05, deck, { top: 'trim' });
       for (const sgn of [-1, 1]) B.prism('old', [P(a - 0.3, sgn * (W / 2 - 0.45)), P(b + 0.3, sgn * (W / 2 - 0.45)), P(b + 0.3, sgn * W / 2), P(a - 0.3, sgn * W / 2)], deck, deck + 1.0, { top: 'trim' });
     } else {
-      // broken arch stubs on each pier and tumbled stones in the water
+      // broken arch stubs on each pier and tumbled stones in the water (no laid courses on debris)
+      B.stoneOn = false;
       for (const [x0, dir] of [[a, 1], [b, -1]] as [number, number][]) {
         const stub = 1.4 + r() * 0.8;
         for (let k = 0; k < 4; k++) {
@@ -104,6 +105,7 @@ export function buildBridge(B: Builder, island: V2[], moatOuter: V2[], pip: (pol
         const x = a + L * (0.15 + 0.7 * r()), s = (r() - 0.5) * (W + 3), p = P(x, s), sz = 0.6 + r() * 1.2;
         B.box(r() < 0.4 ? 'trim' : 'old', [p[0], -0.9 + r() * 0.9, p[1]], [sz * 1.4, sz, sz], norm([r() - 0.5, r() - 0.5]));
       }
+      B.stoneOn = true;
     }
   }
   // width and where the broken span begins (along d from start): the player boundary uses them

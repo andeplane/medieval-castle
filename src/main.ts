@@ -1,6 +1,6 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?interior=0, ?shot (hide UI), ?debug (three Inspector), ?seed=N,
 // ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn),
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
@@ -8,6 +8,8 @@ import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
+import { StoneField } from './castle/stones/field';
+import { StoneSet } from './castle/stones/set';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
 import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
@@ -17,6 +19,8 @@ import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint, type Mode } from './camera/controls';
 import { outerPoly, gatehouseFrame } from './castle/layout';
 import { GATEHOUSE } from './castle/spec';
+import { buildInterior } from './castle/interior';
+import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
@@ -26,7 +30,7 @@ import { MouseLook } from './camera/mouseLook';
 import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { setupPlay, type InteriorCollision } from './player/setup';
+import { setupPlay } from './player/setup';
 import { MinimalHud, type Hud } from './player/hud';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
 import { createInteraction, domPromptView } from './game/interact';
@@ -36,6 +40,8 @@ import { stepProgress, textureProgress } from './loading/model';
 import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
+/** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
+const LOCKED = new Set(['sallyport-grille']);
 // Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
 // texture jobs fill CUTTING → RAISING.
 let screen: LoadingScreen;
@@ -80,13 +86,22 @@ async function main() {
     VIEWS.splice(0, VIEWS.length, ...t.views);
   } else {
     ({ builder, lights } = buildCastle());
-    const b = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, heightAt);
+    const b = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, undefined, heightAt);
     buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - b.start[0], z - b.start[1]) < 3.2);
     bridge = b;
   }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
+  const interior = params.get('interior') === '0' || test === 'stairs' ? null : buildInterior(mats, builder, { heightAt });
   const castle = builder.build(mats);
   scene.add(castle);
+  if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
+  const tStones = performance.now();
+  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
+  const layoutMs = Math.round(performance.now() - tStones);
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
+  scene.add(stones.group);
+  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
   let course: { info: CourseInfo; object: THREE.Object3D } | null = null;
   if (test === 'walk') {
     const cb = new Builder();
@@ -143,9 +158,8 @@ async function main() {
   const input = new KeyboardInput(window);
   const scripted = new ScriptedInput();
   const footsteps = new Footsteps(browserAudio(window));
-  const interior = (window as unknown as { __game?: { interior?: InteriorCollision } }).__game?.interior ?? null;
   const play = await setupPlay({
-    castle, terrain, bridge, interior, input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
+    castle, terrain, bridge, interior: interior ? { collision: interior.collision } : null, input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
     extra: course ? { object: course.object, holes: course.info.holes } : null,
   });
   const { physics, player } = play;
@@ -170,16 +184,21 @@ async function main() {
   rig.mouse = mouse;
   input.capture = () => mouse.locked;
   try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) mouse.sensitivity = s; } catch { /* storage blocked */ }
-  // doors (G.2): the main gate's two leaves with a wicket, and the portcullis, until the shell emits all
-  // DoorSpecs. Every leaf is a kinematic box in the physics world, posed each fixed tick; the player and
-  // any NPC motors stop a swinging leaf.
+  // doors (G.2): the main gate's two leaves with a wicket and the portcullis (gateDoorSpecs, until the
+  // gate-portcullis branch reconciles it with the plan's 'gate-main'), plus every leaf door of the
+  // interior plan. Every leaf is a kinematic box in the physics world, posed each fixed tick; the player
+  // and any NPC motors stop a swinging leaf.
   const audio = new DoorAudio(camera);
   const gateSpecs = test === 'stairs' ? [] : gateDoorSpecs(); // the stair scene has no castle
-  const doors = buildDoors(gateSpecs, M, physics, {
+  const planDoors = interior ? interior.plan.doors.filter((d) => d.leaf && d.id !== 'gate-main') : [];
+  const doors = buildDoors([...gateSpecs, ...planDoors.filter((d) => !LOCKED.has(d.id))], M, physics, {
     portcullis: test === 'stairs' ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
     initial: params.has('doors') ? Number(params.get('doors')) : undefined,
   });
   scene.add(doors.object);
+  // locked doors: their own system, never opened, with no interactables and no request() from NPCs
+  const locked = buildDoors(planDoors.filter((d) => LOCKED.has(d.id)), M, physics, { ajar: 0, initial: 0 });
+  scene.add(locked.object);
   // the fly camera's floor in the gate passage is the sill, not the terrain under the gatehouse
   rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
   // the player blocks leaves by its body in walk mode; a flying camera by where it is
@@ -251,26 +270,31 @@ async function main() {
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
   await say('LIGHTING…');
+  stones.update(camera.position, Infinity);
   await renderer.compileAsync(scene, camera);
 
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
-    renderNow: async () => { veg?.update(camera); pipeline.render(); },
-    physics, player, input: scripted, course: course?.info ?? null, interior,
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
+    physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
     doors,
     stats: () => ({
-      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
-      doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
+      interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
+      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      doorTriangles: doors.triangles, doors: { ...doors.state(), ...locked.state() }, target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       physics: { ...physics.stats(), ...play.timings },
     }),
   }, window as unknown as HookWindow, systemClock);
 
+  (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
+    info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
     screen.dispose();
     hooks.ready = true;
     return;
@@ -284,6 +308,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     tick(dt);
+    stones.update(camera.position);
     veg?.update(camera);
     pipeline.render();
   });

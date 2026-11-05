@@ -89,6 +89,7 @@ describe('CameraRig', () => {
     expect(cam.fov).toBe(55);
     expect(cam.near).toBe(0.25);
     rig.walkable = () => false;
+    cam.position.set(30, 20, 30); // off the island and not just above a floor
     rig.setMode('walk');
     const s = spawnPoint();
     expect(player.feet[0]).toBeCloseTo(s.x); expect(player.spawn.yaw).toBeCloseTo(s.yaw);

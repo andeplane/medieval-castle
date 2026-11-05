@@ -15,6 +15,10 @@ import { ScriptedInput } from '../src/player/input';
 import { Footsteps } from '../src/player/footsteps';
 import { spawnPoint } from '../src/camera/controls';
 import { TUNING, nearCorner } from '../src/player/movement';
+import { StoneSet } from '../src/castle/stones/set';
+import { GeoBuf, writeStone } from '../src/castle/stones/mesh';
+import { worldToFace } from '../src/castle/stones/layout';
+import type { V3 } from '../src/castle/interior/types';
 import { GATEHOUSE } from '../src/castle/spec';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
 import { fakeClock, fakeView } from './helpers';
@@ -42,7 +46,7 @@ function terrainObject(size = 240, seg = 160) {
 const ROCK: V2 = (() => { const e = ISLAND[24], l = Math.hypot(e[0], e[1]); return [e[0] * (1 - 12 / l), e[1] * (1 - 12 / l)]; })();
 
 describe('walking the island', { timeout: 60_000 }, () => {
-  let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>;
+  let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>, stoneSet: StoneSet;
   const view = fakeView();
   const walk = (keys: string[], s: number) => {
     input.hold(keys);
@@ -58,8 +62,9 @@ describe('walking the island', { timeout: 60_000 }, () => {
 
   beforeAll(async () => {
     const { builder } = buildCastle();
-    bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, heightAt);
+    bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, undefined, heightAt);
     buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+    stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // the real 3D stones, as main.ts lays them
     const castle = builder.build(mats());
     const cb = new Builder();
     course = buildCourse(cb);
@@ -165,6 +170,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     for (let i = 0; i < 16; i++) { const a = (i / 8) * Math.PI, e = i % 2 ? 0.6 : -0.6; dirs.push([Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e)]); }
     dirs.push([0, 1, 0]);
     let wall = 9, any = 9, frames = 0;
+    const close = new Map<string, V3>(); // where the eye came within 0.45 m of a wall (for the stone check)
     const probe = (keys: string[], s: number) => {
       input.hold(keys);
       for (let i = 0; i < Math.round(s * 60); i++) {
@@ -174,6 +180,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
           const h = play.physics.raycast([p.x, p.y, p.z], d, 1);
           if (!h) return;
           if (k < 24) wall = Math.min(wall, h.dist); else any = Math.min(any, h.dist);
+          if (k < 24 && h.dist < 0.45) close.set(`${Math.round(p.x * 2)},${Math.round(p.y * 2)},${Math.round(p.z * 2)}`, [p.x, p.y, p.z]);
         });
       }
       input.hold([]);
@@ -194,6 +201,20 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(reach).toBeLessThan(TUNING.radius / 2);
     expect(any).toBeGreaterThan(reach + 0.03);
     expect(wall).toBeLessThan(0.45); // and the probes really were pressed against walls
+    // the 3D stones stand proud of the wall plane the colliders follow: measure their real relief
+    // (finest level, every stone near where the eye came close) and keep the near plane clear of it
+    const seen = new Set<unknown>();
+    let relief = 0;
+    for (const p of close.values()) for (const r of stoneSet.stonesNear(p, 1.5)) {
+      if (seen.has(r.stone)) continue;
+      seen.add(r.stone);
+      const g = new GeoBuf();
+      writeStone(g, r.face, r.stone, 2);
+      for (let i = 0; i < g.pos.length; i += 3) relief = Math.max(relief, worldToFace(r.face, [g.pos[i], g.pos[i + 1], g.pos[i + 2]])[2]);
+    }
+    expect(seen.size).toBeGreaterThan(20);
+    expect(relief).toBeGreaterThan(0.03);
+    expect(wall - relief).toBeGreaterThan(reach + 0.03);
   });
 
   it('course origin is deterministic, surfaces resolve by place', () => {
