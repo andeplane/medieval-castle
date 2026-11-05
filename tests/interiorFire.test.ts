@@ -22,16 +22,16 @@ describe('interior fire sources', () => {
   test('a torch goes on the long wall away from the door, facing into the room', () => {
     const r = room('H', 'hall');
     const plan: InteriorPlan = { rooms: [r], doors: [door('H', 5, 0)], stairs: [] };
-    const [m, n] = torchSpot(plan, r)!;
+    const { m, n } = torchSpot(plan, r)!;
     expect(m).toEqual([5, 6]);                    // the far long wall
     expect(n[0]).toBeCloseTo(0); expect(n[1]).toBeCloseTo(-1);
     expect(torchSpot(plan, room('tiny', 'hall', 'N', sq(0, 0, 2, 2)))).toBeNull();
     // without doors the first long edge wins; its normal points inside
-    const [m2, n2] = torchSpot({ rooms: [r], doors: [], stairs: [] }, r)!;
+    const { m: m2, n: n2 } = torchSpot({ rooms: [r], doors: [], stairs: [] }, r)!;
     expect(m2).toEqual([5, 0]); expect(n2[1]).toBeCloseTo(1);
     // the other winding: the normal still points inside
     const rev = room('R', 'hall', 'N', sq(0, 0, 10, 6).reverse());
-    const [, n3] = torchSpot({ rooms: [rev], doors: [], stairs: [] }, rev)!;
+    const { n: n3 } = torchSpot({ rooms: [rev], doors: [], stairs: [] }, rev)!;
     expect(n3[1]).toBeCloseTo(-1);
   });
 
@@ -43,5 +43,10 @@ describe('interior fire sources', () => {
     expect(all.flames.every((f) => f.kind === 'torch')).toBe(true);
     expect(all.emitters[0].position[1]).toBeCloseTo(2.3);
     expect(wallTorches(plan, (id) => `${id}:0`, 2).emitters).toHaveLength(2);
+    // a 30 m tunnel gets three torches along its wall
+    const long: InteriorPlan = { rooms: [room('L', 'passage', 'tunnel', sq(0, 0, 30, 3))], doors: [], stairs: [] };
+    const t = wallTorches(long, () => 'tunnel:-1');
+    expect(t.emitters.map((e) => Math.round(e.position[0]))).toEqual([5, 15, 25]);
+    expect(wallTorches(long, () => 'tunnel:-1', 2).emitters).toHaveLength(2);
   });
 });

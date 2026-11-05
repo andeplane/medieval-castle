@@ -112,7 +112,9 @@ export function makeWindowGlass(src: THREE.MeshStandardNodeMaterial, flags: Wind
   const lead = float(1).sub(smoothstep(0.03, 0.07, line));
   // shown: the source's own opacity (thin glass); culled: opaque
   m.opacityNode = mix(float(1), (src.opacityNode ?? float(1)) as unknown as ReturnType<typeof float>, shown);
-  // culled rooms with firelight: a warm glow in the quarries at night
-  m.emissiveNode = vec3(1.0, 0.55, 0.22).mul(fire.mul(float(1).sub(shown)).mul(flags.night).mul(float(1).sub(lead)).mul(0.9));
+  // rooms with firelight glow warm in the quarries at night: fully on the dark pane, half on the
+  // see-through glass (the rig only lights the few fires nearest the eye, so from outside a shown
+  // room would otherwise look unlit)
+  m.emissiveNode = vec3(1.0, 0.55, 0.22).mul(fire.mul(mix(float(0.9), float(0.45), shown)).mul(flags.night).mul(float(1).sub(lead)));
   return m;
 }
