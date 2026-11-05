@@ -5,6 +5,7 @@
 // falls back to the main thread, and without WebGL2 the caption alone carries progress.
 // Everything time-, frame-, GPU- or worker-related is injected (`LoadingDeps`).
 import { caption } from './model';
+import { Timeline, localTimeStore, type TimeStore } from './timeline';
 import { renderSize } from './loop';
 import { createTunnelRenderer, type Palette } from './gl';
 import { localBackend, workerBackend, type BackendInit, type TunnelBackend } from './backend';
@@ -14,7 +15,9 @@ import { STONE_GREYS } from '../render/texgen';
 export { renderSize };
 
 export interface LoadingScreen {
-  /** Set load progress 0..1 and an optional caption, then yield a frame so the page can paint. */
+  /** A named boot step began (see timeline.ts): progress moves with time through its share. */
+  step(label: string): Promise<void>;
+  /** Set load progress 0..1 directly and an optional caption, then yield a frame so the page can paint. */
   progress(p: number, label?: string): Promise<void>;
   /** Light the rest, hold a moment, fade out and free the GPU context. */
   finish(): Promise<void>;
@@ -24,6 +27,9 @@ export interface LoadingScreen {
 }
 
 export interface LoadingDeps {
+  now(): number;
+  /** where this device's boot-step timings are remembered */
+  store: TimeStore | null;
   raf(cb: (t: number) => void): number;
   caf(id: number): void;
   wait(ms: number): Promise<void>;
@@ -57,6 +63,8 @@ export function browserBackend(canvas: HTMLCanvasElement, init: BackendInit): Tu
 }
 
 export const browserDeps = (): LoadingDeps => ({
+  now: () => performance.now(),
+  store: localTimeStore((() => { try { return localStorage; } catch { return null; } })()),
   raf: (cb) => requestAnimationFrame(cb),
   caf: (id) => cancelAnimationFrame(id),
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -82,26 +90,40 @@ export const PALETTE: Palette = {
 export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } = {}, d: LoadingDeps = browserDeps()): LoadingScreen {
   const doc = root.ownerDocument;
   root.textContent = '';
+  root.classList.remove('plain'); // the static placeholder's look
   const canvas = doc.createElement('canvas');
   const cap = doc.createElement('div');
   cap.className = 'cap';
   const title = doc.createElement('div');
   title.className = 'title';
-  title.textContent = 'MOATED CASTLE';
+  title.textContent = 'Moated Castle';
+  // the step in words, then the percentage in tabular figures so the line does not jitter
   const labelEl = doc.createElement('div');
   labelEl.className = 'label';
+  const stepEl = doc.createElement('span');
+  stepEl.className = 'step';
+  const pctEl = doc.createElement('span');
+  pctEl.className = 'pct';
+  labelEl.append(stepEl, pctEl);
   cap.append(title, labelEl);
   root.append(canvas, cap);
   root.setAttribute('role', 'progressbar');
+  root.setAttribute('aria-label', 'Loading Moated Castle');
   root.setAttribute('aria-valuemin', '0');
   root.setAttribute('aria-valuemax', '100');
 
   const sz = renderSize(d.viewport());
   const be = d.backend(canvas, { ...sz, reduced: d.reducedMotion, fixed: opts.fixed, palette: PALETTE });
+  const plan = new Timeline(d.now, d.store);
+  const startSpan = (sp: { start: number; end: number; ms: number }) => { if (opts.fixed === undefined) be.span(sp.start, sp.end, sp.ms); };
+  startSpan(plan.first());
   let label = 'Down to the cellar…', disposed = false;
   const syncLabel = () => {
-    labelEl.textContent = caption(label, be.shown);
-    root.setAttribute('aria-valuenow', String(Math.round(be.shown * 100)));
+    const pct = Math.round(be.shown * 100);
+    stepEl.textContent = label;
+    pctEl.textContent = `${pct}%`;
+    root.setAttribute('aria-valuenow', String(pct));
+    root.setAttribute('aria-valuetext', caption(label, be.shown));
   };
   const unPointer = d.onPointer((x, y) => be.look(x, y));
   const unResize = d.onResize(() => { const s = renderSize(d.viewport()); be.resize(s.w, s.h); });
@@ -113,6 +135,13 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
 
   const screen: LoadingScreen = {
     get shown() { return be.shown; },
+    async step(l) {
+      const sp = plan.enter(l);
+      if (sp) startSpan(sp);
+      label = l;
+      syncLabel();
+      await d.nextFrame();
+    },
     async progress(p, l) {
       be.progress(p);
       if (l) label = l;
@@ -121,6 +150,7 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
     },
     async finish() {
       label = 'The castle awaits';
+      plan.finish();
       be.progress(1);
       await be.whenDone();
       syncLabel();

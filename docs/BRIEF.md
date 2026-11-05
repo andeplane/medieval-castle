@@ -16,7 +16,7 @@
 
 **Destruction model (phase D).** Walls are lists of stone courses per wall segment (course 0.22–0.45 m, stones 0.3–1.0 m, two skins with a rubble core), ~170k stones total. A support graph decides what falls: a stone rests on the stones it overlaps below. Loose stones become Rapier bodies; connected chunks become compound bodies; settled rubble freezes. Rendering: real bevelled stones near the player, the generated masonry texture further away (the texture is laid out with the same course rules, so the switch is invisible).
 
-**Out of scope for now.** Multiplayer, NPCs, story, mobile controls, interiors before the exterior is approved.
+**Out of scope for now.** Multiplayer, NPCs, story, mobile controls, furniture (interiors approved 2026-11-05: rooms, doors, stairs, cellars and tunnels without furniture first).
 
 ## Phased steps
 
@@ -31,8 +31,8 @@ Each step is done when `npm run build` and `npm test` pass and `npm run shots` h
 | **E.5** ✅ | Terrain, sky, fog, water reflections, trees | Mountains visible to the north and west; no tree in a bookmark camera |
 | **E.6** ✅ | Orbit / fly / walk cameras, bookmarks, `window.__game`, capture script | `npm run shots` writes every bookmark |
 | **E.7** ⏳ | Art-review iterations with Anders | Scorecard ≥ 2 in every category, average ≥ 2.3 |
-| I.1 | Interior layout: 20 rooms per floor, corridors, stairs in towers | Every room reachable; validator passes for 256 seeds |
-| I.2 | Interior geometry + dressing | Captures of hall, stair, chamber pass review |
+| I.1 ⏳ | Interior layout: 20 rooms per floor in enfilade, spiral stairs in the towers and the courtyard stair tower, gate passage, cellars under two wings, tunnels incl. one under the moat to a barred sally port | Every room reachable from the gate and the courtyard, the far bank never; navigation graph reaches every room; validator passes for 256 seeds (64 in CI) |
+| I.2 ⏳ | Interior geometry (walls, doorways, embrasures, floors, ceilings, vaults); dressing later, no furniture for now | Captures of gate passage, hall, stair, chamber, tunnel pass review; interior ≤ 400k triangles, ≤ 250 extra draw calls |
 | D.1 | Stone course data model shared by render and physics | Same course layout in texture and stones |
 | D.2 | Support graph + Rapier worker + rubble freeze | Breaking a 3 m hole holds 60 fps; no floating stones |
 | G.1 | FPS controller (Rapier capsule), a force tool to break walls | Can walk the island, enter, climb, smash |

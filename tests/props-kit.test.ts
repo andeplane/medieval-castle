@@ -53,14 +53,20 @@ describe('prop kit', () => {
     }
   });
 
-  it('lights come only from fixtures, with a warm colour and flicker', () => {
+  it('lights and flames come only from fixtures, with a kind, a warm-or-white tint and flicker', () => {
     for (const k of KIT) {
-      const e = makeProp(k, 1).meta.emitters;
+      const p = makeProp(k, 1), e = p.meta.emitters;
       if (['candlestick', 'sconce', 'chandelier', 'altar'].includes(k.name)) {
         expect(e.length).toBeGreaterThan(0);
-        for (const x of e) { expect(x.colour[0]).toBeGreaterThan(x.colour[2]); expect(x.intensity).toBeGreaterThan(0); expect(x.flicker).toBeGreaterThan(0); }
-      } else expect(e).toEqual([]);
+        expect(p.mesh.flames.length).toBeGreaterThan(0);
+        for (const x of e) { expect(x.colour[0]).toBeGreaterThanOrEqual(x.colour[2]); expect(x.intensity).toBeGreaterThan(0); expect(x.flicker).toBeGreaterThan(0); expect(['candle', 'torch']).toContain(x.kind); }
+        expect(p.mesh.bins.flame.triangles).toBe(0); // flames are sprites now (src/light)
+      } else { expect(e).toEqual([]); expect(p.mesh.flames).toEqual([]); }
     }
+    expect(makeProp('sconce', 1).meta.emitters[0].kind).toBe('torch');
+    const ch = makeProp('chandelier', 1);
+    expect(ch.mesh.flames.length).toBeGreaterThanOrEqual(6); // every candle has a flame
+    for (const f of ch.mesh.flames) { expect(f.kind).toBe('candle'); expect(f.up![1]).toBeCloseTo(1); }
     expect(makeProp('chandelier', 1).meta.emitters.length).toBe(1); // one light per ring, not per candle
   });
 

@@ -41,6 +41,7 @@ export function serveTunnel(scope: WorkerScope, d: WorkerDeps) {
       }
       case 'size': size.w = m.w; size.h = m.h; return;
       case 'progress': model?.setTarget(m.p); return;
+      case 'span': model?.setSpan(m.start, m.end, m.ms, d.clock.now()); return;
       case 'look': look[0] = m.x; look[1] = m.y; return;
       case 'stop': stop?.(); renderer?.dispose(); stop = null; renderer = null; return;
     }

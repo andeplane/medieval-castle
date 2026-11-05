@@ -11,6 +11,7 @@ export interface BatchLike {
   addInstance(geometry: number): number;
   setMatrixAt(instance: number, m: M4): void;
   setColorAt(instance: number, rgb: V3): void;
+  setVisibleAt(instance: number, visible: boolean): void;
 }
 export type BatchFactory = (name: string, material: THREE.Material, maxInstances: number, maxVertices: number) => BatchLike;
 
@@ -28,10 +29,14 @@ export const threeBatch: BatchFactory = (name, material, maxInstances, maxVertic
       g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
       g.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+      // no room tag (render/interiorShader.ts): with an interior material a leaf takes the ambient floor,
+      // the sun and the fires, not the daylight of whichever room happens to be row 0
+      g.setAttribute('interiorRoom', new THREE.Float32BufferAttribute(new Float32Array(b.pos.length / 3).fill(-1), 1));
       return mesh.addGeometry(g);
     },
     addInstance: (g) => mesh.addInstance(g),
     setMatrixAt: (i, m) => { mesh.setMatrixAt(i, _m.fromArray(m)); },
     setColorAt: (i, rgb) => { mesh.setColorAt(i, _c.setRGB(rgb[0], rgb[1], rgb[2])); },
+    setVisibleAt: (i, v) => { mesh.setVisibleAt(i, v); },
   };
 };

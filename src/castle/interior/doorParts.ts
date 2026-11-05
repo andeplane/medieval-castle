@@ -3,8 +3,9 @@
 // Plank leaves are real joinery: vertical oak boards with chamfered edges and gaps, shaped to the head;
 // ledges and braces on the swing side (brace foot on the hinge side, so it holds the latch edge up);
 // strap hinges ending in spear tips, knuckles on the pintle axis; clinched nail heads in rows on the
-// show face; ring handle and escutcheon outside, thumb latch and pull ring inside. Gates are heavier
-// with a wicket; posterns are thick, banded and studded all over; grilles are an iron yett.
+// show face; ring handle and escutcheon outside, thumb latch and pull ring inside. Every door is one whole
+// leaf (no wicket or cutout); posterns are thick, banded and studded all over; grilles are an iron yett.
+// Gates have no leaves: the portcullis (portcullis.ts) closes them.
 import type { Rng } from '../../core/rng';
 import type { V3 } from './types';
 import { KIND, leafDepth, headTop, CLEAR, type LeafClass, type LeafKind } from './doorGeom';
@@ -20,8 +21,6 @@ export interface LeafGeom {
   /** Solid boxes of the leaf in local coordinates (collision and aim). */
   boxes: Box3[];
   width: number; height: number;
-  /** Wicket hole (gate leaf with a wicket), local coordinates. */
-  wicket?: { x0: number; x1: number; y0: number; y1: number; boards: [number, number][] };
 }
 
 // ---------------------------------------------------------------- primitive writers
@@ -33,7 +32,7 @@ type UvFn = (p: V3) => P2;
 const NOUV: UvFn = () => [0, 0];
 
 /** Triangle facing `out` (winding fixed to match), flat normal. */
-function tri(b: PartBin, p0: V3, p1: V3, p2: V3, out: V3, uvf: UvFn) {
+export function tri(b: PartBin, p0: V3, p1: V3, p2: V3, out: V3, uvf: UvFn) {
   let n = norm3(cross3(sub3(p1, p0), sub3(p2, p0)));
   if (n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0) { [p1, p2] = [p2, p1]; n = [-n[0], -n[1], -n[2]]; }
   if (!Number.isFinite(n[0]) || (n[0] === 0 && n[1] === 0 && n[2] === 0)) return;
@@ -161,25 +160,23 @@ const ledgeUV = (y0: number, y1: number, plank: number, uOff: number): UvFn => (
 
 // ---------------------------------------------------------------- leaves
 
-interface PlankOpts { W: number; H: number; top: (x: number) => number; flat: boolean; apexX: number | null; kind: LeafKind; r: Rng; hole?: { x0: number; x1: number; y0: number; y1: number }; wicketOf?: [number, number][] }
+interface PlankOpts { W: number; H: number; top: (x: number) => number; flat: boolean; apexX: number | null; kind: LeafKind; r: Rng }
 
 /** Ledges' (y0, y1) pairs for a leaf: bottom, top below the lowest edge of the head, and middles. */
-function ledgeRows(edgeTop: number, kind: LeafKind, hole?: { y0: number; y1: number }): [number, number][] {
-  const lh = kind === 'gate' ? 0.2 : kind === 'wicket' ? 0.13 : kind === 'postern' ? 0.16 : 0.15;
-  const bottom = kind === 'wicket' ? 0.08 : kind === 'gate' && hole ? 0.05 : 0.14;
-  const topY1 = edgeTop - (kind === 'wicket' ? 0.08 : 0.1), top0 = topY1 - lh;
+function ledgeRows(edgeTop: number, kind: LeafKind): [number, number][] {
+  const lh = kind === 'postern' ? 0.16 : 0.15;
+  const bottom = 0.14;
+  const topY1 = edgeTop - 0.1, top0 = topY1 - lh;
   const base: [number, number][] = [[bottom, bottom + lh]];
-  if (hole) base.push([hole.y1 + 0.07, hole.y1 + 0.07 + lh]);
   if (top0 > base[base.length - 1][1] + 0.25) base.push([top0, topY1]);
-  // middle ledges keep spans ≤ ~1 m and stay clear of the latch height and the wicket
+  // middle ledges keep spans ≤ ~1 m and stay clear of the latch height
   const rows = [...base];
-  const maxSpan = kind === 'gate' ? 0.95 : 1.05;
+  const maxSpan = 1.05;
   for (let i = 0; i < base.length - 1; i++) {
     const a = base[i][1], b = base[i + 1][0], span = b - a, n = Math.floor(span / maxSpan);
     for (let k = 1; k <= n; k++) {
       let y = a + (span * k) / (n + 1) - lh / 2;
-      if (kind !== 'gate' && y + lh > 0.88 && y < 1.2) y = Math.max(a + 0.25, 0.88 - lh - 0.02);
-      if (hole && y + lh > hole.y0 - 0.02 && y < hole.y1 + 0.02) continue;
+      if (y + lh > 0.88 && y < 1.2) y = Math.max(a + 0.25, 0.88 - lh - 0.02);
       rows.push([y, y + lh]);
     }
   }
@@ -190,41 +187,21 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   const { W, top, kind, r } = o;
   const { t, ledge: L } = KIND[kind];
   const { zFront: zf, zBack: zb } = leafDepth(kind);
-  const gap = kind === 'gate' || kind === 'wicket' ? 0.005 : 0.004;
-  const boards = o.wicketOf ?? boardEdges(W, r, gap, kind === 'gate' ? 0.27 : kind === 'postern' ? 0.2 : 0.23);
+  const boards = boardEdges(W, r, 0.004, kind === 'postern' ? 0.2 : 0.23);
   const bev = Math.min(0.012, t * 0.15);
   const planks = boards.map(() => Math.floor(r() * 6)), vOffs = boards.map(() => r() * 4);
-  const hole = o.hole;
-  // boards (split around a wicket hole)
-  boards.forEach(([x0, x1], i) => {
-    const uvf = boardUV(x0, x1, planks[i], vOffs[i]);
-    if (hole && x0 >= hole.x0 - 1e-6 && x1 <= hole.x1 + 1e-6) {
-      slab(g.wood, rectP(x0, 0, x1, hole.y0), zb, zf, bev, uvf);
-      slab(g.wood, underTop(x0, x1, hole.y1, top, o.flat, o.apexX), zb, zf, bev, uvf);
-    } else slab(g.wood, underTop(x0, x1, 0, top, o.flat, o.apexX), zb, zf, bev, uvf);
-  });
+  // whole boards, each shaped to the head
+  boards.forEach(([x0, x1], i) => slab(g.wood, underTop(x0, x1, 0, top, o.flat, o.apexX), zb, zf, bev, boardUV(x0, x1, planks[i], vOffs[i])));
   const edgeTop = Math.min(top(0.04), top(W - 0.04));
-  const rows = ledgeRows(edgeTop, kind, hole);
-  const lx0 = kind === 'wicket' ? 0.03 : 0.04, lx1 = W - lx0;
+  const rows = ledgeRows(edgeTop, kind);
+  const lx0 = 0.04, lx1 = W - lx0;
   const lb = 0.006;
-  const holeHit = (y0: number, y1: number) => hole && y1 > hole.y0 && y0 < hole.y1;
-  rows.forEach(([y0, y1], i) => {
-    const uvf = ledgeUV(y0, y1, (i * 2 + 1) % 6, r() * 3);
-    if (holeHit(y0, y1)) {
-      slab(g.wood, rectP(lx0, y0, hole!.x0 - 0.12, y1), zf, zf + L, lb, uvf);
-      slab(g.wood, rectP(hole!.x1 + 0.12, y0, lx1, y1), zf, zf + L, lb, uvf);
-    } else slab(g.wood, rectP(lx0, y0, lx1, y1), zf, zf + L, lb, uvf);
-  });
+  rows.forEach(([y0, y1], i) => slab(g.wood, rectP(lx0, y0, lx1, y1), zf, zf + L, lb, ledgeUV(y0, y1, (i * 2 + 1) % 6, r() * 3)));
   // braces between ledges, foot on the hinge side (x small), head on the latch side
-  const bw = kind === 'gate' ? 0.22 : 0.15;
+  const bw = 0.15;
   for (let i = 0; i < rows.length - 1; i++) {
     const ya = rows[i][1], yb = rows[i + 1][0];
     if (yb - ya < 0.35) continue;
-    if (hole && ya < hole.y1 && yb > hole.y0) {
-      // a wicket frame instead of a brace: stiles either side of the hole
-      for (const [s0, s1] of [[hole.x0 - 0.12, hole.x0 - 0.01], [hole.x1 + 0.01, hole.x1 + 0.12]]) slab(g.wood, rectP(s0, ya, s1, yb), zf, zf + L * 0.85, lb, ledgeUV(s0, s1, 3, 0));
-      continue;
-    }
     const xa = lx0 + 0.02, xb = lx1 - 0.02;
     const poly: P2[] = [[xa, ya], [xa + bw, ya], [xb, yb], [xb - bw, yb]];
     const dx = xb - xa, dy = yb - ya, l = Math.hypot(dx, dy);
@@ -233,16 +210,14 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
     slab(g.wood, poly, zf, zf + L * 0.85, lb, uvf);
   }
   // iron: strap hinges with spear tips on chosen ledges, knuckles on the pintle axis
-  // plank doors hang on two straps; gates on three (bottom, middle, top); posterns on every ledge
-  const mid = rows.slice(1, -1).sort((a, b) => Math.abs((a[0] + a[1]) / 2 - edgeTop * 0.5) - Math.abs((b[0] + b[1]) / 2 - edgeTop * 0.5))[0];
-  const strapRows = kind === 'postern' ? rows : kind === 'gate' && mid ? [rows[0], mid, rows[rows.length - 1]] : [rows[0], rows[rows.length - 1]];
-  const sw = kind === 'gate' ? 0.085 : kind === 'wicket' ? 0.045 : 0.06, st = 0.007;
-  const sLen = W * (kind === 'gate' ? 0.86 : 0.78);
+  // plank doors hang on two straps, posterns on every ledge
+  const strapRows = kind === 'postern' ? rows : [rows[0], rows[rows.length - 1]];
+  const sw = 0.06, st = 0.007;
+  const sLen = W * 0.78;
   const zs0 = zf + L, zs1 = zf + L + st;
   for (const [y0, y1] of strapRows) {
     const yc = (y0 + y1) / 2, hw = sw / 2, tip = sw * 1.4;
-    let len = sLen;
-    if (hole && y1 > hole.y0 && y0 < hole.y1) len = Math.min(len, hole.x0 - 0.1);
+    const len = sLen;
     slab(g.iron, [[0, yc - hw], [len - tip, yc - hw], [len - tip * 0.55, yc - hw * 1.5], [len, yc], [len - tip * 0.55, yc + hw * 1.5], [len - tip, yc + hw]], zs0, zs1, 0.0015);
     slab(g.iron, [[0, yc - hw], [0.02, yc - hw], [0.02, yc + hw], [0, yc + hw]], zs0 - 0.004, zs1, 0); // wrap to the knuckle
     cylY(g.iron, 0, 0, 0.017, yc - hw * 0.95, yc + hw * 0.95, 8);
@@ -252,12 +227,8 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
     slab(g.fixed, rectP(-0.14, yc - hw - 0.075, 0.004, yc - hw - 0.035), -0.018, 0.018, 0.002);
   }
   // show face: clinched nail heads, two rows on every ledge, one per board each
-  const sa = kind === 'gate' ? 0.02 : 0.014, sh = kind === 'gate' ? 0.014 : 0.01;
-  for (const [y0, y1] of rows) for (const yy of [y0 + 0.045, y1 - 0.045]) for (const [x0, x1] of boards) {
-    const x = (x0 + x1) / 2;
-    if (hole && x > hole.x0 && x < hole.x1 && yy > hole.y0 && yy < hole.y1) continue;
-    stud(g.iron, x, yy, zb, -1, sa, sh);
-  }
+  const sa = 0.014, sh = 0.01;
+  for (const [y0, y1] of rows) for (const yy of [y0 + 0.045, y1 - 0.045]) for (const [x0, x1] of boards) stud(g.iron, (x0 + x1) / 2, yy, zb, -1, sa, sh);
   if (kind === 'postern') {
     // iron bands across the show face, studded where they cross boards
     const bands = rows.map(([y0, y1]) => (y0 + y1) / 2);
@@ -272,20 +243,14 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
       stud(g.iron, x, y, zb, -1, 0.013, 0.01);
     }
   }
-  if (kind === 'gate') {
-    for (let y = 0.45; y < o.H - 0.1; y += 0.3) for (let x = 0.15; x < W - 0.08; x += 0.3) {
-      if (y > top(x) - 0.12 || (hole && x > hole.x0 - 0.04 && x < hole.x1 + 0.04 && y > hole.y0 - 0.04 && y < hole.y1 + 0.04)) continue;
-      stud(g.iron, x, y, zb, -1, 0.024, 0.018);
-    }
-  }
   // handles: ring and escutcheon outside, thumb latch, keeper and pull ring inside
-  const hy = kind === 'gate' ? 1.25 : kind === 'wicket' ? 0.85 : kind === 'postern' ? 0.9 : 1.0;
-  const hx = W - (kind === 'gate' ? 0.3 : kind === 'wicket' ? 0.11 : 0.15);
-  const ringR = kind === 'gate' ? 0.11 : kind === 'wicket' ? 0.055 : 0.07;
+  const hy = kind === 'postern' ? 0.9 : 1.0;
+  const hx = W - 0.15;
+  const ringR = 0.07;
   plate(g.iron, hx, hy, zb - 0.006, zb, ringR * 0.75, 8);
   slab(g.iron, rectP(hx - 0.012, hy - 0.03, hx + 0.012, hy + 0.012), zb - 0.022, zb - 0.006, 0.002);
-  torus(g.iron, hx, hy - ringR, zb - 0.022, ringR, kind === 'gate' ? 0.014 : 0.009, 10, 3);
-  if (kind !== 'gate') {
+  torus(g.iron, hx, hy - ringR, zb - 0.022, ringR, 0.009, 10, 3);
+  {
     slab(g.iron, rectP(hx - 0.03, hy + 0.13, hx + 0.03, hy + 0.25), zb - 0.003, zb, 0.001);
     slab(g.iron, rectP(hx - 0.006, hy + 0.165, hx + 0.006, hy + 0.205), zb - 0.0045, zb - 0.003, 0); // keyhole (dark slot)
     const ly = hy + 0.04, lz0 = zf + 0.012, lz1 = zf + 0.022;
@@ -333,7 +298,7 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
 }
 
 /** Geometry for one leaf class. `r` seeds board widths and grain offsets. */
-export function leafGeometry(cls: LeafClass, r: Rng, opts: { wicket?: boolean } = {}): LeafGeom {
+export function leafGeometry(cls: LeafClass, r: Rng): LeafGeom {
   const kind = cls.kind;
   const sill = KIND[kind].sill;
   const topO = headTop(cls.head, cls.ow, cls.oh, CLEAR);
@@ -348,39 +313,8 @@ export function leafGeometry(cls: LeafClass, r: Rng, opts: { wicket?: boolean } 
     g.boxes.push({ min: [0, 0, zBack], max: [W, H, 0] });
     return g;
   }
-  if (kind === 'gate' && opts.wicket) {
-    // wicket over whole boards near the middle of the leaf, 0.3 m above the bottom
-    const boards = boardEdges(W, r, 0.005, 0.27);
-    const want = 0.86;
-    let best = [1, 1], bestErr = 1e9;
-    for (let a = 1; a < boards.length - 1; a++) for (let b = a; b < boards.length - 1; b++) {
-      const w = boards[b][1] - boards[a][0], c = (boards[b][1] + boards[a][0]) / 2;
-      const err = Math.abs(w - want) * 2 + Math.abs(c - W * 0.5) + (w < 0.8 ? 5 : 0); // a body must fit through
-      if (err < bestErr) { bestErr = err; best = [a, b]; }
-    }
-    const x0 = boards[best[0]][0], x1 = boards[best[1]][1];
-    const y0 = 0.3, y1 = Math.min(y0 + 1.78, Math.min(top(x0), top(x1)) - 0.6);
-    g.wicket = { x0, x1, y0, y1, boards: boards.slice(best[0], best[1] + 1) };
-    plankLeaf({ W, H, top, flat: cls.head === 'flat', apexX, kind, r, hole: g.wicket, wicketOf: boards }, g);
-    const zf = 0;
-    g.boxes.push({ min: [0, 0, zBack], max: [x0, H, zf] }, { min: [x1, 0, zBack], max: [W, H, zf] }, { min: [x0, y1, zBack], max: [x1, H, zf] }, { min: [x0, 0, zBack], max: [x1, y0, zf] });
-    return g;
-  }
   plankLeaf({ W, H, top, flat: cls.head === 'flat', apexX, kind, r }, g);
   g.boxes.push({ min: [0, 0, zBack], max: [W, H, 0] });
-  return g;
-}
-
-/** The wicket door inside a gate leaf: boards continue the gate's, local origin at its hinge edge. */
-export const WICKET_CLEAR = 0.006;
-export function wicketGeometry(hole: NonNullable<LeafGeom['wicket']>, r: Rng): LeafGeom {
-  const W = hole.x1 - hole.x0 - 2 * WICKET_CLEAR, H = hole.y1 - hole.y0 - 2 * WICKET_CLEAR;
-  const g: LeafGeom = { wood: bin(), iron: bin(), fixed: bin(), boxes: [], width: W, height: H };
-  const o = hole.x0 + WICKET_CLEAR;
-  const boards = hole.boards.map(([a, b]) => [Math.max(0, a - o), Math.min(W, b - o)] as [number, number]);
-  plankLeaf({ W, H, top: () => H, flat: true, apexX: null, kind: 'wicket', r, wicketOf: boards }, g);
-  g.fixed = bin(); // the wicket's pintles sit on the gate leaf, which moves: keep them with the wicket
-  g.boxes.push({ min: [0, 0, leafDepth('wicket').zBack], max: [W, H, 0] });
   return g;
 }
 

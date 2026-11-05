@@ -1,5 +1,5 @@
 // ?test=doors: a stone wall with one opening of every head and kind (round, pointed, segmental and
-// flat plank doors, a postern, the gate with its wicket and a portcullis, an iron grille), each cut
+// flat plank doors, a postern, a gate closed by its portcullis, an iron grille), each cut
 // with a real rebate. For captures (?doors=0|0.5|1 sets the starting openness) and scripts/doortest.mjs.
 import * as THREE from 'three/webgpu';
 import { pass, mrt, normalView, builtinAOContext, screenUV } from 'three/tsl';
@@ -7,27 +7,37 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from '../render/materials';
 import { Builder, wallFrame, at, type Frame } from '../castle/builder';
 import { makeSky } from '../world/sky';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CameraRig, VIEWS, type View } from '../camera/controls';
-import { installHooks } from '../debug/hooks';
+import { MouseLook } from '../camera/mouseLook';
+import { installHooks, type HookWindow } from '../debug/hooks';
+import { createPhysics } from '../physics/world';
+import { systemClock } from '../core/clock';
+import { CharacterMotor, shapeFrom } from '../character/motor';
+import { PlayerController } from '../player/controller';
+import { KeyboardInput, ScriptedInput, MergedInput } from '../player/input';
 import { castleCentre } from '../castle/layout';
 import { GROUND } from '../castle/spec';
-import { buildDoors, inDoorway, type PortcullisSpec } from '../castle/interior/doors';
-import { openingOutline, headRise } from '../castle/interior/doorGeom';
+import { buildDoors, inDoorway } from '../castle/interior/doors';
+import { portcullisFor } from '../castle/interior/portcullis';
+import { openingOutline } from '../castle/interior/doorGeom';
 import type { DoorSpec } from '../castle/interior/types';
 import { createInteraction } from '../game/interact';
 import { DoorAudio } from '../game/doorAudio';
+import { createHud, browserHudDeps } from '../ui/hud';
+import { wireGameHud } from '../ui/gameHud';
 import type { V2 } from '../core/math2d';
 import type { LoadingScreen } from '../loading/tunnel';
 
 const T = 1.4, WALL_H = 8.2, LAP = 0.06;
-type Def = Pick<DoorSpec, 'id' | 'kind' | 'head' | 'width' | 'height' | 'hinge' | 'swingInto' | 'rebate'>;
+type Def = Pick<DoorSpec, 'id' | 'kind' | 'head' | 'width' | 'height' | 'hinge' | 'swingInto' | 'rebate'> & { leaf?: boolean };
 const DEFS: Def[] = [
   { id: 't-round', kind: 'plank', head: 'round', width: 1.1, height: 2.0, hinge: 'left', swingInto: 1, rebate: 0.16 },
   { id: 't-pointed', kind: 'plank', head: 'pointed', width: 1.2, height: 2.05, hinge: 'right', swingInto: 0, rebate: 0.16 },
   { id: 't-segmental', kind: 'plank', head: 'segmental', width: 1.3, height: 2.1, hinge: 'left', swingInto: 1, rebate: 0.18 },
   { id: 't-flat', kind: 'plank', head: 'flat', width: 0.95, height: 2.0, hinge: 'right', swingInto: 1, rebate: 0.15 },
   { id: 't-postern', kind: 'postern', head: 'round', width: 0.85, height: 1.55, hinge: 'left', swingInto: 0, rebate: 0.2 },
-  { id: 't-gate', kind: 'gate', head: 'pointed', width: 3.4, height: 3.2, hinge: 'left', swingInto: 1, rebate: 0.45 },
+  { id: 't-gate', kind: 'gate', head: 'pointed', width: 3.4, height: 3.2, hinge: 'left', swingInto: 1, rebate: 0.45, leaf: false },
   { id: 't-grille', kind: 'grille', head: 'round', width: 1.2, height: 2.1, hinge: 'right', swingInto: 1, rebate: 0.12 },
 ];
 
@@ -37,7 +47,7 @@ export function doorTestSpecs(): { doors: DoorSpec[]; x0: number; x1: number; z:
   let x = c[0] - total / 2;
   const doors = DEFS.map((d) => {
     const cx = x + d.width / 2; x += d.width + gap;
-    return { ...d, spaces: ['north', 'south'], centre: [cx, GROUND, c[1]], along: [1, 0], normal: [0, 1], wall: T, leaf: true } as DoorSpec;
+    return { leaf: true, ...d, spaces: ['north', 'south'], centre: [cx, GROUND, c[1]], along: [1, 0], normal: [0, 1], wall: T } as DoorSpec;
   });
   return { doors, x0: c[0] - total / 2 - 3, x1: c[0] + total / 2 + 3, z: c[1] };
 }
@@ -79,7 +89,7 @@ export async function runDoorTest(screen: LoadingScreen) {
   document.body.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 30000);
-  void screen.progress(0.3, 'CUTTING THE OAK…');
+  void screen.progress(0.3, 'Cutting the oak…');
   const M = await makeMaterials();
 
   const { doors: specs, x0, x1, z } = doorTestSpecs();
@@ -89,13 +99,19 @@ export async function runDoorTest(screen: LoadingScreen) {
   scene.add(wall);
 
   const gate = specs.find((d) => d.kind === 'gate')!;
-  const port: PortcullisSpec = {
-    id: 't-portcullis', centre: [gate.centre[0], GROUND, z - T / 2 + 0.3], along: [1, 0], door: gate.id, width: gate.width - 0.06, height: gate.height + headRise('pointed', gate.width) + 0.3, lift: 2.5,
-    raised: params.get('port') !== 'down', reach: { w: gate.width, h: gate.height + headRise('pointed', gate.width) },
-  };
+  // the gate has no leaves: a portcullis (no windlass here, there is no room above)
+  const port = portcullisFor(gate, null);
+  // physics: the wall and floor as static trimeshes, every leaf a kinematic box, one walking player
+  const physics = await createPhysics(systemClock);
+  physics.addObject(wall);
+  const keys = new KeyboardInput(window), scripted = new ScriptedInput();
+  const motor = new CharacterMotor(physics.createCharacter(shapeFrom()));
+  const player = new PlayerController({ motor, input: new MergedInput([keys, scripted]), view: camera, ray: physics });
+  physics.onFixed((dt) => player.fixedUpdate(dt));
   const audio = new DoorAudio(camera);
   const init = params.get('doors');
-  const doors = buildDoors(specs, M, undefined, { ajar: 0, initial: init === null ? undefined : Number(init), portcullis: [port], sound: audio });
+  const doors = buildDoors(specs, M, physics, { ajar: 0, initial: init === null ? undefined : Number(init), portcullis: [port], sound: audio });
+  if (params.get('port') === 'down') doors.setOpen(port.id, false, true);
   scene.add(doors.object);
 
   const sky = makeSky(renderer, scene);
@@ -127,48 +143,39 @@ export async function runDoorTest(screen: LoadingScreen) {
   ];
   VIEWS.splice(0, VIEWS.length, ...views);
 
-  const rig = new CameraRig(camera, renderer.domElement);
+  const orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.minDistance = 0.01; orbit.maxDistance = 200;
+  const rig = new CameraRig(camera, orbit, keys);
   rig.groundAt = () => GROUND; // flat flagged floor, no terrain here
-  const feet = new THREE.Vector3();
-  rig.canWalk = (x, zz) => {
-    feet.set(x, camera.position.y - 0.8, zz);
-    if (doors.blocksPlayer(feet)) return false;
-    const inWall = Math.abs(zz - z) < T / 2 + 0.3 && x > x0 - 0.3 && x < x1 + 0.3;
-    return (!inWall || specs.some((d) => inDoorway(d, x, zz, 0.3, 0.3))) && Math.abs(zz - z) < 9.5 && x > x0 - 5 && x < x1 + 5;
-  };
+  rig.player = player; rig.alpha = () => physics.alpha;
+  // walk mode drops you under the camera anywhere on the floor
+  rig.walkable = (x, zz) => Math.abs(zz - z) < 9.5 && x > x0 - 5 && x < x1 + 5 && !(Math.abs(zz - z) < T / 2 + 0.3 && !specs.some((d) => inDoorway(d, x, zz, 0.3, 0.3)));
+  physics.onFixed((dt) => doors.update(dt, rig.mode === 'walk' ? { x: motor.feet[0], y: motor.feet[1] + motor.height / 2, z: motor.feet[2] } : camera.position));
+  const mouse = new MouseLook({ el: renderer.domElement, doc: document, enabled: () => rig.mode !== 'orbit', get: () => rig.getLook(), set: (l) => rig.setLook(l), onLockChange: (locked) => { if (!locked) keys.clear(); ui.sync(); } });
+  rig.mouse = mouse; keys.capture = () => mouse.locked;
   rig.go(views.find((w) => w.name === (params.get('view') ?? 'door-all')) ?? views[0]);
-  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly' });
-  const xh = document.getElementById('crosshair'); if (xh) xh.hidden = false;
-
-  // a compact UI: walk/fly and the bookmarks
-  const ui = document.getElementById('ui')!, row = document.createElement('div'); row.className = 'row';
-  const help = document.getElementById('help')!;
-  for (const m of ['walk', 'fly'] as const) {
-    const b = document.createElement('button'); b.textContent = m === 'walk' ? 'Walk' : 'Fly';
-    b.onclick = () => { rig.setMode(m); help.textContent = m === 'walk' ? 'WASD walk · Shift run · double-click to lock the mouse · E or click to open' : 'WASD · E/Q up/down · click (locked) to use'; };
-    row.appendChild(b);
-  }
-  for (const w of views) { const b = document.createElement('button'); b.textContent = w.label; b.onclick = () => rig.go(w); row.appendChild(b); }
-  ui.appendChild(row);
-  help.textContent = 'Walk to a door and press E · double-click to lock the mouse';
+  // the castle page's HUD with walk/fly and these bookmarks
+  const hud = createHud(browserHudDeps(), { onToolsOpen: () => mouse.release() });
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, { enabled: () => rig.mode !== 'fly', view: hud.promptView });
+  const ui = wireGameHud(hud, { rig, views, modes: ['walk', 'fly'], search: location.search, title: 'Door test' });
+  rig.onModeChange = () => ui.sync();
+  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); ui.sync(); };
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   const info = renderer.info;
   await renderer.compileAsync(scene, camera);
   const hooks = installHooks({
     renderer, camera, rig, setTime: (h) => sky.setTime(h), getTime: () => sky.hours,
     renderNow: async () => { pipeline.render(); },
-    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    tick, physics, player, input: scripted, course: null, interior: null,
     use: () => interaction.use(),
-    doors,
-    stats: () => ({ scene: 'test=doors', drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, wallTriangles: wall.userData.triangles, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6) }),
-  });
+    doors, hud,
+    stats: () => ({ scene: 'test=doors', drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, wallTriangles: wall.userData.triangles, doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6), physics: physics.stats() }),
+  }, window as unknown as HookWindow, systemClock);
   if (params.has('shot')) { screen.dispose(); hooks.ready = true; return; }
   let last = performance.now();
   renderer.setAnimationLoop(() => {
     const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
-    rig.update(dt);
-    doors.update(dt, camera.position);
-    interaction.update();
+    tick(dt);
     pipeline.render();
   });
   hooks.ready = true;

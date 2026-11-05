@@ -5,7 +5,8 @@ import { STONE_GREYS } from '../../src/render/texgen';
 import { fakeDeps } from './fakes';
 
 const root = () => { document.body.innerHTML = '<div id="loading">BUILDING THE CASTLE…</div>'; return document.getElementById('loading')!; };
-const label = () => document.querySelector('#loading .label')?.textContent;
+/** "step | pct" as the two parts of the caption line show them */
+const label = () => { const l = document.querySelector('#loading .label'); return l ? `${l.querySelector('.step')?.textContent} | ${l.querySelector('.pct')?.textContent}` : undefined; };
 
 describe('PALETTE', () => {
   it('uses the castle rubble greys, most common first', () => {
@@ -22,8 +23,10 @@ describe('createLoadingScreen', () => {
     const d = fakeDeps();
     createLoadingScreen(el, { fixed: 0.4 }, d);
     expect(el.querySelector('canvas')).not.toBeNull();
-    expect(el.querySelector('.title')?.textContent).toBe('MOATED CASTLE');
-    expect(label()).toBe('DOWN TO THE CELLAR…  0%');
+    expect(el.querySelector('.title')?.textContent).toBe('Moated Castle');
+    expect(label()).toBe('Down to the cellar… | 0%');
+    expect(el.getAttribute('aria-label')).toBe('Loading Moated Castle');
+    expect(el.getAttribute('aria-valuetext')).toBe('Down to the cellar… 0%');
     expect(el.getAttribute('role')).toBe('progressbar');
     expect(d.be.init).toEqual({ w: 800, h: 400, reduced: false, fixed: 0.4, palette: PALETTE });
   });
@@ -36,11 +39,11 @@ describe('createLoadingScreen', () => {
     expect(d.be.progresses).toContain(0.3);
     d.be.shownValue = 0.25;
     d.clock.frame();
-    expect(label()).toBe('CUTTING THE STONE…  25%');
+    expect(label()).toBe('Cutting the stone… | 25%');
     expect(s.shown).toBe(0.25);
     expect(document.getElementById('loading')!.getAttribute('aria-valuenow')).toBe('25');
     await s.progress(0.4);
-    expect(label()).toBe('CUTTING THE STONE…  25%');
+    expect(label()).toBe('Cutting the stone… | 25%');
     d.pointer!(0.5, -0.25);
     expect(d.be.looks).toEqual([[0.5, -0.25]]);
     d.view = { w: 400, h: 200, dpr: 1 };
@@ -83,5 +86,33 @@ describe('createLoadingScreen', () => {
     expect(d.unsubscribed).toBe(2);
     pending(100);
     expect(d.clock.frames).toHaveLength(0);
+  });
+});
+
+describe('boot steps on a time axis', () => {
+  it('starts the download step at once and moves through steps by time; fixed previews get none', async () => {
+    const d = fakeDeps();
+    const s = createLoadingScreen(root(), {}, d);
+    expect(d.be.spans).toHaveLength(1);
+    expect(d.be.spans[0][0]).toBe(0);
+    d.clock.time = 1000;
+    await s.step('Cutting the stone…');
+    expect(d.be.spans).toHaveLength(2);
+    expect(d.be.spans[1][0]).toBeCloseTo(d.be.spans[0][1]);
+    expect(label()).toMatch(/^Cutting the stone… \|/);
+    await s.step('FURNISHING THE ROOMS…');   // case-insensitive
+    await s.step('Something new…');          // unknown: caption only
+    expect(d.be.spans).toHaveLength(3);
+    expect(label()).toMatch(/^Something new… \|/);
+    d.clock.time = 5000;
+    d.be.finishNow();
+    await s.finish();
+    expect(d.memory.saves).toBe(1);
+    expect(Object.keys(d.memory.data!)).toEqual(['down to the cellar…', 'cutting the stone…', 'furnishing the rooms…']);
+
+    const f = fakeDeps();
+    const p = createLoadingScreen(root(), { fixed: 0.5 }, f);
+    await p.step('Cutting the stone…');
+    expect(f.be.spans).toHaveLength(0);
   });
 });

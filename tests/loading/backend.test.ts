@@ -33,6 +33,16 @@ describe('localBackend', () => {
     expect(gl.lost).toBe(true);
   });
 
+  it('walks a boot step in time', () => {
+    const clock = fakeClock();
+    const b = localBackend({ width: 0, height: 0 }, null, init, clock, quietRenderer);
+    b.span(0, 0.5, 1000);
+    for (let i = 0; i < 31; i++) clock.frame();   // ~0.5 s
+    expect(b.shown).toBeGreaterThan(0.15);
+    expect(b.shown).toBeLessThan(0.35);
+    b.dispose();
+  });
+
   it('works without GL', () => {
     const clock = fakeClock();
     const b = localBackend({ width: 0, height: 0 }, null, { ...init, fixed: 0.3 }, clock, quietRenderer);
@@ -53,6 +63,8 @@ describe('workerBackend', () => {
     b.look(0.5, 0.5);
     b.resize(10, 20);
     expect(w.sent.slice(1).map((s) => s.m)).toEqual([{ t: 'progress', p: 0.6 }, { t: 'look', x: 0.5, y: 0.5 }, { t: 'size', w: 10, h: 20 }]);
+    b.span(0.3, 0.5, 2000);
+    expect(w.sent.at(-1)!.m).toEqual({ t: 'span', start: 0.3, end: 0.5, ms: 2000 });
     w.reply({ t: 'shown', v: 0.42 });
     expect(b.shown).toBe(0.42);
     let done = false;
@@ -74,6 +86,8 @@ describe('workerBackend', () => {
     const n = w.sent.length;
     b.progress(0.7);
     expect(b.shown).toBe(0.7);
+    b.span(0.8, 0.9, 100);
+    expect(b.shown).toBe(0.8);
     expect(w.sent.length).toBe(n);
     b.progress(1);
     await b.whenDone();

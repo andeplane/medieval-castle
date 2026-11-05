@@ -2,19 +2,19 @@
 // Pure maths and injected fakes (batches, physics, sound, characters); nothing renders.
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
-import type { DoorSpec, V3, Quat } from '../src/castle/interior/types';
+import type { DoorSpec, V3 } from '../src/castle/interior/types';
 import {
-  placeLeaves, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4droop, m4apply, m4translate, maxSwing, doorFrame,
-  OPEN_ANGLE, CLEAR, KIND, easeOutCubic,
+  placeLeaves, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4apply, m4translate, m4scale, m4rotX, maxSwing, doorFrame,
+  OPEN_ANGLE, CLEAR, KIND,
 } from '../src/castle/interior/doorGeom';
-import { leafGeometry, wicketGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
-import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway, m4quat, rayBox, portcullisGeometry, REACH_NPC, type DoorSound, type PortcullisSpec, type Vec3Like } from '../src/castle/interior/doors';
-import { threeBatch, type BatchFactory } from '../src/castle/interior/doorBatch';
+import { leafGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
+import { buildDoors, m4quat, rayBox, REACH_NPC } from '../src/castle/interior/doors';
+import { threeBatch } from '../src/castle/interior/doorBatch';
+import { fakeBatch, fakePhysics, fakeSound, M, run } from './helpers/doorFakes';
 import { mulberry32 } from '../src/core/rng';
-import { gatehouseFrame } from '../src/castle/layout';
 
 const HEADS: DoorSpec['head'][] = ['round', 'pointed', 'segmental', 'flat'];
-const KINDS: DoorSpec['kind'][] = ['plank', 'postern', 'gate', 'grille'];
+const KINDS: DoorSpec['kind'][] = ['plank', 'postern', 'plank', 'grille'];
 
 function spec(o: Partial<DoorSpec> = {}): DoorSpec {
   return {
@@ -32,10 +32,10 @@ const randomSpecs = (n: number, seed = 7): DoorSpec[] => {
   return Array.from({ length: n }, (_, i) => {
     const kind = KINDS[i % 4], head = HEADS[Math.floor(i / 4) % 4];
     const a = r() * Math.PI * 2;
-    const width = kind === 'gate' ? 2.6 + r() * 1.4 : kind === 'postern' ? 0.75 + r() * 0.2 : 0.85 + r() * 0.6;
+    const width = kind === 'postern' ? 0.75 + r() * 0.2 : 0.85 + r() * 0.6;
     const wall = 0.6 + r() * 1.8;
     return spec({
-      id: `r${i}`, kind, head, width, height: kind === 'gate' ? 3 + r() : kind === 'postern' ? 1.5 + r() * 0.2 : 1.9 + r() * 0.4,
+      id: `r${i}`, kind, head, width, height: kind === 'postern' ? 1.5 + r() * 0.2 : 1.9 + r() * 0.4,
       wall, rebate: 0.08 + r() * Math.min(0.5, wall * 0.5), hinge: r() < 0.5 ? 'left' : 'right', swingInto: r() < 0.5 ? 0 : 1,
       normal: [Math.cos(a), Math.sin(a)], along: [-Math.sin(a), Math.cos(a)], centre: [r() * 40 - 20, 2.6 + r() * 20, r() * 40 - 20],
     });
@@ -43,42 +43,6 @@ const randomSpecs = (n: number, seed = 7): DoorSpec[] => {
 };
 const verts = (b: PartBin) => { const o: V3[] = []; for (let i = 0; i < b.pos.length; i += 3) o.push([b.pos[i], b.pos[i + 1], b.pos[i + 2]]); return o; };
 const det3 = (m: number[]) => m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
-
-// --------------------------------------------------------------------------- fakes
-
-function fakeBatch() {
-  const made: { name: string; geoms: PartBin[]; inst: number[]; mats: Map<number, number[]>; cols: Map<number, V3> }[] = [];
-  const factory: BatchFactory = (name) => {
-    const b = { name, geoms: [] as PartBin[], inst: [] as number[], mats: new Map<number, number[]>(), cols: new Map<number, V3>() };
-    made.push(b);
-    return {
-      object: new THREE.Object3D(),
-      addGeometry: (g) => b.geoms.push(g) - 1,
-      addInstance: (g) => b.inst.push(g) - 1,
-      setMatrixAt: (i, m) => { b.mats.set(i, [...m]); },
-      setColorAt: (i, c) => { b.cols.set(i, c); },
-    };
-  };
-  return { factory, made };
-}
-function fakePhysics() {
-  const bodies: { half: V3; tag?: string; pose?: { p: V3; q: Quat }; removed: boolean }[] = [];
-  return {
-    bodies,
-    api: {
-      addStaticMesh() {},
-      addKinematicBox(half: V3, tag?: string) {
-        const b = { half, tag, removed: false } as (typeof bodies)[number];
-        bodies.push(b);
-        return { setPose: (p: V3, q: Quat) => { b.pose = { p, q }; }, remove: () => { b.removed = true; } };
-      },
-      raycast: () => null,
-    },
-  };
-}
-function fakeSound() { const log: { s: DoorSound; w: number }[] = []; return { log, sink: { play: (s: DoorSound, _p: V3, w: number) => { log.push({ s, w }); } } }; }
-const M = { wood: new THREE.MeshStandardNodeMaterial(), iron: new THREE.MeshStandardNodeMaterial(), trim: new THREE.MeshStandardNodeMaterial() };
-const run = (sys: { update(dt: number, p?: Vec3Like): void }, seconds: number, p?: Vec3Like) => { for (let t = 0; t < seconds; t += 1 / 60) sys.update(1 / 60, p); };
 
 // --------------------------------------------------------------------------- geometry
 
@@ -111,7 +75,7 @@ describe('leaf placement', () => {
       const outline = openingOutline(d.head, d.width, d.height, 60).filter((p) => p[1] > d.height - 0.1);
       const sgn = d.swingInto === 1 ? 1 : -1;
       for (const pl of placeLeaves(d)) {
-        const g = geomCache.get(pl.classKey) ?? leafGeometry(leafClassFor(d, pl.kind), mulberry32(1), { wicket: !!pl.wicket });
+        const g = geomCache.get(pl.classKey) ?? leafGeometry(leafClassFor(d, pl.kind), mulberry32(1));
         geomCache.set(pl.classKey, g);
         const m = leafMatrix(pl, m4swing(0));
         // the grille's bars (not its hinge knuckles, which wrap the pintle in the clearance)
@@ -145,12 +109,10 @@ describe('leaf placement', () => {
       const pls = placeLeaves(d);
       const s = doorCoords(d, pls[0].pivot).s;
       expect(Math.sign(s)).toBe(d.hinge === 'right' ? 1 : -1);
-      if (d.kind === 'gate') { expect(pls).toHaveLength(2); expect(Math.sign(doorCoords(d, pls[1].pivot).s)).toBe(-Math.sign(s)); expect(pls[0].wicket).toBe(true); }
-      else expect(pls).toHaveLength(1);
-      // the latch edge is at the other jamb (single) or the middle (gate)
+      expect(pls).toHaveLength(1); // one whole leaf
+      // the latch edge is at the other jamb
       const latch = doorCoords(d, leafPoint(pls[0], m4swing(0), [pls[0].width, 1, -0.05])).s;
-      if (d.kind === 'gate') expect(Math.abs(latch)).toBeLessThan(0.02);
-      else expect(Math.sign(latch)).toBe(-Math.sign(s));
+      expect(Math.sign(latch)).toBe(-Math.sign(s));
     }
   });
 
@@ -167,9 +129,9 @@ describe('leaf placement', () => {
     }
   });
 
-  it('keeps every leaf matrix a rotation (det +1) for both hands, any angle and droop', () => {
+  it('keeps every leaf matrix a rotation (det +1) for both hands and any angle', () => {
     for (const d of specs.slice(0, 24)) for (const pl of placeLeaves(d)) for (const a of [0, 0.7, pl.maxAngle]) {
-      expect(det3(leafMatrix(pl, m4mul(m4swing(a), m4droop(0.01))))).toBeCloseTo(1, 9);
+      expect(det3(leafMatrix(pl, m4swing(a)))).toBeCloseTo(1, 9);
     }
     const hands = new Set(specs.flatMap((d) => placeLeaves(d).map((p) => p.mirrored)));
     expect(hands).toEqual(new Set([true, false]));
@@ -185,15 +147,15 @@ describe('leaf placement', () => {
     expect(f.pivotDepth).toBeGreaterThanOrEqual(0.03);
   });
 
-  it('has no leaves for an open archway', () => {
+  it('has no leaves for an open archway or a gate (its portcullis closes it)', () => {
     expect(placeLeaves(spec({ leaf: false }))).toEqual([]);
+    expect(placeLeaves(spec({ kind: 'gate', width: 3.8, height: 4 }))).toEqual([]);
   });
 
   it('bins sizes into shared classes without losing clearance', () => {
     const a = leafClassFor(spec({ width: 1.101 }), 'plank'), b = leafClassFor(spec({ width: 1.119 }), 'plank');
     expect(a.key).toBe(b.key);
     expect(a.width).toBeCloseTo(a.ow - 2 * CLEAR, 9);
-    expect(leafClassFor(spec({ kind: 'gate', width: 3 }), 'gate').width).toBeCloseTo(1.5 - CLEAR - 0.006, 9);
   });
 });
 
@@ -207,8 +169,8 @@ describe('leaf geometry', () => {
   });
 
   it('makes real joinery: 6–9 cm boards, ledges on the swing side, iron on both faces', () => {
-    for (const kind of ['plank', 'postern', 'gate'] as const) {
-      const g = leafGeometry(leafClassFor(spec({ kind, width: kind === 'gate' ? 3.4 : 1.1, height: kind === 'gate' ? 3.2 : 2 }), kind), mulberry32(2), { wicket: kind === 'gate' });
+    for (const kind of ['plank', 'postern'] as const) {
+      const g = leafGeometry(leafClassFor(spec({ kind, width: 1.1, height: 2 }), kind), mulberry32(2));
       expect(KIND[kind].t).toBeGreaterThanOrEqual(0.06); expect(KIND[kind].t).toBeLessThanOrEqual(0.09);
       const zs = verts(g.wood).map((v) => v[2]);
       expect(Math.min(...zs)).toBeCloseTo(-(KIND[kind].t + KIND[kind].ledge + 0.012), 5);
@@ -216,26 +178,8 @@ describe('leaf geometry', () => {
       const iz = verts(g.iron).map((v) => v[2]);
       expect(Math.min(...iz)).toBeLessThan(Math.min(...zs)); // studs / ring proud of the show face
       for (const n of g.wood.nor) expect(Number.isFinite(n)).toBe(true);
-      expect(g.wood.pos.length / 9).toBeLessThan(kind === 'gate' ? 4000 : 1200);
+      expect(g.wood.pos.length / 9).toBeLessThan(1200);
     }
-  });
-
-  it('cuts a wicket into one gate leaf and hangs a wicket door in it', () => {
-    const cls = leafClassFor(spec({ kind: 'gate', width: 3.6, height: 3.4, head: 'pointed' }), 'gate');
-    const g = leafGeometry(cls, mulberry32(3), { wicket: true });
-    expect(g.wicket).toBeDefined();
-    const h = g.wicket!;
-    expect(h.x1 - h.x0).toBeGreaterThan(0.6);
-    expect(h.y1 - h.y0).toBeGreaterThan(1.5);
-    // no gate board crosses the hole
-    for (let i = 0; i < g.wood.pos.length; i += 9) {
-      const cx = (g.wood.pos[i] + g.wood.pos[i + 3] + g.wood.pos[i + 6]) / 3, cy = (g.wood.pos[i + 1] + g.wood.pos[i + 4] + g.wood.pos[i + 7]) / 3;
-      const inside = cx > h.x0 + 0.02 && cx < h.x1 - 0.02 && cy > h.y0 + 0.02 && cy < h.y1 - 0.02;
-      expect(inside).toBe(false);
-    }
-    const w = wicketGeometry(h, mulberry32(4));
-    for (const v of verts(w.wood)) { expect(v[0]).toBeGreaterThanOrEqual(-1e-9); expect(v[0]).toBeLessThanOrEqual(w.width + 1e-9); expect(v[1]).toBeLessThanOrEqual(w.height + 1e-9); }
-    expect(w.fixed.pos).toHaveLength(0);
   });
 
   it('makes a grille of iron bars under the head', () => {
@@ -289,7 +233,9 @@ describe('matrix helpers', () => {
   });
   it('applies and composes matrices', () => {
     expect(m4apply(m4mul(m4translate(1, 2, 3), m4swing(Math.PI / 2)), [1, 0, 0])).toEqual([expect.closeTo(1, 9), 2, expect.closeTo(4, 9)]);
-    expect(easeOutCubic(1)).toBe(1);
+    expect(m4apply(m4scale(2, 3, 4), [1, 1, 1])).toEqual([2, 3, 4]);
+    // +y turns toward +z
+    expect(m4apply(m4rotX(Math.PI / 2), [0, 1, 0])).toEqual([0, expect.closeTo(0, 9), expect.closeTo(1, 9)]);
   });
 });
 
@@ -309,13 +255,20 @@ describe('door system', () => {
     const sys = buildDoors(doors, M, undefined, { batch: fb.factory });
     expect(fb.made.map((m) => m.name)).toEqual(['doors-wood', 'doors-iron']);
     expect(sys.object.children).toHaveLength(2);
-    const leaves = doors.reduce((n, d) => n + placeLeaves(d).length, 0) + doors.filter((d) => d.kind === 'gate').length;
+    const leaves = doors.reduce((n, d) => n + placeLeaves(d).length, 0);
     expect(fb.made[0].inst.length).toBe(leaves - doors.filter((d) => d.kind === 'grille').length);
     expect(sys.triangles / leaves).toBeLessThan(2500);
     // geometry is shared by class: far fewer geometries than leaves
     expect(fb.made[0].geoms.length).toBeLessThan(leaves);
     for (const m of fb.made[1].mats.values()) expect(det3(m)).toBeCloseTo(1, 6);
     for (const c of fb.made[0].cols.values()) for (const k of c) { expect(k).toBeGreaterThan(0.4); expect(k).toBeLessThan(1.1); }
+    // cell visibility: one door's instances hide and show together; unknown ids are ignored
+    const d0 = doors.find((d) => d.leaf && d.kind !== 'grille')!;
+    sys.setVisible(d0.id, false);
+    expect(fb.made[0].hidden.size).toBe(placeLeaves(d0).length);
+    expect(fb.made[1].hidden.size).toBeGreaterThan(0);
+    sys.setVisible(d0.id, true); sys.setVisible('nope', false);
+    expect(fb.made[0].hidden.size + fb.made[1].hidden.size).toBe(0);
   });
 
   it('builds real BatchedMeshes by default', () => {
@@ -325,8 +278,12 @@ describe('door system', () => {
     const g = b.addGeometry({ pos: [0, 0, 0, 1, 0, 0, 0, 1, 0], nor: [0, 0, 1, 0, 0, 1, 0, 0, 1], uv: [0, 0, 1, 0, 0, 1] });
     const i = b.addInstance(g);
     b.setMatrixAt(i, m4translate(1, 2, 3)); b.setColorAt(i, [1, 0.5, 0.2]);
+    b.setVisibleAt(i, false);
+    expect((b.object as THREE.BatchedMesh).getVisibleAt(i)).toBe(false);
     const m = new THREE.Matrix4(); (b.object as THREE.BatchedMesh).getMatrixAt(i, m);
     expect(m.elements[13]).toBe(2);
+    // untagged for the interior light: no room's daylight (render/interiorShader.ts reads row −1 as none)
+    expect((b.object as THREE.BatchedMesh).geometry.getAttribute('interiorRoom').getX(0)).toBe(-1);
   });
 
   it('opens fast, settles slowly, and shuts with a thud and a latch', () => {
@@ -449,9 +406,10 @@ describe('door system', () => {
   it('poses one kinematic box per solid leaf part', () => {
     const ph = fakePhysics();
     const d = single();
-    const sys = buildDoors([d, spec({ id: 'g', kind: 'gate', width: 3.6, height: 3.4, centre: [30, 3, 0] })], M, ph.api, { batch: fakeBatch().factory, portcullis: [port('pc', [30, 3, -0.3])] });
-    // door 1 box, gate: wicket leaf 4 boxes + other leaf 1 + wicket 1, portcullis 1
-    expect(ph.bodies).toHaveLength(1 + 4 + 1 + 1 + 1);
+    const sys = buildDoors([d, spec({ id: 'g', kind: 'gate', width: 3.6, height: 3.4, centre: [30, 3, 0] })], M, ph.api, { batch: fakeBatch().factory });
+    // one box for the door; the gate has no leaves (and here no portcullis)
+    expect(ph.bodies).toHaveLength(1);
+    expect(sys.isPassable('g')).toBe(true);
     expect(ph.bodies.every((b) => b.pose)).toBe(true);
     const b0 = ph.bodies[0];
     expect(b0.tag).toBe('door:door');
@@ -463,115 +421,5 @@ describe('door system', () => {
     const hingeToCentre = Math.hypot(b0.pose!.p[0] - pl.pivot[0], b0.pose!.p[2] - pl.pivot[2]);
     expect(hingeToCentre).toBeGreaterThan(pl.width * 0.45);
     expect(hingeToCentre).toBeLessThan(pl.width * 0.6);
-  });
-
-  function port(id: string, c: V3, door?: string): PortcullisSpec {
-    return { id, centre: c, along: [1, 0], width: 3.5, height: 5, lift: 2.6, raised: true, reach: { w: 3.6, h: 4.8, head: (s) => 4.8 - Math.abs(s) * 0.3 }, door };
-  }
-
-  it('runs a gate: two leaves that sag and judder, a wicket riding in one, and a portcullis', () => {
-    const fb = fakeBatch(), snd = fakeSound();
-    const g = spec({ id: 'g', kind: 'gate', head: 'pointed', width: 3.6, height: 3.4, wall: 2, rebate: 1.2 });
-    const sys = buildDoors([g], M, undefined, { batch: fb.factory, sound: snd.sink, portcullis: [port('pc', [g.centre[0], g.centre[1], g.centre[2] - 0.7], 'g')] });
-    const ids = sys.interactables.map((i) => i.id);
-    expect(ids).toEqual(['g:wicket', 'g', 'pc']);
-    const [wicket, gate, pc] = sys.interactables;
-    expect(gate.label()).toBe('Open gate');
-    expect(wicket.label()).toBe('Open wicket');
-    expect(pc.label()).toBe('Lower portcullis');
-    expect(sys.isPassable('g')).toBe(false);
-    // wicket alone makes the gate passable
-    wicket.use();
-    run(sys, 3);
-    expect(sys.state()['g:wicket']).toBe(1);
-    expect(sys.isPassable('g')).toBe(true);
-    sys.setOpen('g:wicket', false, true);
-    // the gate: slow, heavy, and the wicket moves with its leaf
-    const wInst = fb.made[0].inst.length - 1; // wicket is the last wood instance of leaf 0's pair
-    void wInst;
-    const wicketBefore = JSON.stringify([...fb.made[0].mats.entries()]);
-    gate.use();
-    run(sys, 0.5);
-    expect(sys.state().g).toBeGreaterThan(0);
-    expect(sys.state().g).toBeLessThan(0.6);
-    expect(JSON.stringify([...fb.made[0].mats.entries()])).not.toBe(wicketBefore);
-    run(sys, 8);
-    expect(sys.state().g).toBe(1);
-    expect(sys.isPassable('g')).toBe(true);
-    expect(sys.isOpen('g')).toBe(true);
-    // the portcullis comes down, ratcheting, and then the gate is not passable
-    pc.use();
-    expect(pc.label()).toBe('Raise portcullis');
-    run(sys, 5);
-    expect(sys.state().pc).toBe(0);
-    expect(sys.isPassable('g')).toBe(false);
-    expect(sys.isPassable('pc')).toBe(false);
-    expect(sys.isOpen('pc')).toBe(false);
-    expect(snd.log.filter((l) => l.s === 'clank').length).toBeGreaterThan(10);
-    expect(snd.log.some((l) => l.s === 'chain')).toBe(true);
-    // raise: a slow heave-and-catch, not a constant speed
-    sys.setOpen('pc', true);
-    const steps: number[] = [];
-    for (let i = 0; i < 120; i++) { sys.update(1 / 60); steps.push(sys.state().pc); }
-    const deltas = steps.slice(1).map((v, i) => v - steps[i]);
-    expect(Math.min(...deltas)).toBeLessThan(Math.max(...deltas) * 0.2);
-    run(sys, 12);
-    expect(sys.state().pc).toBe(1);
-    expect(sys.isOpen('pc')).toBe(true);
-    expect(sys.isPassable('pc')).toBe(true);
-    sys.setOpen('pc', true); // already up
-    sys.setOpen('pc', false, true);
-    expect(sys.state().pc).toBe(0);
-    // instant gate close carries the wicket along
-    sys.setOpen('g', false, true);
-    expect(sys.state().g).toBe(0);
-  });
-
-  it('will not drop the portcullis on someone standing under it', () => {
-    const ph = fakePhysics();
-    const p = port('pc', [0, 3, 0]);
-    const sys = buildDoors([], M, ph.api, { batch: fakeBatch().factory, portcullis: [p] });
-    sys.setOpen('pc', false);
-    run(sys, 5, new THREE.Vector3(0.5, 4.6, 0.1));
-    expect(sys.state().pc).toBeGreaterThan(0.7);
-    expect(sys.blocksPlayer(new THREE.Vector3(0.5, 4.6, 0.1))).toBe(false);
-    run(sys, 5);
-    expect(sys.state().pc).toBe(0);
-    expect(sys.blocksPlayer(new THREE.Vector3(0.5, 4.6, 0.1))).toBe(true);
-    expect(ph.bodies[0].pose!.p[1]).toBeCloseTo(3 + 2.5, 5);
-    expect(sys.request('pc', true, { pos: { x: 1, y: 3, z: 1 } })).toBe(true);
-  });
-
-  it('aims at the portcullis only where it shows in the opening', () => {
-    const sys = buildDoors([], M, undefined, { batch: fakeBatch().factory, portcullis: [port('pc', [0, 3, 0])] });
-    const it = sys.interactables[0];
-    const eye = new THREE.Vector3(0, 5.6, 1.5);
-    expect(it.hit(new THREE.Ray(eye, new THREE.Vector3(0, 0.1, -1).normalize()), 2.2)).not.toBeNull();
-    expect(it.hit(new THREE.Ray(eye, new THREE.Vector3(0, -1, -0.1).normalize()), 2.2)).toBeNull(); // below the raised grid
-    expect(it.hit(new THREE.Ray(new THREE.Vector3(1.6, 7.7, 1), new THREE.Vector3(0, 0, -1)), 2.2)).toBeNull(); // above the head
-    expect(it.hit(new THREE.Ray(new THREE.Vector3(0, 6, 5), new THREE.Vector3(0, 0, -1)), 2.2)).toBeNull(); // too far
-    expect(portcullisGeometry(port('x', [0, 0, 0])).pos.length).toBeGreaterThan(100);
-  });
-});
-
-describe('main gate (before the shell lands)', () => {
-  it('sits in the gatehouse arch, swings inward, with the portcullis in front', () => {
-    const [g] = gateDoorSpecs(), p = gatePortcullisSpec(), f = gatehouseFrame();
-    expect(g.kind).toBe('gate');
-    expect(g.normal[0]).toBeCloseTo(-f.out[0]); expect(g.normal[1]).toBeCloseTo(-f.out[1]);
-    expect(g.swingInto).toBe(1);
-    // the leaves sit behind (inside) the portcullis groove
-    const dot = (a: V3) => (a[0] - g.centre[0]) * g.normal[0] + (a[2] - g.centre[2]) * g.normal[1];
-    for (const pl of placeLeaves(g)) expect(dot(pl.pivot)).toBeGreaterThan(dot(p.centre));
-    expect(p.door).toBe(g.id);
-    expect(p.reach.head!(0)).toBeCloseTo(5.6, 1);
-    expect(p.reach.head!(1.9)).toBeCloseTo(4.0, 1);
-    expect(inDoorway(g, g.centre[0], g.centre[2])).toBe(true);
-    expect(inDoorway(g, g.centre[0] + 50, g.centre[2])).toBe(false);
-    const sys = buildDoors(gateDoorSpecs(), M, undefined, { batch: fakeBatch().factory, portcullis: [p] });
-    expect(sys.isPassable('main-gate')).toBe(false);
-    sys.setOpen('main-gate', true, true);
-    expect(sys.isPassable('main-gate')).toBe(true);
-    expect(sys.state()['main-portcullis']).toBe(1);
   });
 });

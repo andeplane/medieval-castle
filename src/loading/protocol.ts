@@ -5,6 +5,7 @@ export type ToWorker =
   | { t: 'init'; canvas: OffscreenCanvas; w: number; h: number; reduced: boolean; fixed?: number; palette: Palette }
   | { t: 'size'; w: number; h: number }
   | { t: 'progress'; p: number }
+  | { t: 'span'; start: number; end: number; ms: number }
   | { t: 'look'; x: number; y: number }
   | { t: 'stop' };
 

@@ -10,6 +10,8 @@ export interface TunnelBackend {
   /** true when drawing in a worker */
   readonly offThread: boolean;
   progress(p: number): void;
+  /** a boot step began: walk progress from start to end over ms (see Timeline) */
+  span(start: number, end: number, ms: number): void;
   look(x: number, y: number): void;
   resize(w: number, h: number): void;
   /** resolves once the shown progress has reached 1 */
@@ -42,6 +44,7 @@ export function localBackend(canvas: { width: number; height: number }, gl: GLLi
     get shown() { return m.shown; },
     offThread: false,
     progress: (p) => m.setTarget(p),
+    span: (start, end, ms) => m.setSpan(start, end, ms, clock.now()),
     look: (x, y) => { look[0] = x; look[1] = y; },
     resize: (w, h) => { size.w = w; size.h = h; },
     whenDone: () => done.promise,
@@ -72,6 +75,10 @@ export function workerBackend(offscreen: OffscreenCanvas, w: WorkerLike, init: B
     progress: (p) => {
       target = Math.max(target, Math.min(1, p));
       if (blind) goBlind(); else w.post({ t: 'progress', p });
+    },
+    span: (start, end, ms) => {
+      target = Math.max(target, start);
+      if (blind) goBlind(); else w.post({ t: 'span', start, end, ms });
     },
     look: (x, y) => w.post({ t: 'look', x, y }),
     resize: (ww, hh) => w.post({ t: 'size', w: ww, h: hh }),

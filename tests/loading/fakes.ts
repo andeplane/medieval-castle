@@ -4,6 +4,7 @@ import type { LoadingDeps } from '../../src/loading/tunnel';
 import type { Clock } from '../../src/loading/loop';
 import type { TunnelBackend, BackendInit, WorkerLike } from '../../src/loading/backend';
 import type { FromWorker, ToWorker } from '../../src/loading/protocol';
+import type { TimeStore } from '../../src/loading/timeline';
 
 export interface FakeGL extends GLLike {
   calls: string[];
@@ -65,17 +66,18 @@ export const quietRenderer = (gl: GLLike, pal: Palette, reduced: boolean): Tunne
 
 /** A backend that records what the screen asks of it. */
 export interface FakeBackend extends TunnelBackend {
-  init: BackendInit | null; shownValue: number; looks: [number, number][]; sizes: [number, number][]; progresses: number[];
+  init: BackendInit | null; shownValue: number; looks: [number, number][]; sizes: [number, number][]; progresses: number[]; spans: [number, number, number][];
   disposed: boolean; finishNow(): void;
 }
 export function fakeBackend(): FakeBackend {
   let fire: () => void = () => {};
   const done = new Promise<void>((r) => { fire = r; });
   const b: FakeBackend = {
-    init: null, shownValue: 0, looks: [], sizes: [], progresses: [], disposed: false,
+    init: null, shownValue: 0, looks: [], sizes: [], progresses: [], spans: [], disposed: false,
     get shown() { return b.shownValue; },
     offThread: true,
     progress: (p) => { b.progresses.push(p); },
+    span: (a, e, ms) => { b.spans.push([a, e, ms]); },
     look: (x, y) => { b.looks.push([x, y]); },
     resize: (w, h) => { b.sizes.push([w, h]); },
     whenDone: () => done,
@@ -85,15 +87,23 @@ export function fakeBackend(): FakeBackend {
   return b;
 }
 
+/** In-memory TimeStore. */
+export interface FakeStore extends TimeStore { data: Record<string, number> | null; saves: number }
+export function fakeStore(data: Record<string, number> | null = null): FakeStore {
+  const st: FakeStore = { data, saves: 0, load: () => st.data, save: (ms) => { st.data = ms; st.saves++; } };
+  return st;
+}
+
 export interface FakeDeps extends LoadingDeps {
-  clock: FakeClock; be: FakeBackend; waits: number[];
+  clock: FakeClock; memory: FakeStore; be: FakeBackend; waits: number[];
   pointer: ((x: number, y: number) => void) | null; resize: (() => void) | null; unsubscribed: number; view: { w: number; h: number; dpr: number };
 }
-export function fakeDeps(o: { reducedMotion?: boolean } = {}): FakeDeps {
+export function fakeDeps(o: { reducedMotion?: boolean; store?: FakeStore } = {}): FakeDeps {
   const clock = fakeClock();
+  const memory = o.store ?? fakeStore();
   const be = fakeBackend();
   const d: FakeDeps = {
-    clock, be, waits: [], pointer: null, resize: null, unsubscribed: 0, view: { w: 800, h: 400, dpr: 2 },
+    clock, be, memory, store: memory, now: clock.now, waits: [], pointer: null, resize: null, unsubscribed: 0, view: { w: 800, h: 400, dpr: 2 },
     raf: clock.raf, caf: clock.caf,
     wait: async (ms) => { d.waits.push(ms); },
     nextFrame: async () => { clock.frame(); },

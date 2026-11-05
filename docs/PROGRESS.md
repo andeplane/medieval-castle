@@ -1,5 +1,274 @@
 # Progress
 
+## 2026-11-05: combined build on main checked (after #27–#30)
+
+Main at 39996d7, with interior light and visibility (#27), furniture on interior materials (#28), the portcullis and windlass (#29) and furniture kept off the windlass (#30).
+- `npm test` passes: 646 tests in 62 files. `npm run build` passes.
+- `scripts/walktest.mjs` passed 19/19 in the real page: lowered portcullis, E, passage, courtyard, bridge, revetment and the course. `scripts/doortest.mjs` passed 25/25: the test doors, the castle gate from outside, inside and the windlass. Physics tick median 0.34 ms. 316 draw calls in the door-test castle frame.
+- Bookmark captures: spawn, gate, courtyard, ward, course. They are headless WebGL2 and were not checked on WebGPU.
+- Still open:
+  - The exterior is about 600 draw calls and 4.8M triangles, over budget.
+  - The windlass has no collider.
+  - The passage stone just inside the gate arch is overexposed.
+  - The courtyard has no paving, and the well has a bare crossbar.
+  - The great hall is only a small room.
+  - The torch has no bracket.
+
+## 2026-11-05: main gate is a portcullis with a working windlass (branch `gate-portcullis`)
+
+Anders, on the live gate (`castle-plan/feedback/gate-door-bad-1531.png`): "why would we have a door like that. why is it not just the fence … that goes up/down (please add the rope and rotating stuff on the inside so it is 'real')". And on doors: "Either no wooden door, or the entire wood thing is a door."
+
+Done
+- **No oak gate.** The plan's `gate-main` is leafless (`leaf: false`, kind `gate`), and the portcullis is the only thing that closes it. There is one gate and no duplicate: the old `gateDoorSpecs` / `main-gate` / `main-portcullis` are gone. `placeLeaves` never gives a gate leaves.
+- **Whole leaves only.** The wicket code and the two-leaf gate code (sag, judder, the stud grid) are deleted from doorParts, doorGeom and doors. Every door with a leaf is one whole leaf.
+- **`src/castle/interior/portcullis.ts`** holds only pure code:
+  - Placement from the gate's DoorSpec. The groove sits 0.5 m from the inner face of the 2.6 m wall, so it lies under the gatehouse room. The shell's jamb grooves moved to match.
+  - The state machine: `portCommand` / `portStep`. It heaves up unevenly (sin² pulses × a per-tooth effort) with a clank per 9 cm ratchet tooth, about 6 s in all. It drops on the brake at up to 2.6 m/s, about 1.3 s, and the spikes seat 12 cm into sill sockets with a thud. It holds rather than come down on anyone under it.
+  - The collider: one kinematic box, only while the spike tips are below 2 m.
+  - The winch pose: rope length = drum radius × angle, and the coil widens as the rope winds on.
+  - The geometry: 8 cm square bars, flush half-lapped crossings with a rivet head on each face, a spike per upright, and a heavy top rail with two lifting eyes. Also the sill sockets, a slot in the arch head and a slot in the room floor.
+- **Windlass** in the lowest room over the raised grid (plan room `gate2`, floor 13.6 m): a horizontal oak drum (r 0.23 m, 3 m long) on two timber A-frames with sole plates and runners, a six-spoke capstan head at each end, an iron ratchet wheel (16 teeth = one per tooth of lift) with its pawl, and two hemp ropes running down into a floor slot. It rotates with the lift. Everything goes into the existing two door BatchedMeshes, so there are no new draw calls.
+- **Use:** E on the grille from outside or inside, or on the windlass, raises or lowers it (the `gate-main` and `gate-main:winch` interactables). NPCs can call `request('gate-main', …)` from the grille or the drum; `isPassable('gate-main')` is true once the spike tips are above 2 m.
+- Merged with #17 (physics player): `main.ts`, the island test and key path 1 build the gate from `portcullisInPlan`; `gateDoorSpecs` and `gatePortcullisSpec` are gone. In walk mode the grille is a Rapier kinematic box while it is low.
+- Cell visibility (#27): `setVisible` covers the portcullis.
+  - `gate-main` shows the grille, following the gate's spaces.
+  - `gate-main:winch` shows the drum, ropes and coils, following `WinchSpec.room`.
+  - The fixtures stay while either of them is shown.
+  - `main.ts` registers both next to the leaf doors.
+- **Door leaves no longer render white indoors** (the furniture thread found them in the undercroft). The cause was the outdoor wood and iron under the +2.5 stop interior exposure. Now:
+  - Leaves take their floor's interior material: `IM.adopt` above ground, `IMu.adopt` in cellars and tunnels, as the furniture does. The portcullis and windlass use `IM` too.
+  - A batch has one material, so `main.ts` joins two door systems (`joinDoors`: above ground with the portcullis, and underground). The locked grille uses `IMu`.
+  - Door geometries carry `interiorRoom = -1`. Leaves are not room-tagged (a batch geometry is shared by many rooms), so they take the ambient floor, the sun and the fires, not row 0's daylight.
+
+Checked (after merging #17, #26, #27 and #28)
+- The real page (headless WebGL2), as the player with the player's own controls:
+  - `scripts/walktest.mjs`: 19/19. From the spawn, the lowered portcullis stops you 1.72 m into the gatehouse (the groove is at 2.1 m). `__game.use()` raises it, and you walk the passage (10.5 m in) into the courtyard.
+  - `scripts/doortest.mjs`: 25/25.
+    1. Walking straight at the lowered gate, you are stopped 0.38 m short of the groove.
+    2. With the crosshair on the grille ("Raise portcullis"), E raises it: 0.35 of the way after 2 s, still blocking while low, clanks heard, fully up after about 7 s.
+    3. Walk in 9 m.
+    4. Turn round, look up and use it: it drops and seats with a thud.
+    5. Stand in `gate2` with the crosshair on the windlass: E raises it.
+- Key paths (`tests/keypaths.test.ts`):
+  1. Bridge end → stopped by the lowered portcullis → a request from where you stand raises it (more than 3 s) → on through the passage to the courtyard.
+  2. **New path:** courtyard → gate-1 → S0-1 → S0-0 → se-0 → up the SE tower stair → se-2 → S2-0 → S2-1 → `gate2`, to the drum. There the winch lowers the portcullis (under 2.5 s) and raises it again (more than twice as long).
+- Unit tests: `tests/portcullis.test.ts` (19).
+  - Placement from the real plan, including every vertex of the frames, drum and spokes staying inside room `gate2` at any angle.
+  - The state machine, the winch pose and the geometry.
+  - Aiming from both sides and at the winch, the collider appearing and disappearing, holding over an NPC, rope shortening in the batch matrices, and NPC requests.
+  - `tests/doors.test.ts` is updated for whole leaves.
+  - New tests for cell visibility per part, for `joinDoors`, and for the untagged room attribute. 646 tests in all.
+- Interior door look (headless WebGL2, `?shot` exposure):
+  - A cellar leaf beside the torch (`N-cellarstair>N-c1`) and the undercroft leaf (`N0-0>N0-1`) read as dark oak in line with the walls.
+  - The windlass timber reads as timber, where before this change it was bleached.
+
+Numbers:
+- Gate, windlass and ropes: about 8.1k triangles, in the above-ground door batches.
+- `doorTriangles` is 304k with all 241 interior leaves.
+- Doors are 4 batches (wood and iron × above ground and underground), plus 2 for the locked grille.
+- The gatepass frame is 322 draw calls.
+- Coverage on doors, doorGeom, doorParts, doorBatch and portcullis: 100 % lines, except doorParts statements at 98.9 %.
+
+Captures (`castle-plan/interior/doors/`): castle-gate-lowered, castle-gate-raised, castle-gate-walked-in, castle-gate-inside-lowered, castle-passage-raised, castle-winch-lowered, castle-winch-raised, castle-winch-room, cellar-door-interior-material, undercroft-door-interior-material.
+
+Assumptions (for Anders to veto)
+- The portcullis starts raised.
+- The grille sits 2.1 m in from the outer face (0.5 m from the inner face), under the room above, rather than just behind the outer arch.
+- The windlass is in the first gatehouse room above the gate (`gate2`, 13.6 m). The plan has no gatehouse room on floor 1: the passage vault fills up to 8.5 m. The raised grid stays inside the masonry (its top at about 11.3 m), and the ropes go down through a slot in the room floor.
+- Ropes, not chains; no counterweight; a drum windlass with capstan spokes rather than a treadwheel.
+- The test scene's gate is portcullis-only too, with no windlass, because there is no room above it.
+
+Known issues
+- With `?furniture=1` the furnishing pass does not know about the windlass, and could place furniture in `gate2` on top of it. `dress.ts` `keepOutFor` would need the windlass footprint.
+- The rivet heads are small (2.2 cm) and read as dots from a few metres away.
+- The windlass has no collider: the player walks through the drum and frames.
+- Leaves and the windlass get no room daylight; they need per-instance room tags, which BatchedMesh does not have. In rooms lit mostly through windows they can read darker than the walls, and the windlass timber is dark in shade.
+
+## 2026-11-05: interior light, eye adaptation, cell visibility, see-through windows (branch `interior-light`)
+
+Done
+- `src/render/interiorLight.ts`: `makeInteriorMaterials(M, sun | null, light)` clones stone/timber/iron/glass with `lightsNode = lights([sun])` (no outdoor hemisphere or sky IBL indoors) and their own irradiance; `sun: null` is the cellar/tunnel set (no direct sun underground). `setDynamicLights(lights)` (non-enumerable) adds the fire rig's light pool. `bakeInteriorLight(groups, occluder, { plan, windows, sun, light })` tags every interior triangle with its room, turns the castle window lights and the plan's doors into apertures, checks each window's sun with three-mesh-bvh, solves split-flux bounce per room (stairs and open doors carry light on) and packs one float table; `update()` on time of day, `setDoorOpen(id, 0..1)` from `doors.state()` every physics tick. `buildShadowSkins` adds hidden casters inside walls and above ceilings; the interior meshes themselves cast no sun shadow.
+- `src/render/interiorShader.ts`: per pixel, each aperture of the room is an area light with its exact form factor, clipped to the glass the point sees through its splayed embrasure; plus bounce and a readability floor.
+- `src/render/exposure.ts`: eye adaptation from a 32×18 log-luminance reduction of the HDR scene pass; 0.72 outdoors, up to +2.5 stops in rooms and +3.2 underground. `?exposure=` fixes it; `?shot` sets it from where the camera is.
+- `src/world/visibility.ts` (`visibleSet`, pure and unit-tested): inside, the camera room's group plus the groups of rooms joined by a door or stair and stairs within 12 m; outside, windowed groups within 40 m whose openings face the camera; underground, terrain, water, vegetation, the castle exterior, its stones and the gate are hidden. `register(obj, roomOf)` and `isRoomVisible(id)` for NPCs, door leaves and the fire rig. Door leaves follow their rooms through `DoorSystem.setVisible(id, v)` (BatchedMesh instance visibility).
+- `src/render/windowGlass.ts`: exterior glass is tagged per triangle with the visibility group behind it (only where the shell built an embrasure pane). Shown group: main's see-through leaded glass. Culled group or no room: the opaque dark pane. Rooms with firelight glow warm in the quarries after sunset (full on the dark pane, half over see-through glass). One material, a per-group flag texture.
+- `src/render/interiorFire.ts`: fire sources for `src/light`: the furniture's emitters and flames with `?furniture=1`, otherwise one wall torch per hall, gate room and undercroft and one every ~10 m in tunnels. `LightRig` (8 plain lights, no shadow-casting ones) lights the nearest fires in shown groups; flames via `makeFlameSprites(linkFlames(...))`.
+- `?test=room` (`src/debug/roomtest.ts`): a 12 × 8 × 6 m hall and a chamber for tuning the light.
+
+Numbers (headless WebGL2, SwiftShader): bake over the shell 206 rooms / 767 apertures / 240k triangles ≈ 0.45 s in the browser (room tagging dominates; box cull + group fast path took it from 7.2 s in node), BVH over 366k triangles ≈ 0.26–0.5 s. Draw calls / triangles per bookmark (`__game.state()`, 1600×900, before = main as reviewed, all 85 groups drawn):
+
+| bookmark | before | after | interior groups shown |
+|---|---|---|---|
+| gate | 2,068 / 9.2 M (main after #17) | 522 / 6.0 M | 9 |
+| courtyard | 1,400–1,900 / 5–7.4 M | 710 / 5.8 M | 43 |
+| hall (N1-2) | 1,400–1,900 / 5–7.4 M | 356 / 5.0 M | 3 |
+| tunnel | 168 / 2.6 M | 25 / 0.05 M | 3 |
+| hero | 1,400–1,900 / 5–7.4 M | 612 / 4.8 M | 0 |
+| cellar (N-c1) | – | 45 / 0.13 M (54 / 0.19 M with furniture) | 5 |
+
+Known issues / next
+- Exterior cost is now the bulk: the hero view with no interior group shown is ~600 calls / 4.8 M triangles (stones, vegetation, shadow cascades, AO pre-pass).
+- Faint diagonal banding on cellar floors remains with no sun and with `?ao=0`; cause not found yet.
+- Furniture props keep the outdoor materials (hemisphere light), so at +3 stops underground light props such as sacks blow out to white; they should move to the interior lighting.
+- Window records with real embrasure sizes from the shell would beat the guessed ones; windows whose embrasure was skipped stay opaque.
+- Portals between rooms are uniform; rooms that are not convex get light through their own corners.
+
+
+## 2026-11-05: window placement (no more openings cut by a wall junction)
+
+Anders: "how the fuck do you place a window cut off like that. one does not build like that" (arched windows half inside the gatehouse and towers, voussoirs through the next wall; slits at tower corners).
+
+Done
+- One rule in `src/castle/openings.ts` (pure): an opening with its dressing (jambs, sill, voussoirs, hood) lies wholly on one wall face, 0.8 m from the face's ends and from any other building in front of it or against it (wings, towers, gatehouse, east turret, courtyard stair tower; open air 1.5 m out), and 0.15 m from the plinth, string courses, floor lines and the corbel table / parapet. If it does not fit it moves up or down within its storey, then slides along the face up to 1.5 m; otherwise it is left out. Wings (outer and courtyard faces), square towers, the gatehouse front and the east turret use it; round-tower openings keep their angle and are left out where a wing or band would clip them.
+- Default seed: 338 openings planned, 39 moved (16 along the face, 25 up or down), 85 left out. 61 of those were buried inside a neighbouring building (tower faces inside wings, windows behind the turret and gatehouse); 24 were visible: windows right against the gatehouse, east turret and courtyard stair tower, the S wing's top-floor row (its lintels ran into the corbel table), the square towers' ground-floor loops (half in the battered plinth) and one NE-tower slit under the E roof.
+- The interior shell's embrasures follow automatically (they come from the exterior openings). `ShellResult.embrasures` lists them; on main 7 embrasures looked at another building within 1 m, now none.
+- Cone roofs and the pyramid roofs (east turret, stair tower) get a soffit under the eave, so the sky no longer shows through the overhang as a white seam.
+- Tests: `tests/openings.test.ts` (default seed + 4 seeds: every placed opening inside its face with clearance, clear of every other building, no overlaps) and an interior test that every embrasure sits behind a placed opening.
+
+- Review items: 8 (N courtyard window behind the stair tower) is one of the drops; 7 (towerroom "blind" niche): both great-2 embrasures open onto real windows (`niche-north`, `niche-south` captures), the niche only looks blind from the bookmark's oblique angle; 11 (cone seam) is the soffit.
+
+Numbers (default seed): exterior bins before carving 116k → 98k triangles (before the soffits), window lights 300 → 222, embrasures 141 → 135. After merging main: `__game.state()` castleTriangles 128,135, interior 239,714 triangles; gate 1,448 draw calls / 7.27 M triangles, courtyard 1,390 / 6.49 M, ward 1,476 / 7.22 M (still over budget, review item 5). Captures: `castle-plan/windows/`.
+
+Next
+- The S wing top floor now has courtyard windows only; give it dormers or lower its corbel table if Anders wants windows there.
+## 2026-11-05: physics player (branch `player-physics`)
+
+Done
+- Rapier 0.21 (compat build) world, `src/physics/world.ts`: fixed 60 Hz accumulator with render interpolation, static trimeshes from render meshes (`addObject`, glass skipped), an open terrain trimesh from the near-terrain grid with holes under building footprints, interior `terrainHoles` and the test course (so cellars at −2 m and the moat tunnel at −6.5 m are reachable from below), the landscape's near rocks on the island (instanced meshes, one trimesh copy per instance), an invisible island boundary that only exists from `heightAt − 1` upward, kinematic boxes and raycasts per the interior contract (`src/castle/interior/types.ts`, verbatim). Several characters per world; collision groups keep rays off characters and the boundary.
+- `CharacterMotor` (`src/character/motor.ts`): shared by the player and future NPCs. Takes an intent (wish direction, jump, crouch) and a `CharacterBody`; does acceleration and friction, limited air control, coyote time and jump buffer, crouch that will not stand up under low ceilings, autostep 0.3 m, snap-to-ground 0.4 m, 50° slope limit, wall sliding, landing and footfall events.
+- `PlayerController` (`src/player/controller.ts`): maps keys to intent and drives the camera: eye 1.62 m (0.98 crouched), head bob and cadence that differ for walk and run, step smoothing, landing dip, FOV kick when running. Mouse look reuses `MouseLook` from main. Procedural footsteps by surface (stone, wood, grass, dirt; M toggles).
+- Everything is injected (physics, input, clock, camera view, audio); `src/player/setup.ts` wires it for `main.ts` and the island test alike.
+- Walk mode is now the physics player; orbit and fly stay. P/F/O switch, walk bookmarks teleport the player, `?play` starts walking at the spawn south of the gate. The bridge has landward steps up to the deck.
+- `?test=walk`: a movement course on the east lawn (stairs 0.15/0.20/0.30/0.35, 30° and 55° ramps, a low beam, and stairs down through a hole in the ground into a tunnel). `scripts/walktest.mjs` drives it in the real page.
+- Interior on physics: the shell's collision soups (`buildInterior().collision`, glass excluded) are static meshes, so every room, stair, cellar and tunnel is walked on real geometry (no `canWalk` gating any more). The terrain keeps its ground in the courtyard (it was holed with the whole castle footprint) except in the stair tower. With `?furniture=1` the furniture's box soups are static colliders too.
+- Doors on physics: the gate's leaves and portcullis (`gateDoorSpecs`, untouched here; the gate-portcullis branch owns them) and every leaf door of the plan except the gate (`kind !== 'gate'`; 243 leaves, one batched build through doorBatch) are kinematic boxes in the same world, stepped each fixed tick (`playDoors()` picks the sets). `sallyport-grille` is built as its own never-opened system with no interactables. Leaves stop the player and any NPC motors (`setupPlay().characters`), and the use ray is blocked by walls via physics raycasts. `?test=doors` walks with the physics player too.
+- Camera clip margin: the eye stays on the capsule axis (sway clamped to the 0.02 m skin), its height is clamped inside the capsule (≥ r, ≤ height − 0.1), and the walk near plane is 0.06 m (0.25 m otherwise), so the near-plane corners reach 0.133 m from the eye at FOV 76 / 21:9, under half the 0.3 m radius. `tests/island.test.ts` walks into walls, the gatehouse, the batter and a low beam and asserts the eye stays ≥ 0.3 m from every collider (0.313 m measured at the closest wall) and, after subtracting the relief of the real 3D stones there (measured from StoneSet), still more than the near-plane reach + 0.03 m.
+- Key paths (`tests/keypaths.test.ts`, vitest, no browser): the same motor and colliders as main.ts, steered along the interior nav graph. (1) the bridge end (0.5 m short of the break) → `gate-main` (gate open) → gate passage → courtyard; (2) the shut courtyard door into W0-2 stops you, opened it lets you through, then W0-2, W0-1, W0-0, sw-0 → SW tower spiral → sw-1 on floor 1; (3) great-tower cellar → moat tunnel down to −6.5 and up the far flight → stopped 0.2–1.2 m short of the locked `sallyport-grille`. Doors on the way are opened as E would.
+- Fixed for path (3): the sally-port housing's back face lay on a boundary between two of `tunnelCarve`'s 1 m carve pieces, so neither carved it and it closed the tunnel's last flight (also visible from inside). `portal()` now adds a carve volume for the bore.
+- HUD: main's `src/ui` HUD through `wireGameHud` (the physics rig is the `RigLike`; MouseLook's lock change and rig mode changes call `ui.sync()`); the walk help adds Space jump and C crouch. The interim `MinimalHud` is gone. P / F / O and M stay as keys.
+- Bridge: the new bridge plan's walkable deck (`walkable`, `d`) gives the boundary its corridor (`bridgeInfo`); the island tests use main's own bridge and revetment build (`tests/world.ts islandCastle()`) and a test terrain at the real near-grid resolution (0.9 m cells).
+- Debug: `__game.player` (pos, teleport, look, state, spawn), `__game.input(keys, ms)` (steps physics synchronously, returns cost and a trace), `__game.physics` (stats, raycast), `__game.probes`.
+
+Numbers (headless WebGL2 on a shared 4-core box, load ~22): physics init 4.8 s with the interior (Rapier wasm 0.16 s, collider build 3.1 s for 423k triangles: castle 148k, interior 239k, terrain 32k, rocks 6k; it was 0.8 s for 152k without the interior). Physics tick (player + world step) median 0.31 ms, mean 0.51 ms. Captures at 1600×900: gate 2068 draw calls / 9.2M triangles, courtyard 1576, hall 992 (the whole page; colliders draw nothing).
+
+Walk test (`scripts/walktest.mjs`, 18/18 after the HUD merge): closed gate leaves stop you on the sill, open gate lets you through the passage into the courtyard, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
+
+Known issues / next
+- Key paths are steered with the nav graph's room centroids and door points; they are not a navmesh and walk only the three paths above. Untested by walking: other stairs, upper floors beyond sw-1, wall walks.
+- Door leaves do not push the player; a leaf stops against a standing character (doors.ts) and the player stops against a leaf.
+- 0.15 m steps are ridden by snap rather than autostepped (it looks the same).
+- The test course does not cut the render terrain; the tunnel hole is visible only from the physics.
+- Collider build time should be measured on the M4; if it is long, split the castle trimesh or build it in a worker.
+
+## 2026-11-05: stone close up (branch `stone-closeup`)
+
+Anders: "this does NOT look good close up" (`castle-plan/feedback/2026-11-05-stone-closeup-bad.png`). The problems were flat, plastic slabs; a staircased dark outline round every stone; uniform speckle; a closed crack loop; and mortar drawn as a line.
+
+Done
+- Joints from a signed distance (`src/render/texgen.ts` `masonry`, `stoneDistance`). Each stone is its cell inset by half a joint, with slightly tilted edges, rounded or knocked-off corners, smooth edge noise and chipped arrises. data.a stores the distance to the outline (±4 cm rubble, ±2.5 cm ashlar, ±1.5 cm dressed). The shader (`jointMask`) sharpens it with `fwidth`, so edges are smooth at any magnification. When a pixel covers several texels, it fades to the mipmapped mortar coverage in data.g. Course warp is low-frequency only, so joints no longer wobble.
+- Mortar: a lighter, sandy lime bed, painted in the shader from the SDF. The albedo texture carries the stone colour on under the joints, so mips never mix mortar into stones. Rubble joints are deep-raked; ashlar and dressed joints are nearly flush (`mortarLevel`). Joints are darkened only by baked AO (albedo.a), GTAO and the parallax self-shadow. The cavity darkening of mortar now applies only beyond ~15 m.
+- Per-stone rock: five lithologies (granite, limestone, sandstone, whin, greywacke). The kind is encoded in the stone id byte, `lith * 51 + rand`. Inside a stone: mottling, bedding (sandstone, greywacke), darker weathered patches, iron staining, quartz veins (straight, crossing the stone) and short open hairline cracks from an edge. There are no loops and no uniform pits. Rubble faces are split facets with a little pillowing. Arrises are rounded: 1.6 cm rubble, 1.2 cm ashlar, 0.8 cm dressed. Pinning stones are rarer and larger.
+- Detail layer (`stoneDetail`, 1024² RGBA, repeats every 0.8 m, 0.78 mm texels): crystal grain (Voronoi crystals), mineral flecks in clusters, two scales of weathering pits ranked so one threshold sets the density, and claw-tool striations. The shader rotates and shifts it per stone, with rotated gradients so mips stay right across stone boundaries. It builds a detail normal from three taps, weighted per lithology and per stone, and blends it with the base normal (UDN). The layer fades out between 3.5 and 9 m. Mortar uses the same taps as sand grain and grit.
+- Albedo and roughness: grey overall with warm and cool stones mixed (R ≥ B in every lithology). Roughness varies per stone, pale flecks are a little glossier, and the damp base is smoother. Crustose lichen spots appear where it is damp: pale grey-green, a few orange.
+- Parallax: up to 1.8× more layers below 6 m, and 5-step binary refinement instead of linear, so there is no slicing or swimming at 0.5–2 m. Rubble depth went from 7.5 to 6 cm.
+- Bookmarks `closeup-rubble` (1.2 m, SW tower), `closeup-ashlar` (1.5 m, S wing), `closeup-shade` (north face), `closeup-corner` (SW tower quoins, 3 m). Their targets sit 9 m out because `go()` runs OrbitControls' minDistance 8.
+- Tests: `tests/texgen.test.ts` covers SDF sign and continuity at the outline, mortar set-back, AO, per-stone and in-stone variation, no blue, veins, cracks, iron and pins, id/lith round trip, and the detail texture (determinism, content, tileable Voronoi). texgen.ts is in the coverage include at ~100 % lines. All generators take size, rng and noise as parameters.
+
+GPU depth instead of plain 3D stones (Anders on the live site: "it looks terrible up front", `castle-plan/feedback/closeup-wall-live-1525.png`: soft pillows, blurry pits, stair-stepped black joint edges, a flat untextured slab)
+- Parallax (`materials.ts` `parallax`): the number of layers follows the ray's length on screen, or in texels if coarser: about one layer per 1.5 px, 6–64 layers, with an early out. So no joint is stepped over at 0.3 m or at grazing angles, and 5 binary refinement steps put the hit within 1/32 of a layer. This removes the stair-stepped joint edges. Depth is in world metres on every mesh (rubble 6 cm, ashlar 5 cm, dressed 2.5 cm; uv = metres / tile).
+- Pixel depth offset (`material.depthNode`): the fragment depth is where the ray hit, so the ground, steps and other walls meet the stones, not the flat polygon. The depth pre-pass for GTAO uses the same depth. The shadow pass uses its own override material and is unaffected.
+- Self-shadow: a second march towards the actual sun direction (4–16 taps, by the ray's length on screen), weighted towards its start, gives crisp contact shadows between stones. Up to 88 % of the sun is blocked.
+- Crevices: a narrow, occluded band where the mortar meets each stone, taken from the SDF (crisp at any distance). It darkens albedo and indirect light. Per-stone value and warm/cool spread are a little wider.
+- Wall foot: soil and moss fill the lowest joints first and then creep over the stones, within ~0.3 m of the island ground (a height blend on the masonry depth). Normals flatten there and the depth offset shrinks to match. This is the MeshBlend idea (`castle-plan/feedback/reference-sergeev-meshblend.png`) done in one shader.
+- 3D stones cut back (`stones/field.ts`): plain stones are built only within `LOD.plain` (default 0), so real stones remain only on silhouettes (merlons, parapets, buttresses, turrets, quoins and the revetment edge). Their distances are now hi 8 / mid 20 / lo 32 / silhouette 45 m (were 8/24/40/80). `?stones=all` restores every stone for comparison.
+- The untextured slab was the sides of 3D stones: every side vertex sampled the same edge texel of the squeezed face UVs, so 6–9 cm of side showed one smeared texel. Sides now fold the texture inward by their depth below the face (`stones/mesh.ts` `push`), so they carry stone at its real density.
+- New bookmark `closeup-walk`: on foot at the S wing foot, 1.1 m out, looking west (Anders' viewpoint).
+
+Numbers
+- Stone triangles, from `__game.state().stones` (the frame counts them twice, once more in the GTAO pre-pass): closeup-rubble 1,654,722 → 235,556; closeup-ashlar 1,588,976 → 217,412; closeup-shade 1,765,172 → 548,704; closeup-corner 1,492,346 → 235,194; gate 679,264 → 99,220. For comparison, the frame without any stones is ≈ 2.6M (terrain, vegetation and castle, also counted twice).
+- Texel density unchanged: 512 texels/m base (2048 px per 4 m tile), plus the detail layer at 1280 texels/m. Raising the base resolution was not needed, because the SDF carries edges and the detail layer carries grain.
+- GPU memory for stone: rubble and ashlar 3 × 2048² RGBA8 with mips ≈ 67 MB each, dressed ≈ 17 MB, detail +5.6 MB. That is ≈ 156 MB, of which only the 5.6 MB detail texture is new.
+- Generation (single thread, node, same machine back to back): rubble ~9 s, ashlar ~8–9 s, dressed ~2 s, detail ~2–3 s, against old rubble ~10 s, ashlar ~7.5 s, dressed ~1.7 s. The worker pool runs these in parallel, so wall time stays at the slowest job. The container was heavily loaded (load average 15–30) while this was measured, so treat these numbers as rough.
+- Shader: per stone pixel, 3 detail taps + 1 lichen tap, 5 binary-refinement height taps, and up to 1.8× march steps below 6 m. Triangles and draw calls are unchanged (castle 113,962 triangles).
+
+Known issues / next
+- Silhouette stones that are still 3D (buttresses, `closeup-shade`) look pillowy at 0.5 m. Their sides are textured now, but they show swirls where the fold meets the face.
+- The window jamb blocks stick out of the rubble towers as plain boxes.
+- Rubble faces between the facets are still smooth at 1 m. A real split face needs sharper conchoidal ridges.
+- POM silhouettes on outside corners (FPOM-style clipping) and the camera-following displaced patch (phase 2) are not done. Corners keep the 3D quoins instead.
+- The pixel depth offset turns off early-z for stone. Measure it on WebGPU at 1440p; the march itself is bounded at 64 + 5 + 16 taps.
+- Upper rubble walls in sun at 3–8 m show strong dark undersides from the deep raked joints. This is plausible, but heavier than the reference photos.
+- Sunlit ashlar in `gate` measures sRGB ≈ 115, against the STYLE target of 90–100 (it was ≈ 107 before this branch).
+- Bright mineral flecks can still read as salt at 0.5 m on granite stones.
+- WebGPU not run here (headless WebGL2/SwiftShader only).
+
+## 2026-11-05: see-through window glass
+
+Done
+- `glass` (src/render/materials.ts) is transparent: the diamond quarries are ~20 % opaque, the lead cames stay solid, double-sided, no depth write. From the courtyard you now see the room behind a window (floor, walls, ceiling beams); from inside, the trees outside. Checked with captures from 4 m and 1 m outside a N-wing courtyard window, the gate bookmark and the towerroom bookmark (headless WebGL2). Not checked on WebGPU.
+- Visual review findings (opaque windows, wicket gate, no interior door leaves, sunlit cellar, pillow stones, draw calls) went to the castle thread.
+
+## 2026-11-05: furniture in the castle rooms (behind `?furniture=1`)
+
+Update: furniture now takes the interior clones of its materials (`InteriorMaterialSet.adopt`, underground set for cellars and tunnels) and is room-tagged after the bake, so it gets the room's daylight, irradiance and firelight instead of the outdoor sky (sacks no longer blow out underground).
+
+Done
+- `src/props/dress.ts` (pure): every room gets a role from its kind, floor and size (hall, chapel, bedchamber, solar, study, guard room, kitchen, store, cellar, gate, passage) and a recipe that puts props against walls, in the middle, on table tops, on walls (sconces, tapestries) and from the ceiling. Tall props and hangings go on inner walls only (outer walls have windows). Props come from 6 seeded variants per kind.
+- Walkable by construction: clear zones inside every doorway (door swing + a step) and around straight stair ends; after placing, a flood fill on a 0.2 m grid (agent radius 0.3 m, wall clearance) must still connect every door of the room, or props are taken out again, last first. Tests check this for every room of the plan.
+- `src/props/furnish.ts`: one object per interior visibility group (`Map<group key, Group>`, parented under the group so it hides with its rooms), light emitters and box-collider triangle soups per group (`__game.furniture`). Main builds it only with `?furniture=1` until Anders approves furniture in the castle.
+
+Numbers (default seed): 1,405 props in 206 rooms, ~755k triangles in total, at most ~41k in one group (N:2), 7 materials per group, 322 emitters (sconces, candles, chandeliers); dressing takes ~0.6 s.
+
+Next
+- Interior light: turn `furniture.emitters` into lights; switch props to the interior materials.
+- Window positions are not in the plan, so the "inner wall" test is a heuristic; expose embrasures from the shell to place low furniture under windows correctly.
+- Triangle budget: with all groups visible the furniture adds ~755k; it relies on the interior visibility culling.
+
+## 2026-11-05: firelight (shared flame and light system, `src/light/`)
+
+Anders: "what we really need to nail here is amazing lighting. realistic flames and warm great feeling". One system for every fire: the prop kit, the castle interiors (interior-light consumes it) and later NPC-carried torches.
+
+Done
+- `types.ts`: `FlameKind` (candle, torch, lantern, brazier, hearth), `Flame` (base, height, up) and `LightEmitter` (the prop kit's `Emitter` is now this, with a `kind`).
+- `flicker.ts`: deterministic flicker per kind and seed: slow breathing, a faster lick, crackle and occasional gutters (a draught pulls the flame down for ~0.2 s), plus a small wander of the light centre so shadows move. Profiles hold colour temperature, candela per candle unit and range.
+- `blackbody.ts`: fire colour from Kelvin (1600–2000 K), linear and normalised.
+- `budget.ts` + `rig.ts`: `LightRig` keeps a fixed pool of point lights (default 2 shadow casters + 10 plain, so materials never recompile), ranks fires by brightness over distance for any eye, cross-fades sources between pools with hysteresis (no popping), takes an injected `visible(id)` for room culling, and supports `add`/`move`/`setScale` for carried torches and fires that go out. `meanLights()` feeds bounce bakes. Engine-free: the three.js side is a `LightFactory` (`three.ts`); tests use a typed fake.
+- `flames.ts` + `three.ts`: flame sprites in three instanced draws for any number of flames: a turbulent teardrop body (two noise octaves, licks that break off at the tip, black-body ramp, blue cup at candle wicks, additive HDR), a camera-facing halo, and a thin smoke column over torches. Each flame is linked to its light, so the flame and the room gutter together. Flame motion runs on a uniform clock (deterministic captures).
+- `look.ts`: the warm interior look: Neutral tone mapping (keeps flame hue; AgX turned flames cream), exposure 0.58, bloom on the flames, a whisper of cool fill so shadows are deep blue-grey rather than dead black, a partial white balance (the eye adapting to firelight), mild vignette, dark warm haze. `lookFromParams` for review overrides.
+- Warm bounce: `LightProbeGrid` (three r187 addon) baked once per volume with every fire at its mean brightness, one extra bounce (cellar 7×3×5 + tunnel 16×2×2 probes, ~3 s in SwiftShader).
+- Prop kit: candles, sconce torches and chandeliers now mark flames (`PropMesh.addFlame`, carried through transforms and `append`) instead of lathe flame meshes; candles get a charred wick, torch heads are charred dark. `props.html` lights its rooms through the shared rig and sprites.
+- Review page `lights.html` (`src/light/preview.ts`, geometry in `stage.ts`): a 12 × 7.2 m segmental-vaulted cellar with a supper table and chandelier, a door into a 29 m barrel-vaulted tunnel with torches every 4.5 m. Views: cellar, supper, torch, tunnel, door. Flags: `?t=` freeze time, `?still`, `?exposure`, `?bloom`, `?fill`, `?haze`, `?adapt`, `?tm=agx|aces|neutral`, `?gi=0`, `?shadows=N`, `?lights=N`, `?nowalls` (flames on black for tuning). `URL=http://localhost:5173/lights.html QUERY=t=3.2 npm run shots`.
+- Tests: `tests/light/*` with fakes in `tests/light/fakes.ts`; `src/light` at 100 % lines/functions/statements, 99 % branches (`npm run coverage`).
+
+How interiors use it (agreed with the castle build thread): place fixtures, `rig.setEmitters(emitters)`, `makeFlameSprites(linkFlames(mesh.flames, emitters))`; each frame `rig.update(t, dt, eye, visible)` and `sprites.update(flameBrightness(...), t)`. Interior materials add `factory.lights` to their `lightsNode`. The interior-light exposure controller owns exposure and takes `WARM_INTERIOR` as parameters.
+
+Numbers: the review page has 13 emitters and 20 flames → 12 point lights (2 with 512² cube shadows), 3 flame draw calls; prop triangles 12.5k. Castle page unchanged.
+
+Next
+- Hook into `interior-shell` rooms when it lands (probe grids per room group, visibility from `createVisibility`).
+- Embers and sparks over braziers and hearths; brazier, lantern and hearth props (profiles and looks exist).
+- Check frame time on the M4 (WebGPU): shadowed point lights are the main cost; drop to one shadow caster if needed.
+- Floor flagstones read a little like modern tiles under raking light; the rubble's pits show at grazing angles near torches.
+
+## 2026-11-05: interior plan and shell (branch `interior-shell`, PR #15)
+
+Done
+- `src/castle/interior/plan.ts`: `planInterior(seed)` is a pure function of the seed. It lays out 206 rooms: 20 per wing floor in enfilade, the hall on N1, a chapel in the east turret, tower rooms on every storey including the tops, five rooms over the gate, cellars under the N and W wings and the great tower, and five tunnels. It also lays out 244 doors and 6 stairs. The gate passage (`gate-0` under the gatehouse, `gate-1` through the S wing, 10 m) has the leaved gate `gate-main` (kind `gate`, centred on the gatehouse front's mid plane, width = clear arch, rebate 1.5 m for the portcullis groove and leaves), open arches at the S wing and the courtyard, ribbed vaults and murder holes. There are courtyard doors into N, E and W. Spirals of 1.9 m radius in the four corner towers and the 2.0 m courtyard stair tower (one landing per storey, so main's stair planner climbs whole turns with 2 m headroom), plus a straight cellar stair from N0. The moat tunnel runs from the great-tower cellar at −1.8 down 0.2/0.3 steps to −6.5 (crown −3.8, 1.2 m of rock under the moat bed), back up to a sally port on the far bank, which is barred by a locked grille (`sallyport-grille`). Old work has round heads, new work has pointed or segmental heads, and every door head is fitted below its ceiling or vault (`fitDoorHeads`).
+- `validatePlan`: every room is reachable from outside and from the courtyard, the far bank never is, and only the moat tunnel leaves the island. It also checks door sizes ≥ 0.9 × 2.0 m with heads clear of the ceilings, rooms inside the footprint and apart, stair landings on their floors, and each stair against `validateStair`. All 256 seeds pass (64 in CI).
+- `src/castle/interior/shell.ts`: room walls with door holes (reveals, rebate step on the leaf side, gate cheeks and portcullis groove). Every exterior window gets an embrasure (splayed niche, glass pane where the exterior is glazed, daylight through open lights). Flagstone ground floors, board floors, beamed ceilings, barrel vaults (pointed in new work), tunnels via `buildTunnel`, and the sally-port housing on the far bank. Every interior volume is carved out of the exterior bins (`carve.ts`), so the zero-thickness exterior shells no longer cross rooms.
+- `navGraph(plan)` (`nav.ts`) links room, door and landing nodes, where flights follow `stairNavPath`. `findPath` runs A* and skips locked edges, and `floorPolys` gives clean walkable outlines. Tests show that every room is reachable.
+- `buildInterior(materials, ext, deps)` returns groups `${zone}:${floor}` and `stairs:<id>` with one mesh per material, plus colliders per group. `main.ts` adds them and sets `__game.interior`. Use `?interior=0` to build without interiors. New bookmarks: gatepass, hall, chamber, towerroom, undercroft, tunnel, cellar.
+- Tests are in `tests/interior.test.ts` and `tests/interior-geom.test.ts`, with coverage of 98–100 % lines over the interior modules (thresholds in `vitest.config.ts`).
+
+Numbers (headless WebGL2, seed default): interior 239.6k triangles (most of it the real stairs), 85 groups, 296 meshes (one per material per group), 131 embrasures, 50 windows skipped (enclosed by towers or other masses). Castle exterior after carving: 131.6k triangles. Carving takes about 2.4 s in the browser and 1.2 s in node.
+
+Captures (1600×900, `QUERY=exposure=1.6`): gatepass, hall, chamber, towerroom, tunnel, undercroft, cellar, courtyard, hero. Copies are in `castle-plan/interior/shell-*.png`. `CameraRig.go()` no longer applies a damped orbit update to walk/fly bookmarks; it had nudged the `courtyard` view into the W wing.
+
+Known issues / next
+- Draw calls: all 296 interior meshes together exceed the ~250 budget. The visibility work has to switch groups off, because only a few cells should render at once.
+- Exterior windows enclosed by other masses get no embrasure. Two-door landings are not supported by the stair planner, so the stair tower opens onto N or E on each floor, not both.
+- Interior light: wired to the shell in `interior-light` (see the section above).
+
 ## 2026-11-05: procedural prop kit (furniture, not yet placed in the castle)
 
 Sourcing decision (Anders, 2026-11-05): code + free CC0 only; no store packs (their licences forbid shipping raw files from a public repo); Meshy (already paid for) may be used later for a few organic hero props.
@@ -218,3 +487,61 @@ Known issues / next
 - Contract interpretations the shell should match: the leaf's back face sits on the stop at `rebate` from the swing face; the leaf fits inside the clear opening with 1.5 cm clearance (no lap over the stop, so thin light slits show); pointed heads rise 0.42·w (castle.ts gate arch), segmental 0.2·w. `openingOutline(head, w, h, seg, grow)` gives the exact outline, and `grow` gives a rebate recess.
 - Portcullis grid is iron, not iron-shod oak; there is no winch or windlass in the room above yet.
 - Doors are only in the main scene for the gate, until the shell's `plan.doors` lands.
+
+## 2026-11-05: bridge ruin and moat rim fix
+
+Done
+- Revetment (`src/castle/revetment.ts`): fixes the "flying stones". It is now a battered rubble wall that rises from the moat bed, with its face 0.75 m outside the island outline. Coping stones 0.9 m deep sit 5–11 cm above the turf, and three damaged stretches have fallen stones in the water.
+- The revetment face records battered stone faces, so the real stones (castle/stones) cover it near the camera.
+- Turf strip (`src/castle/turf.ts`): uses the terrain material and covers the near grid's one-cell step under the coping. The island ground holds its level to the coping's back edge.
+- terrain.ts, island branch only:
+  - the lawn drop toward the rim is now -0.75, was -0.9;
+  - the bank is `smoothstep(0.05, 0.35, e)` down to -1.6.
+- grass.ts: the island reeds moved out to 1.3–2.5 m, in front of the wall face.
+- Bridge (`src/castle/bridge.ts` plus `src/castle/rubble.ts`): a ruined three-arch bridge.
+  - Piers with cutwaters, voussoir arches, spandrels, a string course, and parapets with coping. The deck has worn ruts.
+  - The middle span fell. Its stubs, core and parapets break back in steps, and the 45-stone rubble heap is half-submerged.
+  - The approach is flush at the gatehouse. The deck is walkable to the break, which leaves a gap of at least 4 m, so the far end can't be reached.
+  - `plan.walkable` and `plan.deckHeightAt` are exported for the nav graph.
+  - Walk mode includes the deck (`withBridge` in main.ts). Walked in the headless game: holding W from the lawn by the gate climbs smoothly onto the deck and stops 1.3 m short of the broken edge. `tests/bridge.test.ts` has a key-path test through the same composition (lawn → deck → edge, never over the parapets, the gap or the far half).
+- Plans are pure and take their collaborators as parameters (outlines, `groundAt`, rng, Builder). Tests are in `tests/bridge.test.ts`, `revetment.test.ts` and `turf.test.ts`, at 98–100% line coverage. They include the requested check that the ground 0.4–2 m inside the ring sits no lower than the coping top − 0.3 m, and a replica near-grid check that the terrain never shows in front of the wall.
+- New walk bookmarks: `bridge`, `rim`.
+
+Numbers (headless WebGL2, 1600×900):
+- Castle bin: 132.8k triangles, of which the bridge is 11.0k and the revetment 5.4k.
+- The turf strip is 7.7k triangles in one extra draw call.
+- Frame totals: bridge 5.02M triangles / 308 draw calls, rim 5.08M / 302, moat 4.47M / 356, gate 6.03M / 662. Most of that is real stones and terrain, which come from main.
+
+Known issues / next
+- `tests/revetment.test.ts` replicates the near terrain grid (380 m / 420 cells). Update `NEAR` there if the grid changes.
+- `turf.ts` `rimMask` duplicates the terrain's island ground mask.
+- Physics must treat water as a barrier so the far bank stays unreachable.
+
+## 2026-11-05: UI through impeccable (branch `ui-impeccable`)
+
+Anders asked for the vendored `impeccable` skill to be used on every UI surface. Its launcher ran (`impeccable context`); `init` and `document` ran without a live interview (the agent was a subagent), so PRODUCT.md and DESIGN.md mark inferred facts for Anders to confirm.
+
+Done
+- `PRODUCT.md` (product truth), `DESIGN.md` + `.impeccable/design.json` (design system "Torchlight on Stone": ink, bone, one brass accent; IM Fell English SC for titles, system sans for everything read at a glance).
+- `src/ui/ui.css`: one stylesheet for tokens, loading caption, HUD, tools panel and boot error, linked from `index.html` and `props.html` (the inline styles are gone). The title face is self-hosted (`src/ui/fonts/`, OFL, 57 kB, in CREDITS.md).
+- `src/ui/hud.ts` `createHud(deps, opts)`: crosshair dot that opens a brass ring on a usable target, the use prompt ("E Open door"), a help line while the mouse is free, a Controls card on the first pointer lock that fades after 4.5 s (H shows it again), toasts, and the review tools panel (backquote toggles it, Esc closes it; opening it while locked releases the mouse). Document, keys and timers are injected.
+  - API for other modules (the physics player): `hud.setHelp(text | items)`, `hud.setPrompt(text | null, key?)`, `hud.setLocked(bool)`, `hud.toast(text, ms?)`, `hud.showControls()`, `hud.promptView` (pass as `createInteraction(..., { view })`). `__game.hud` exposes it for captures.
+- `src/ui/tools.ts` `createToolsPanel`: choice (segmented), range, actions grid and select sections; used by the castle page, `?test=doors` and `props.html`.
+- `src/ui/gameHud.ts` `wireGameHud(hud, { rig, views, time, walkFrom, search })`: camera mode, time of day (hh:mm), bookmarks, fps, and help per mode and lock state. The rig is an interface, so the physics controller can stand in. The tools start shut when the start bookmark is a walk view and open for orbit and fly.
+- `src/ui/help.ts`: help presets per mode, `parseHelp` for old "WASD walk · E use" strings, `?ui=` flags. `src/ui/error.ts`: a boot error with a Reload button instead of a bare text line.
+- `?ui` keeps the HUD under `?shot`: `?ui=locked` draws it as if the mouse were captured, `tools` / `notools` opens or shuts the panel, `card` holds the Controls card.
+- Loading caption: "Moated Castle" in the title face, the step in words and the percentage apart in tabular figures, `aria-valuetext`; step labels in sentence case.
+- `interact.ts` is unchanged: main.ts passes `view: hud.promptView`.
+- Tests: `tests/ui/*` (happy-dom + typed fakes for keys, timers and the rig), `src/ui/**` at 100 % lines in coverage.
+
+- The dot also shows whenever something usable is under it, even with the mouse free (drag-look).
+- `lights.html` (merged from main) uses the same chrome: tools panel "Firelight", help line, boot error.
+
+Checked in headless Chromium against the merged build (`?webgl&shot&ui`): backquote shuts and reopens the tools (focus goes to "Orbit"), Esc shuts them, H shows the Controls card. Standing 2.1 m from the gate in walk mode, the prompt read "Open gate"; pressing E on the keyboard (the player's key handler) opened it (`main-gate` 0 → 1 after 6 s). Contrast: bone on chip ink ≥ 6.5:1 and brass keycaps ≥ 4.6:1 over white sky (computed). Not checked: real pointer lock (headless cannot grab the mouse) and a real touch device.
+
+Known issues / next
+- Captures run on swiftshader on a loaded machine, so the locked HUD in captures is drawn via `__game.hud.setLocked(true)`, not real pointer lock.
+- The tools open on orbit/fly start views, which includes the default `hero` view on Pages; Anders may prefer them shut everywhere.
+- With interior bookmarks the Views grid has 17 entries and scrolls inside the panel; group exterior/interior when it grows.
+- The help line still names the old walk controls; the physics player should call `hud.setHelp` with its own (jump, crouch).
+- No touch controls: on a phone the HUD lays out, but the game cannot be played.

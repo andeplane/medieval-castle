@@ -3,12 +3,13 @@
 // on the floor at the centre of the footprint (or on the wall / ceiling for mounted props), +y up,
 // the front faces +z, metres. Sizes follow real medieval furniture (seat 0.45 m, table 0.76 m).
 import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } from './geom';
+import type { LightEmitter } from '../light/types';
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
 
 export type Placement = 'floor' | 'wall' | 'ceiling';
 
-/** A light source on a fixture; the interior-light work turns these into lights. Local space. */
-export interface Emitter { position: V3; colour: RGB; intensity: number; flicker: number }
+/** A light source on a fixture; src/light turns these into flickering lights. Local space. */
+export type Emitter = LightEmitter;
 
 /** Solid parts for physics and NPC navigation, as boxes in local space. */
 export interface Collider { centre: V3; half: V3 }
@@ -36,7 +37,7 @@ export const CLOTH: Record<string, RGB> = {
   leather: [0.32, 0.2, 0.12],
 };
 const IRON: RGB = [1, 1, 1];
-const FLAME: Emitter['colour'] = [1, 0.62, 0.3];
+const FLAME: Emitter['colour'] = [1, 1, 1]; // tint over the flame kind's black-body colour
 
 const jitterTint = (r: Rng, c: RGB, k = 0.08): RGB => { const f = 1 + (r() - 0.5) * 2 * k; return [c[0] * f, c[1] * f, c[2] * f]; };
 const woodTint = (r: Rng) => jitterTint(r, pick(r, [WOOD.oak, WOOD.oak, WOOD.dark, WOOD.grey]));
@@ -65,8 +66,11 @@ function leg(m: PropMesh, x: number, z: number, h: number, w: number, dx = 0, dz
   m.with(compose(translate(x + dx / 2, h / 2, z + dz / 2), compose(rotZ(az), rotX(ax))), () => m.box('wood', [0, 0, 0], [w, len, w], { bevel: 0.006, grain: 1, noBottom: true }));
 }
 
-const flame = (m: PropMesh, at: V3, size: number) => m.with(translate(at[0], at[1], at[2]), () =>
-  m.lathe('flame', [[0, 0], [size * 0.35, size * 0.25], [size * 0.3, size * 0.6], [0, size * 1.4]], 6));
+/** A charred wick or char stub and a flame marker; the flame itself is drawn by src/light. */
+const flame = (m: PropMesh, kind: Emitter['kind'], at: V3, size: number) => {
+  if (kind === 'candle') m.tinted([0.05, 0.04, 0.035], () => m.with(translate(at[0], at[1], at[2]), () => m.tube('iron', [[0, -0.004, 0], [0.001, size * 0.35, 0.0005]], 0.0012, 3)));
+  m.addFlame(kind, at, size * 1.6);
+};
 
 // ---------- tables and seating ----------
 export const trestleTable: PropKind = {
@@ -420,8 +424,8 @@ export const tableware: PropKind = {
 function candle(m: PropMesh, r: Rng, at: V3, h: number, R: number, emit: Emitter[], intensity: number) {
   m.tinted(jitterTint(r, [0.92, 0.86, 0.7], 0.05), () => m.with(translate(at[0], at[1], at[2]), () =>
     m.lathe('wax', [[R, 0], [R, h * 0.85], [R * 0.9, h], [R * 0.3, h * 0.97], [0, h * 0.97]], 8, { wobble: (th, y) => 1 + Math.sin(th * 2 + y * 30) * 0.06 * (y / h) })));
-  m.tinted([1, 1, 1], () => flame(m, [at[0], at[1] + h * 0.97, at[2]], R * 1.6));
-  emit.push({ position: [at[0], at[1] + h + R * 1.2, at[2]], colour: FLAME, intensity, flicker: 0.12 });
+  flame(m, 'candle', [at[0], at[1] + h * 0.97, at[2]], R * 1.6);
+  emit.push({ kind: 'candle', position: [at[0], at[1] + h + R * 1.2, at[2]], colour: FLAME, intensity, flicker: 0.12 });
 }
 
 export const candlestick: PropKind = {
@@ -447,10 +451,10 @@ export const sconce: PropKind = {
     const tilt = rotX(0.25);
     m.with(compose(translate(0, 0.02, out), tilt), () => {
       m.tinted(jitterTint(r, WOOD.dark), () => m.tube('wood', [[0, -0.18, 0], [0, 0.18, 0]], [0.016, 0.024], 6));
-      m.tinted([0.18, 0.14, 0.1], () => m.lathe('straw', [[0.028, 0.14], [0.04, 0.18], [0.04, 0.25], [0.02, 0.28], [0, 0.285]], 8));
-      m.tinted([1, 1, 1], () => flame(m, [0, 0.26, 0], 0.07));
+      m.tinted([0.06, 0.045, 0.035], () => m.lathe('straw', [[0.028, 0.14], [0.04, 0.18], [0.04, 0.25], [0.02, 0.28], [0, 0.285]], 8));
+      flame(m, 'torch', [0, 0.255, 0], 0.24);
     });
-    emit.push({ position: [0, 0.38, out + 0.06], colour: [1, 0.55, 0.25], intensity: 3, flicker: 0.25 });
+    emit.push({ kind: 'torch', position: [0, 0.55, out + 0.2], colour: [1, 0.96, 0.92], intensity: 3, flicker: 0.25 });
     return { colliders: [hull(m)], emitters: emit };
   },
 };
@@ -474,7 +478,7 @@ export const chandelier: PropKind = {
       candle(m, r, [at[0], at[1] + 0.015, at[2]], range(r, 0.08, 0.16), 0.014, cs, 0.5);
     }
     // one light for the whole ring keeps the light count down
-    emit.push({ position: [0, y + 0.2, 0], colour: FLAME, intensity: cs.reduce((s, e) => s + e.intensity, 0), flicker: 0.08 });
+    emit.push({ kind: 'candle', position: [0, y + 0.2, 0], colour: FLAME, intensity: cs.reduce((s, e) => s + e.intensity, 0), flicker: 0.08 });
     return { colliders: [hull(m)], emitters: emit };
   },
 };
@@ -545,7 +549,7 @@ export const lectern: PropKind = {
 export const altar: PropKind = {
   name: 'altar', placement: 'floor', blocksNav: true,
   build(m, r) {
-    const W = range(r, 1.6, 2.2), D = range(r, 0.7, 0.85), H = 1.0, emit: Emitter[] = [];
+    const W = range(r, 1.2, 2.0), D = range(r, 0.6, 0.8), H = 1.0, emit: Emitter[] = [];
     m.tinted(woodTint(r), () => m.box('wood', [0, H / 2, 0], [W, H, D], { bevel: 0.01, grain: 0 }));
     m.tinted(jitterTint(r, CLOTH.linen), () => m.sheet('cloth', (s, t) => {
       const x = (s - 0.5) * (W + 0.02), z = (t - 0.5) * (D + 0.5), over = Math.max(0, Math.abs(z) - D / 2);

@@ -18,12 +18,16 @@ describe('serveTunnel', () => {
     const gl = fakeGL();
     serveTunnel(s, { clock, getGL: () => gl, makeRenderer: quietRenderer });
     send({ t: 'progress', p: 0.5 });   // before init: ignored
+    send({ t: 'span', start: 0, end: 1, ms: 1 });
     const c = canvas();
     send({ t: 'init', canvas: c, w: 320, h: 180, reduced: false, palette: PALETTE });
     send({ t: 'init', canvas: canvas(), w: 1, h: 1, reduced: false, palette: PALETTE });   // second init ignored
     clock.frame();
     expect([c.width, c.height]).toEqual([320, 180]);
     expect(out).toEqual([{ t: 'shown', v: 0 }]);
+    send({ t: 'span', start: 0, end: 0.4, ms: 1000 });
+    for (let i = 0; i < 32; i++) clock.frame();
+    expect((out.at(-1) as { v: number }).v).toBeGreaterThan(0.1);
     send({ t: 'progress', p: 1 });
     send({ t: 'look', x: 0.3, y: -0.3 });
     send({ t: 'size', w: 640, h: 360 });

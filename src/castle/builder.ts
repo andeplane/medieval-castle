@@ -43,7 +43,10 @@ export function wallFrame(a: V2, b: V2, out: V2): Frame {
 }
 
 export interface Opening { pts: V2[]; depth: number; fill: 'glass' | 'void' | 'wood' | 'none'; reveal: MatKey }
+/** Every wall face with its openings, so the interior can cut matching embrasures behind them. */
 export interface WallRecord { mat: MatKey; a: V2; b: V2; out: V2; y0: number; y1: number; openings: Opening[]; frame: Frame }
+/** Surface-mounted openings on curved walls (round towers): centre, radius, angle, sill, size. */
+export interface CurvedRecord { c: V2; R: number; a: number; y: number; w: number; h: number; glass: boolean }
 
 /** Is the polygon corner at i convex (turning more than ~30°)? Polygon must be counter-clockwise. */
 const convexAt = (p: V2[], i: number) => {
@@ -53,8 +56,9 @@ const convexAt = (p: V2[], i: number) => {
 };
 
 export class Builder {
-  bins: Record<MatKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin() };
   walls: WallRecord[] = [];
+  curved: CurvedRecord[] = [];
+  bins: Record<MatKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin() };
 
   // Stone records (src/castle/stones): every rubble/ashlar wall face, and every solid that stands proud
   // of faces (so stones are not laid under jambs, sills, buttresses, string courses, plinths…).
@@ -291,6 +295,8 @@ export class Builder {
         bin.triN([P(t0, ra, ya), P(t0, rb, yb), P(t1, rb, yb)], [nrm(t0), nrm(t0), nrm(t1)], [[ua0, va], [ub0, vb], [ub1, vb]]);
       }
     }
+    // soffit: the cone overhangs its wall head, so close it from below or the sky shows through the eave
+    this.cap(mat, Array.from({ length: seg }, (_, i) => [cx + Math.cos((i / seg) * Math.PI * 2) * r, cz + Math.sin((i / seg) * Math.PI * 2) * r] as V2), y0, false);
   }
 
   /** Sloped roof plane through 3–4 points; slate courses run parallel to the eave (p0→p1). */
