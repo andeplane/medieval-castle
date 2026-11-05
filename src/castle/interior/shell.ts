@@ -22,6 +22,8 @@ export interface ShellResult {
   groups: ShellGroup[]; carve: Volume[]; windows: number; skipped: number;
   /** Door openings that could not be cut into a room face (`door@room`); empty when the plan is sound. */
   droppedHoles: string[];
+  /** The exterior opening behind each embrasure built: room, outward plan normal, centre on the face, sill. */
+  embrasures: { room: string; dir: V2; mid: V2; s0: number; s1: number; yb: number }[];
 }
 export interface ShellDeps { heightAt?: (x: number, z: number) => number }
 
@@ -105,9 +107,10 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
 
   // ------------------------------------------------ windows → embrasures
   let nWin = 0, skipped = 0;
+  const embrasures: ShellResult['embrasures'] = [];
   for (const [id, ws] of winFor) {
     const r = room.get(id)!, g = groupOf(r);
-    for (const w of ws) { if (embrasure(g.B, r, w)) nWin++; else skipped++; }
+    for (const w of ws) { if (embrasure(g.B, r, w)) { nWin++; embrasures.push({ room: id, dir: w.dir, mid: w.mid, s0: w.s0, s1: w.s1, yb: w.yb }); } else skipped++; }
   }
 
   // ------------------------------------------------ room cells
@@ -123,7 +126,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   courtyardPlinth(carveVols);
   if (P.sallyPort) portal(ext, P, deps, carveVols);
 
-  return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped };
+  return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped, embrasures };
 
   // ================================================ helpers (closures over the plan)
 
