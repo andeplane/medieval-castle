@@ -3,6 +3,8 @@
 // Builder does). UVs are metres / tile so wood grain and weave stay the same size on every piece.
 // Each vertex also carries a colour that tints the shared material (oak vs. dark oak, red vs. blue wool).
 
+import type { Flame, FlameKind } from '../light/types';
+
 export type V3 = [number, number, number];
 export type RGB = [number, number, number];
 export type PropMat = 'wood' | 'iron' | 'cloth' | 'straw' | 'ceramic' | 'wax' | 'flame';
@@ -64,6 +66,8 @@ export class PropMesh {
   bins: Record<PropMat, PropBin> = Object.fromEntries(PROP_MATS.map((k) => [k, new PropBin()])) as Record<PropMat, PropBin>;
   private stack: Xf[] = [IDENTITY];
   tint: RGB = [1, 1, 1];
+  /** Flames drawn by the shared flame renderer (src/light), in this mesh's space. */
+  flames: Flame[] = [];
 
   get xf() { return this.stack[this.stack.length - 1]; }
   /** Run fn with an extra local transform applied on top of the current one. */
@@ -75,6 +79,11 @@ export class PropMesh {
   tinted<T>(c: RGB, fn: () => T): T {
     const prev = this.tint; this.tint = c;
     try { return fn(); } finally { this.tint = prev; }
+  }
+  /** Mark a flame of `kind` rising `height` metres from local `at` (follows the transform stack). */
+  addFlame(kind: FlameKind, at: V3, height: number) {
+    const m = this.xf, up = v3.norm(applyD(m, [0, 1, 0]));
+    this.flames.push({ kind, base: applyP(m, at), height: height * Math.hypot(...applyD(m, [0, 1, 0])), up });
   }
   get triangles() { return PROP_MATS.reduce((s, k) => s + this.bins[k].triangles, 0); }
 
@@ -245,6 +254,7 @@ export class PropMesh {
 
   /** Append another mesh (already in its own local space) under the current transform. */
   append(other: PropMesh) {
+    for (const f of other.flames) this.addFlameWorld(f);
     for (const k of PROP_MATS) {
       const b = other.bins[k];
       for (let i = 0; i < b.pos.length; i += 9) {
@@ -262,6 +272,10 @@ export class PropMesh {
   }
 
   /** Axis-aligned bounds of everything emitted so far (world of this mesh). */
+  private addFlameWorld(f: Flame) {
+    const m = this.xf, up = f.up ?? [0, 1, 0];
+    this.flames.push({ kind: f.kind, base: applyP(m, f.base), height: f.height, up: v3.norm(applyD(m, up)) });
+  }
   bounds(): { min: V3; max: V3 } {
     const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
     for (const k of PROP_MATS) {

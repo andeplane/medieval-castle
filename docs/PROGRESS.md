@@ -13,10 +13,36 @@ Done
 Numbers (test cell, headless WebGL2): bake 15–25 ms for 2 rooms / 9 apertures (BVH over the island 35–90 ms); the per-room part is linear, so ~140 rooms ≈ 0.3–0.6 s plus the BVH. Draw calls: outside 246–260, inside 228–240 (2.3 M triangles with vegetation; 50–60 / 0.93 M with `?veg=0`). Measured mean log2 luminance: exterior −1.2, hall −6.9, chamber −8.6.
 
 Known issues / next
-- Shell integration (done after PR #15): `main.ts` swaps the shell's meshes to the interior materials and bakes its groups + plan with the castle `lights`. Better: window records with `depth`, `wi`, `hi`, `yi` from the shell's embrasures. The doors module does not call `setDoorOpen` yet, so leaf doors count as shut.
+- Shell integration (done after PR #15): `main.ts` swaps the shell's meshes to the interior materials and bakes its groups + plan with the castle `lights`. Better: window records with `depth`, `wi`, `hi`, `yi` from the shell's embrasures. `main.ts` feeds `doors.state()` into `setDoorOpen` (gate leaves and portcullis).
 - Glass is opaque from inside (glows); there is no view out through glazed windows.
 - Light through a door from a neighbour is a uniform portal; no directional sun through internal doors.
 - Rooms that are not convex get some light through their own corners (no occlusion inside a room).
+
+## 2026-11-05: firelight (shared flame and light system, `src/light/`)
+
+Anders: "what we really need to nail here is amazing lighting. realistic flames and warm great feeling". One system for every fire: the prop kit, the castle interiors (interior-light consumes it) and later NPC-carried torches.
+
+Done
+- `types.ts`: `FlameKind` (candle, torch, lantern, brazier, hearth), `Flame` (base, height, up) and `LightEmitter` (the prop kit's `Emitter` is now this, with a `kind`).
+- `flicker.ts`: deterministic flicker per kind and seed: slow breathing, a faster lick, crackle and occasional gutters (a draught pulls the flame down for ~0.2 s), plus a small wander of the light centre so shadows move. Profiles hold colour temperature, candela per candle unit and range.
+- `blackbody.ts`: fire colour from Kelvin (1600–2000 K), linear and normalised.
+- `budget.ts` + `rig.ts`: `LightRig` keeps a fixed pool of point lights (default 2 shadow casters + 10 plain, so materials never recompile), ranks fires by brightness over distance for any eye, cross-fades sources between pools with hysteresis (no popping), takes an injected `visible(id)` for room culling, and supports `add`/`move`/`setScale` for carried torches and fires that go out. `meanLights()` feeds bounce bakes. Engine-free: the three.js side is a `LightFactory` (`three.ts`); tests use a typed fake.
+- `flames.ts` + `three.ts`: flame sprites in three instanced draws for any number of flames: a turbulent teardrop body (two noise octaves, licks that break off at the tip, black-body ramp, blue cup at candle wicks, additive HDR), a camera-facing halo, and a thin smoke column over torches. Each flame is linked to its light, so the flame and the room gutter together. Flame motion runs on a uniform clock (deterministic captures).
+- `look.ts`: the warm interior look: Neutral tone mapping (keeps flame hue; AgX turned flames cream), exposure 0.58, bloom on the flames, a whisper of cool fill so shadows are deep blue-grey rather than dead black, a partial white balance (the eye adapting to firelight), mild vignette, dark warm haze. `lookFromParams` for review overrides.
+- Warm bounce: `LightProbeGrid` (three r187 addon) baked once per volume with every fire at its mean brightness, one extra bounce (cellar 7×3×5 + tunnel 16×2×2 probes, ~3 s in SwiftShader).
+- Prop kit: candles, sconce torches and chandeliers now mark flames (`PropMesh.addFlame`, carried through transforms and `append`) instead of lathe flame meshes; candles get a charred wick, torch heads are charred dark. `props.html` lights its rooms through the shared rig and sprites.
+- Review page `lights.html` (`src/light/preview.ts`, geometry in `stage.ts`): a 12 × 7.2 m segmental-vaulted cellar with a supper table and chandelier, a door into a 29 m barrel-vaulted tunnel with torches every 4.5 m. Views: cellar, supper, torch, tunnel, door. Flags: `?t=` freeze time, `?still`, `?exposure`, `?bloom`, `?fill`, `?haze`, `?adapt`, `?tm=agx|aces|neutral`, `?gi=0`, `?shadows=N`, `?lights=N`, `?nowalls` (flames on black for tuning). `URL=http://localhost:5173/lights.html QUERY=t=3.2 npm run shots`.
+- Tests: `tests/light/*` with fakes in `tests/light/fakes.ts`; `src/light` at 100 % lines/functions/statements, 99 % branches (`npm run coverage`).
+
+How interiors use it (agreed with the castle build thread): place fixtures, `rig.setEmitters(emitters)`, `makeFlameSprites(linkFlames(mesh.flames, emitters))`; each frame `rig.update(t, dt, eye, visible)` and `sprites.update(flameBrightness(...), t)`. Interior materials add `factory.lights` to their `lightsNode`. The interior-light exposure controller owns exposure and takes `WARM_INTERIOR` as parameters.
+
+Numbers: the review page has 13 emitters and 20 flames → 12 point lights (2 with 512² cube shadows), 3 flame draw calls; prop triangles 12.5k. Castle page unchanged.
+
+Next
+- Hook into `interior-shell` rooms when it lands (probe grids per room group, visibility from `createVisibility`).
+- Embers and sparks over braziers and hearths; brazier, lantern and hearth props (profiles and looks exist).
+- Check frame time on the M4 (WebGPU): shadowed point lights are the main cost; drop to one shadow caster if needed.
+- Floor flagstones read a little like modern tiles under raking light; the rubble's pits show at grazing angles near torches.
 
 ## 2026-11-05: interior plan and shell (branch `interior-shell`, PR #15)
 
