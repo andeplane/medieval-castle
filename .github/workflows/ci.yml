@@ -1,0 +1,25 @@
+name: CI
+
+# One fast job on pull requests: typecheck, tests with coverage thresholds, production build.
+# Keep the whole run under ~1-2 minutes: one OS, one Node version, no browser matrix.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run coverage
+      - run: npm run build
