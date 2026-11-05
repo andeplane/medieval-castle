@@ -8,6 +8,12 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - `npm run build`: typecheck + production build (pages `index.html` and `props.html`).
 - `npm run shots [view…]`: with the dev server running, capture camera bookmarks to `shots/` (headless WebGL2). Env: `W`, `H`, `QUERY` (e.g. `ao=0`), `OUT`, `URL` (e.g. `http://localhost:5173/props.html` for the prop kit).
 
+## Principles
+- Keep it simple. Build the smallest thing that does the job; no abstractions, options or frameworks before a second real use needs them. Don't over-engineer.
+- Don't invent what Anders will see. If a task needs a visible design choice he hasn't asked for (what a gate looks like, a door type, a style), use the plainest choice and name it as an assumption in the PR and report so he can veto it before it gets built out.
+- "Works" means used, not looked at. Before saying the player can do something (walk in, open, climb, reach), do it: walk it in the game or run a test through the same code the player uses. A capture of a state is not proof of an interaction.
+- Report what you checked and what you didn't. No "should work"; say which path was walked, which test covers it, and what is still untested.
+
 ## Rules
 - Coordinates: x east, y up, z south, metres. Moat water y = 0, island ground ≈ 2.6.
 - Everything generated is a pure function of the seed: use `rngFor(name)` from `src/core/rng.ts`, never `Math.random`.
@@ -18,6 +24,8 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - Tests: aim for close to 100% coverage of logic (`npm run coverage`). Keep rendering glue thin and push logic into pure, tested functions.
 - Dependency injection: modules take their collaborators (physics, input, clock, rng, materials, scene, audio) as typed parameters or interfaces, so tests use small type-safe fakes. No hidden globals, singletons or module-level side effects.
 - NPC-ready: navigating NPCs will be added later. Character movement is a reusable motor over `PhysicsApi` (the player is just one user of it); the interior plan exposes a room/door/stair navigation graph; doors can be opened by any agent; nothing assumes there is only one character.
+- Key paths have a test (vitest, no browser, using the same walk/collision code as the player): bridge → gate → passage → courtyard, courtyard → a ground-floor room → stair up one floor, and a cellar → the moat tunnel to the locked grille. Add a path when a feature adds a new way in; don't test every room.
+- Look changes (stone, materials, light) get one close-range walk-mode capture (≈ 0.5 m from a wall) as well as the usual bookmarks.
 - Coverage thresholds live per folder in `vitest.config.ts`; add new tested modules to its `include`. Example of DI with type-safe fakes: `src/loading/` + `tests/loading/fakes.ts`.
 
 ## UI
@@ -28,4 +36,4 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - Keep each pipeline under ~1-2 minutes: one OS, one Node version, no browser/OS matrix, no headless captures in CI.
 
 ## Definition of done
-Build, tests and coverage pass, fresh captures from at least three bookmarks, `docs/PROGRESS.md` updated.
+Build, tests and coverage pass (including the key-path tests), fresh captures from at least three bookmarks, anything you claim the player can do has been done once, `docs/PROGRESS.md` updated.
