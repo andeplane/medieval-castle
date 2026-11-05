@@ -8,13 +8,18 @@
 //   z toward the space the leaf swings into. The pintle (pivot) axis is the local y axis at x = z = 0.
 //   The leaf body is z in [zBack, zFront] (zFront faces the swing space); ledges, braces and strap
 //   hinges stand on the front face, up to z = 0.
-// - The closed leaf's back face sits `rebate` in from the swing-side face of the wall (the stop).
+// - The closed leaf's back face sits `rebate` in from the swing-side face of the wall, against the stop:
+//   the step where the rebated outline (the clear outline grown by LIP) meets the clear one. The leaf is
+//   the clear outline grown by GROW, so it laps the stop all round and stays LIP − GROW off the rebate.
 // - Head rise above the springing (`height`): round w/2, pointed HEAD_RISE.pointed·w, segmental
 //   HEAD_RISE.segmental·w, flat 0. `openingOutline` gives the clear outline the shell should cut.
 import type { DoorSpec, V3 } from './types';
 import type { V2 } from '../../core/math2d';
+import { archOutline } from './geom';
 
-export const CLEAR = 0.015;       // leaf to jamb and head clearance (per side)
+export const LIP = 0.08;          // rebate recess beyond the clear opening (per side and at the head)
+export const GROW = 0.05;         // leaf beyond the clear opening: how far it laps the stop
+export const STOP_GAP = 0.005;    // shut leaf's back face to the stop face
 export const HEAD_RISE = { pointed: 0.42, segmental: 0.2 } as const; // pointed matches the gate arch in castle.ts (1.6 / 3.8)
 export const OPEN_ANGLE = (100 * Math.PI) / 180;
 
@@ -59,6 +64,27 @@ export function openingOutline(head: DoorSpec['head'], w: number, h: number, seg
   return pts;
 }
 
+/**
+ * The two outlines of a door, in (u across along `DoorSpec.along`, y absolute): the clear opening, and the
+ * rebate recess round a leaf (the clear outline grown by LIP with the same arc centres, point for point;
+ * the clear outline for a door without a leaf). Every wall the door passes through is cut with one of
+ * them, and its reveals follow them: the shell's room faces and reveals, the castle's wall faces
+ * (openings.ts doorHoles) and the leaf (inset from the rebate by LIP − GROW).
+ * `rise` overrides the head's rise for an open arch (PlanX.rise); leaves always take headRise.
+ */
+export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2[] } {
+  const leafy = d.leaf && d.kind !== 'gate', y = d.centre[1];
+  const clear = archOutline(0, y, d.width, d.height, d.head, leafy ? headRise(d.head, d.width) : rise ?? headRise(d.head, d.width));
+  if (!leafy) return { clear, reb: clear };
+  const grown = headTop(d.head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
+  return { clear, reb: clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)])) };
+}
+
+/** Where the stop is, from the wall's mid-plane toward the swing side (0 for a door without a leaf). */
+export function stopPlane(d: DoorSpec): number {
+  return d.leaf && d.kind !== 'gate' ? d.wall / 2 - stopDepth(d, d.kind) : 0;
+}
+
 // ------------------------------------------------------------------------------------- frames
 
 export interface DoorFrame {
@@ -78,6 +104,11 @@ export function doorFrame(d: DoorSpec, kind: LeafKind): DoorFrame {
   return { right, eV, swingFace, pivotDepth };
 }
 
+/** Depth of the stop (the rebate step) in from the swing-side face: just behind the shut leaf's back face. */
+export function stopDepth(d: DoorSpec, kind: LeafKind): number {
+  return doorFrame(d, kind).pivotDepth - leafDepth(kind).zBack + STOP_GAP;
+}
+
 /** One swinging leaf of a door: where its pivot is and which way it faces. */
 export interface LeafPlace {
   door: string;
@@ -95,28 +126,28 @@ export interface LeafPlace {
 }
 
 /**
- * Past 90° the leaf's front edge swings back toward the jamb it hangs on. Inside the wall (the pivot is
- * pivotDepth in from the face) that would cut into the reveal, so the swing stops where the leaf
- * would come within CLEAR of the jamb: about 100° for a door near the face, ~90° deep in a passage.
+ * Past 90° the leaf swings back toward the wall face beside its hinge jamb. The pivot is pivotDepth in
+ * from that face and the rebate jamb LIP − GROW beyond the hinge edge, so the swing stops where the
+ * leaf would reach the face past that jamb: 100° for a door near the face, ~90° deep in a passage.
  */
 export function maxSwing(pivotDepth: number) {
-  return Math.min(OPEN_ANGLE, Math.PI / 2 + Math.atan(CLEAR / Math.max(pivotDepth, 1e-3)));
+  return Math.min(OPEN_ANGLE, Math.PI / 2 + Math.atan((LIP - GROW) / Math.max(pivotDepth, 1e-3)));
 }
 
-/** Class: leaves that share one geometry. Widths/heights are binned down so every member keeps ≥ CLEAR. */
+/** Class: leaves that share one geometry. Widths/heights are binned down by < BIN, which the GROW lap absorbs. */
 export interface LeafClass {
   key: string; kind: LeafKind; head: DoorSpec['head'];
   ow: number; oh: number;       // opening width/height the geometry was cut for
   width: number; sOff: number; sDir: 1 | -1; // leaf in opening coordinates (for the unmirrored hinge-at-left case)
 }
 
-const BIN = 0.04;
+export const BIN = 0.02;
 export function leafClassFor(d: DoorSpec, kind: LeafKind): LeafClass {
-  const ow = Math.floor(d.width / BIN) * BIN, oh = Math.floor(d.height / BIN) * BIN;
-  const width = ow - 2 * CLEAR;
+  const ow = Math.floor(d.width / BIN + 1e-9) * BIN, oh = Math.floor(d.height / BIN + 1e-9) * BIN;
+  const width = ow + 2 * GROW;
   const key = `${kind}:${d.head}:${ow.toFixed(2)}x${oh.toFixed(2)}`;
-  // hinge edge at the left jamb (s = -ow/2 + CLEAR), latch toward +s
-  return { key, kind, head: d.head, ow, oh, width, sOff: -ow / 2 + CLEAR, sDir: 1 };
+  // hinge edge in the left rebate (s = -ow/2 - GROW), latch toward +s
+  return { key, kind, head: d.head, ow, oh, width, sOff: -ow / 2 - GROW, sDir: 1 };
 }
 
 /** The leaves a door needs: one whole leaf, or none for an open arch or a gate (closed by its portcullis). */
@@ -127,14 +158,14 @@ export function placeLeaves(d: DoorSpec): LeafPlace[] {
   const cls = leafClassFor(d, kind);
   const hs = d.hinge === 'right' ? 1 : -1;
   const sill = KIND[kind].sill;
-  // hinge edge at s = hs·(ow/2 − CLEAR) (class geometry centred in the opening); latch toward the other jamb
-  const sHinge = hs * (cls.ow / 2 - CLEAR);
+  // hinge edge at s = hs·(ow/2 + GROW) (class geometry centred in the opening); latch toward the other jamb
+  const sHinge = hs * (cls.ow / 2 + GROW);
   const eU: V2 = [-hs * f.right[0], -hs * f.right[1]];
   const base: V2 = [f.swingFace[0] - f.eV[0] * f.pivotDepth, f.swingFace[1] - f.eV[1] * f.pivotDepth];
   const pivot: V3 = [base[0] + f.right[0] * sHinge, d.centre[1] + sill, base[1] + f.right[1] * sHinge];
   // right-handed when eU × up = eV, i.e. eV = (−eU.z, eU.x)
   const mirrored = f.eV[0] * -eU[1] + f.eV[1] * eU[0] < 0;
-  const top = headTop(d.head, cls.ow, cls.oh, CLEAR);
+  const top = headTop(d.head, cls.ow, cls.oh, -GROW);
   return [{
     door: d.id, kind, classKey: cls.key, width: cls.width,
     height: top(0) - sill, sOff: sHinge, sDir: (hs > 0 ? -1 : 1) as 1 | -1,

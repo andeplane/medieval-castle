@@ -3,7 +3,7 @@
 // barred at the far bank, and a navigation graph that reaches every room.
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { planInterior, validatePlan, facings, towerFloorsY, outerFootprint, ceilingAt, doorHeadFits, fitDoorHeads, GATE, type PlanX } from '../src/castle/interior/plan';
+import { planInterior, validatePlan, facings, towerFloorsY, outerFootprint, ceilingAt, doorHeadFits, fitDoorHeads, fitHinges, leafSwingFits, GATE, type PlanX } from '../src/castle/interior/plan';
 import { navGraph, findPath, floorPolys } from '../src/castle/interior/nav';
 import { buildShell, type ShellResult } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior/index';
@@ -344,5 +344,28 @@ describe('navigation on stairs', () => {
     const bare = { ...P, stairs: P.stairs.map((s) => ({ ...s, landings: s.landings.map((L) => ({ ...L })) })) };
     bare.stairs[0].landings.forEach((L) => { L.door = undefined; });
     expect(navGraph(bare).nodes.size).toBeGreaterThan(P.rooms.length);
+  });
+});
+
+describe('leaves hung to open (the whole castle is checked in world.test.ts)', () => {
+  const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+  const at = (d: (typeof P.doors)[number], across: number, through: number): V2 => [d.centre[0] + d.along[0] * across + d.normal[0] * through, d.centre[2] + d.along[1] * across + d.normal[1] * through];
+
+  it('hangs a leaf on its other jamb when the room beside the hinge is too tight to open it', () => {
+    const d0 = P.doors.find((d) => d.leaf && d.kind === 'plank')!;
+    const sgn = d0.swingInto === 1 ? 1 : -1, id = d0.spaces[d0.swingInto];
+    // a room on the swing side reaching 3 m past one jamb but only 0.1 m past the other (hinge 'right' = +along)
+    const room = (a0: number, a1: number) => ({ ...rooms.get(id)!, poly: [[a0, 0], [a1, 0], [a1, 3], [a0, 3]].map(([a, t]) => at(d0, a, sgn * (d0.wall / 2 - 0.01 + t))) });
+    const hw = d0.width / 2, tight = { rooms: [room(-3, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    expect(leafSwingFits(tight, tight.doors[0])).toBe(false);
+    fitHinges(tight);
+    expect(tight.doors[0].hinge).toBe('left');
+    expect(leafSwingFits(tight, tight.doors[0])).toBe(true);
+    // too tight either side: left as it was (and the swing test above reports it)
+    const both = { rooms: [room(-hw - 0.1, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    fitHinges(both);
+    expect(both.doors[0].hinge).toBe('right');
+    // a door into the open air has no room to check
+    expect(leafSwingFits({ rooms: [] }, d0)).toBe(true);
   });
 });

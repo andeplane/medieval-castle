@@ -7,7 +7,8 @@ import { Builder, offsetPoly, pointedArch, roundArch, rect, at, wallFrame, type 
 import { GROUND, floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, type TowerSpec } from './spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, stairTowerPoly, type WingQuad } from './layout';
 import { buildPaving, wellCentre } from './paving';
-import { OPEN_W, OPEN_H, dressed, boxOf, fitOpening, masses, type Box, type Dressed, type Face, type Mass } from './openings';
+import { OPEN_W, OPEN_H, dressed, boxOf, fits, fitOpening, masses, doorHoleOn, doorBox, type Box, type Dressed, type Face, type Mass, type DoorHole } from './openings';
+import { planInterior, doorHoles, GATE } from './interior/plan';
 
 const G0 = GROUND - 1.6; // walls start below the ground so the terrain never shows a gap
 const BATTER_TOP = GROUND + 2.6;
@@ -17,18 +18,24 @@ export interface WindowLight { p: V3; n: V3; w: number; h: number }
 
 /** Every window, slit and loop the generator planned: where it was planned and where it went (null: left out). */
 export interface PlacedOpening { face: Face; kind: string; d: Dressed; s: number; y: number; at: { s: number; y: number } | null }
-interface Ctx { others: Mass[]; log: PlacedOpening[] }
+interface Ctx { others: Mass[]; log: PlacedOpening[]; doors: DoorHole[]; seeded: WeakSet<Box[]> }
 
-export function buildCastle(r: Rng = rngFor('castle')) {
+/**
+ * The castle's exterior. `doors` are the interior plan's doors (openings.ts DoorHole): every wall face a
+ * door passes through is cut with the door's own outline, and windows are placed around them. Pass []
+ * for a castle without interiors.
+ */
+export function buildCastle(r: Rng = rngFor('castle'), doors: DoorHole[] = doorHoles(planInterior())) {
   const B = new Builder();
+  B.doorHoles = doors;
   const lights: WindowLight[] = [];
-  const ctx: Ctx = { others: masses(), log: [] };
+  const ctx: Ctx = { others: masses(), log: [], doors, seeded: new WeakSet() };
   B.stoneFloor = GROUND - 0.5; // walls run 1.6 m into the ground; no stones where nobody can see them
   for (const w of wingQuads()) wing(B, r, w, lights, ctx);
   for (const t of TOWERS) t.kind === 'square' ? squareTower(B, r, t, lights, ctx) : roundTower(B, r, t, lights, ctx);
   gatehouse(B, r, lights, ctx);
   eastTurret(B, r, lights, ctx);
-  stairTower(B, r);
+  stairTower(B, r, ctx);
   courtyardDressing(B);
   B.stoneFloor = -0.35;
   return { builder: B, lights, openings: ctx.log };
@@ -38,8 +45,17 @@ export function buildCastle(r: Rng = rngFor('castle')) {
 
 const dir2 = (f: Frame): V2 => [f.r[0], f.r[2]];
 
+/** The doors through a face, as taken boxes in its list (once per list): windows are placed around them. */
+function withDoors(ctx: Ctx, face: Face, taken: Box[]) {
+  if (ctx.seeded.has(taken)) return taken;
+  ctx.seeded.add(taken);
+  for (const h of ctx.doors) { const pts = doorHoleOn(face, h); if (pts) taken.push(doorBox(pts)); }
+  return taken;
+}
+
 /** Fit an opening planned at (s, y) on a face (openings.ts); logs it and marks its box taken. */
 function place(ctx: Ctx, face: Face, taken: Box[], kind: string, s: number, y: number, d = dressed(kind), maxShift?: number) {
+  withDoors(ctx, face, taken);
   const p = fitOpening(face, ctx.others, taken, d, s, y, maxShift);
   ctx.log.push({ face, kind, d, s, y, at: p });
   if (p) taken.push(boxOf(d, p.s, p.y));
@@ -538,12 +554,12 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[], ctx: Ctx) {
   // front face with the gate arch
   const fa = at2(-hw, P), fb = at2(hw, P);
   const f = wallFrame(fa, fb, g.out);
-  const gateW = 3.8, gateY = GROUND - 0.1, archH = 4.0;
-  const gate = pointedArch(hw, gateY, gateW, archH, 1.6, 8);
+  // the gate is the plan's gate-main door: it cuts this face (Builder.doorHoles); its voussoirs follow GATE
+  const gateW = GATE.width, gateY = GATE.sill, archH = GATE.spring;
   // gate arch with its voussoirs, heraldic panel and bretèche are taken; floors 0–1 are the vaulted passage
   const face: Face = { owner: 'gate', a: fa, b: fb, out: g.out, bands: bands(BATTER_TOP, [floorBase(1) + 1.6], floorLines(2, 7), top - PARAPET_DROP) };
   const taken: Box[] = [{ s0: hw - gateW / 2 - 0.8, s1: hw + gateW / 2 + 0.8, y0: G0, y1: gateY + archH + 0.8 }, { s0: hw - 0.8, s1: hw + 0.8, y0: gateY + archH + 1.9, y1: gateY + archH + 3.9 }, { s0: hw - 1.45, s1: hw + 1.45, y0: floorBase(2) - 2.6, y1: floorBase(2) - 1.0 }];
-  const ops: Opening[] = [{ pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }]; // portcullis and its groove: interior/portcullis.ts, shell.ts
+  const ops: Opening[] = []; // the gate's portcullis and its groove: interior/portcullis.ts, shell.ts
   const plans: { kind: string; s: number; y: number }[] = [];
   for (const [kind, s0, y0] of [['twin', hw, floorBase(2) + 1.2], ['rect', hw, floorBase(4) + 1.0], ['small', hw, floorBase(6) + 1.1], ['slit', hw - 3.3, GROUND + 5.2], ['slit', hw + 3.3, GROUND + 5.2]] as [string, number, number][]) {
     const q = place(ctx, face, taken, kind, s0, y0);
@@ -555,7 +571,7 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[], ctx: Ctx) {
   for (const [a, b] of [[p[1], p[2]], [p[3], p[0]]] as [V2, V2][]) { const d = norm(sub(b, a)); B.wall('new', a, b, [d[1], -d[0]], G0, top); }
   B.cap('lead', p, top - 0.3, true);
   // gate voussoirs and hood
-  const head = pointedArch(hw, gateY, gateW + 0.05, archH, 1.62, 10).slice(2, -1);
+  const head = pointedArch(hw, gateY, gateW + 0.05, archH, GATE.rise + 0.02, 10).slice(2, -1);
   for (let i = 0; i < head.length - 1; i++) {
     const a = head[i], b = head[i + 1], m = lerp2(a, b, 0.5), d = norm(sub(b, a)), nrm: V2 = [-d[1], d[0]];
     const c = add(m, scale(nrm, -0.32));
@@ -641,15 +657,18 @@ function eastTurret(B: Builder, r: Rng, lights: WindowLight[], ctx: Ctx) {
   B.cyl('iron', cc[0], cc[1], 0.05, 0.03, top + 6.3, top + 7.8, 6, { top: null });
 }
 
-function stairTower(B: Builder, r: Rng) {
+function stairTower(B: Builder, r: Rng, ctx: Ctx) {
   const c = stairTowerCentre();
   const n = STAIR_TOWER.sides, top = STAIR_TOWER.top;
   const p = signedOrder(stairTowerPoly());
   for (let i = 0; i < n; i++) {
     const a = p[i], b = p[(i + 1) % n], d = norm(sub(b, a)), out: V2 = [d[1], -d[0]], L = len(sub(b, a));
-    const ops: Opening[] = [];
-    for (let y = GROUND + 2.5 + i * 0.55; y < top - 3; y += n * 0.55) ops.push({ pts: rect(L / 2, y, 0.14, 1.1), depth: 0.6, fill: 'void', reveal: 'trim' });
-    if (i === 3) ops.push({ pts: pointedArch(L / 2, GROUND - 0.05, 1.15, 2.0, 0.5), depth: 0.5, fill: 'wood', reveal: 'trim' });
+    const ops: Opening[] = [], face: Face = { owner: 'stairtower', a, b, out, bands: [] }, taken = withDoors(ctx, face, []);
+    // a spiral of slits, each where it fits (openings.ts) on its 2.2 m facet: open air in front, off the doors
+    for (let y = GROUND + 2.5 + i * 0.55; y < top - 3; y += n * 0.55) {
+      const box = boxOf(dressed('slit'), L / 2, y);
+      if (fits(face, ctx.others, taken, box, 0.05)) { taken.push(box); ops.push({ pts: rect(L / 2, y, 0.14, 1.1), depth: 0.6, fill: 'void', reveal: 'trim' }); }
+    }
     B.wall('new', a, b, out, G0, top, ops);
   }
   const op = offsetPoly(p, 0.45);

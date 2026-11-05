@@ -20,7 +20,9 @@ import { pointInPoly } from '../../core/math2d';
 import { floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND, type Phase, type TowerSpec } from '../spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, castleCentre, islandOutline, moatOuter, outerPoly, type WingQuad } from '../layout';
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
-import { spiralStartFor, validateStair, type StairOpts } from './stairs';
+import { spiralStartFor, validateStair, planStair, spiralNosingY, type StairOpts, type SpiralPlan } from './stairs';
+import { masses, fits, boxOf, type Face, type DoorHole } from '../openings';
+import { placeLeaves, leafPoint, leafMatrix, m4apply, leafDepth, m4swing, LIP, doorOutlines, stopPlane, type LeafPlace } from './doorGeom';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -42,6 +44,8 @@ export const SPIRAL_R = 1.9;
 export const STAIR_DOOR_W = 1.0;
 /** Distance from a shaft's centre to the flat it gets where its doors open (keeps a 1.6 m chord). */
 const chordH = (r: number) => r * Math.cos(Math.asin(Math.min(0.95, 0.8 / r)));
+/** Courtyard doors into the wings: clear width, and the rebate either side that must stay on the face too. */
+export const COURT_DOOR_W = 1.6, COURT_DOOR_LIP = 0.1;
 export const GATE = { width: 3.8, spring: 4.0, rise: 1.6, wall: 2.6, sill: GROUND - 0.1 };
 
 export type ZoneId = string;
@@ -346,13 +350,36 @@ export function planInterior(seed = WORLD_SEED): PlanX {
   }
 
   // ------------------------------------------------ courtyard doors into N, E, W (ground floor)
+  // Placed by the windows' rule (openings.ts): the opening and its rebate on the courtyard face, CLEAR from
+  // the face's ends and from any other building in front of it (the stair tower stands against N and E).
+  const others = masses();
   for (const id of ['N', 'E', 'W']) {
     const W = wings[id], ids = wingRooms[id][0];
     const pickK = id === 'N' ? ids.length - 2 : Math.floor(ids.length / 2);
-    const rr = byId.get(ids[pickK])!;
-    const [s0, s1] = sRange(W, rr.poly), sm = (s0 + s1) / 2 + (rDoor() - 0.5) * (s1 - s0 - 3) * 0.5;
-    const c = local(W.o, W.u, W.v, sm, W.dIn + T_COURT / 2);
-    exteriorDoor(`court>${rr.id}`, rr.id, 'courtyard', c, floorBase(0), W.v, 1.6, 2.45, T_COURT, W.phase === 'old' ? 'round' : 'pointed');
+    const [, , ib, ia] = W.w.quad;
+    const face: Face = { owner: W.w.id, a: ia, b: ib, out: W.v, bands: [] }, sFace = sOf(W, ia);
+    const w = COURT_DOOR_W, dressing = { hw: w / 2 + COURT_DOOR_LIP, below: 0, above: 3 };
+    // the planned room first, then its neighbours outward
+    const order = ids.map((_, k) => k).sort((a, b) => Math.abs(a - pickK) - Math.abs(b - pickK) || b - a);
+    const r = rDoor();
+    let placed = false;
+    for (const k of order) {
+      const rr = byId.get(ids[k])!;
+      // where the room meets the courtyard wall, less a margin either side for its cross walls
+      const [s0, s1] = sRange(W, clip(rr.poly, halfD(W, W.dIn - 0.3, true))), m = w / 2 + 0.25;
+      if (s1 - s0 < 2 * m) continue;
+      const sm = (s0 + s1) / 2 + (r - 0.5) * Math.max(0, s1 - s0 - 3) * 0.5;
+      // nearest spot to the planned one, in 5 cm steps, that keeps the rule
+      const spots: number[] = [];
+      for (let s = s0 + m; s <= s1 - m + 1e-9; s += 0.05) spots.push(s);
+      const s = spots.sort((a, b) => Math.abs(a - sm) - Math.abs(b - sm)).find((q) => fits(face, others, [], boxOf(dressing, q - sFace, floorBase(0))));
+      if (s === undefined) continue;
+      const c = local(W.o, W.u, W.v, s, W.dIn + T_COURT / 2);
+      exteriorDoor(`court>${rr.id}`, rr.id, 'courtyard', c, floorBase(0), W.v, w, 2.45, T_COURT, W.phase === 'old' ? 'round' : 'pointed');
+      placed = true;
+      break;
+    }
+    if (!placed) unplaced.push(`court>${id}`);
   }
 
   // ------------------------------------------------ corner towers
@@ -642,7 +669,74 @@ export function planInterior(seed = WORLD_SEED): PlanX {
 
   const plan: PlanX = { rooms, doors, stairs, seed, round, vault, tunnels, rise, phase, floorMat, sallyPort, unplaced };
   fitDoorHeads(plan);
+  fitHinges(plan);
   return plan;
+}
+
+/** The plan's doors as the castle's walls see them: every wall a door passes through is cut with its outline. */
+export function doorHoles(P: PlanX): DoorHole[] {
+  return P.doors.map((d) => {
+    const { clear, reb } = doorOutlines(d, P.rise[d.id]), leafy = d.leaf && d.kind !== 'gate';
+    return { id: d.id, c: [d.centre[0], d.centre[2]], along: d.along, normal: d.normal, wall: d.wall, clear, reb, swing: leafy ? (d.swingInto === 1 ? 1 : -1) : 0, stop: stopPlane(d) };
+  });
+}
+
+/** Whether a door's leaf, swung through its whole arc, stays in its doorway (with the rebate) or the room it swings into. */
+export function leafSwingFits(P: Pick<InteriorPlan, 'rooms'>, d: DoorSpec): boolean {
+  const [pl] = placeLeaves(d), r = P.rooms.find((x) => x.id === d.spaces[d.swingInto]);
+  if (!pl || !r) return true;
+  const { zBack } = leafDepth(pl.kind), sx = pl.mirrored ? -1 : 1;
+  // a coarser sweep than the test's (the leaf's ends and middle; rooms are convex where doors meet them)
+  for (let i = 0; i <= 12; i++) {
+    const m = leafMatrix(pl, m4swing((pl.maxAngle * i) / 12));
+    for (let k = 0; k <= 2; k++) for (const z of [zBack, 0]) {
+      const p = m4apply(m, [(sx * pl.width * k) / 2, 1, z]);
+      const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
+      const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
+      if (Math.abs(across) <= d.width / 2 + LIP && Math.abs(through) <= d.wall / 2 + 0.15) continue;
+      if (!pointInPoly(r.poly, p[0], p[2])) return false;
+    }
+  }
+  return true;
+}
+
+/** Does a point lie in a leaf's sweep: the sector its board passes through from shut to fully open? */
+function inSweep(q: V3, L: LeafPlace): boolean {
+  const dx = q[0] - L.pivot[0], dz = q[2] - L.pivot[2];
+  const x = dx * L.eU[0] + dz * L.eU[1], z = dx * L.eV[0] + dz * L.eV[1], a = Math.atan2(z, x);
+  return q[1] > L.pivot[1] - 0.05 && q[1] < L.pivot[1] + L.height + 0.05 && Math.hypot(x, z) < L.width + 0.05 && a > -0.15 && a < L.maxAngle + 0.15;
+}
+/** Do two leaves' sweeps cross (one leaf, somewhere in its swing, inside the other's)? */
+function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
+  if (Math.hypot(a.pivot[0] - b.pivot[0], a.pivot[2] - b.pivot[2]) > a.width + b.width + 0.2 || Math.abs(a.pivot[1] - b.pivot[1]) > Math.max(a.height, b.height)) return false;
+  for (const [p, q] of [[a, b], [b, a]]) for (let i = 0; i <= 12; i++) for (let k = 1; k <= 4; k++) for (const y of [0.1, p.height / 2]) {
+    if (inSweep(leafPoint(p, m4swing((p.maxAngle * i) / 12), [(p.width * k) / 4, y, 0]), q)) return true;
+  }
+  return false;
+}
+
+/**
+ * Hang each leaf so that it opens: on its other jamb when it would swing into the room's side wall (a door
+ * near a corner) or across another leaf's swing; failing both, swing it into the other room.
+ */
+export function fitHinges(P: Pick<InteriorPlan, 'rooms' | 'doors'>): void {
+  const leaf = new Map(P.doors.map((d) => [d, placeLeaves(d)[0]]));
+  const ok = (d: DoorSpec) => {
+    const pl = leaf.get(d);
+    return !pl || (leafSwingFits(P, d) && !P.doors.some((o) => o !== d && leaf.get(o) && sweepsCross(pl, leaf.get(o)!)));
+  };
+  for (const d of P.doors) {
+    if (!leaf.get(d) || ok(d)) continue;
+    const was = { hinge: d.hinge, swingInto: d.swingInto };
+    const tries: Pick<DoorSpec, 'hinge' | 'swingInto'>[] = [{ hinge: d.hinge === 'left' ? 'right' : 'left', swingInto: d.swingInto }];
+    if (P.rooms.some((r) => r.id === d.spaces[1 - d.swingInto])) for (const hinge of ['left', 'right'] as const) tries.push({ hinge, swingInto: d.swingInto === 1 ? 0 : 1 });
+    let fixed = false;
+    for (const t of tries) {
+      Object.assign(d, t); leaf.set(d, placeLeaves(d)[0]);
+      if (ok(d)) { fixed = true; break; }
+    }
+    if (!fixed) { Object.assign(d, was); leaf.set(d, placeLeaves(d)[0]); }
+  }
 }
 
 /**
@@ -688,6 +782,25 @@ export function doorHeadFits(P: PlanX, d: DoorSpec, rise = P.rise[d.id] ?? headR
   return archOutline(0, d.centre[1], d.width, d.height, d.head, rise).every(([u, y]) => tops.every((t) => y <= t(u) - HEAD_CLEAR + 1e-9));
 }
 
+/**
+ * Whether a door into a spiral stair, with its rebate (where the leaf's top goes), stays under the steps of the
+ * turn above it: in the doorway and 0.6 m into the drum, every point of the outline below their soffits.
+ */
+export function doorUnderSteps(sp: SpiralPlan, d: DoorSpec, rise = headRise(d.head, d.width)): boolean {
+  const T = Math.PI * 2, c: V2 = [d.centre[0], d.centre[2]], k = d.spaces.indexOf(sp.id) === 0 ? -1 : 1;
+  const lip = d.leaf && d.kind !== 'gate' ? LIP : 0;
+  for (const [u, y] of archOutline(0, d.centre[1], d.width + 2 * lip, d.height + lip, d.head, rise + lip)) for (let t = 0; t <= d.wall / 2 + 0.6; t += 0.1) {
+    const p = add(add(c, scale(d.along, u)), scale(d.normal, k * t)), ex = p[0] - sp.c[0], ez = p[1] - sp.c[1], r = Math.hypot(ex, ez);
+    if (r < sp.rn || r > sp.R) continue;
+    const prog0 = (Math.atan2(ez, ex) - sp.theta0) * sp.dir;
+    for (const st of sp.steps) {
+      const prog = prog0 + Math.round((st.a0 - prog0) / T) * T;
+      if (prog >= st.a0 && prog <= st.a1 && st.y > y && !st.solid && y > spiralNosingY(sp, prog) - sp.T - 0.02) return false;
+    }
+  }
+  return true;
+}
+
 /** Options the shell builds a plan's stair with (and the validator checks it with). */
 export function stairOpts(P: InteriorPlan, s: StairSpec): StairOpts {
   const r = P.rooms.find((x) => x.id === s.id);
@@ -704,10 +817,13 @@ export const HEAD_CLEAR = 0.15;
  */
 export function fitDoorHeads(P: PlanX): void {
   const flatter: Record<Head, Head | null> = { round: 'segmental', pointed: 'segmental', segmental: 'flat', flat: null };
+  const spirals = P.stairs.filter((s) => s.kind === 'spiral').map((s) => planStair(s, stairOpts(P, s)) as SpiralPlan);
   for (const d of P.doors) {
     let rise = P.rise[d.id] ?? headRise(d.head, d.width);
     let changed = false;
-    for (let it = 0; it < 200 && !doorHeadFits(P, d, rise); it++) {
+    const stairs = spirals.filter((sp) => d.spaces.includes(sp.id));
+    const fit = () => doorHeadFits(P, d, rise) && stairs.every((sp) => doorUnderSteps(sp, d, rise));
+    for (let it = 0; it < 200 && !fit(); it++) {
       if (d.height > 2.0 + 1e-6) d.height = Math.max(2.0, d.height - 0.05);
       else if (d.leaf) {
         // leaves take their head shape from DoorSpec.head alone, so flatten the head type instead

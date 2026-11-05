@@ -258,6 +258,12 @@ describe('the gate in the door system', () => {
     expect(winch.hit(atWinch, 2.2)).not.toBeNull();
     expect(winch.hit(ray([0.9, w.floor + 1.6, -4.5], [0, w.drumY, -DRUM_R]), 2.2)).toBeNull();
     expect(winch.hit(ray([0.9, w.floor + 1.6, -2.2], [0.9, w.floor + 1.6, -5]), 2.2)).toBeNull();
+    // standing over the rope slot beside the drum: the floor is not the windlass, the drum and a frame are
+    const by: [number, number, number] = [0, w.floor + 1.6, 0.25];
+    expect(winch.hit(ray(by, [0, w.floor, 1.4]), 2.2)).toBeNull();
+    expect(winch.hit(ray(by, [0.8, w.floor, 0.6]), 2.2)).toBeNull();
+    expect(winch.hit(ray(by, [0, w.drumY, -DRUM_R]), 2.2)).not.toBeNull();
+    expect(winch.hit(ray(by, [w.frameAt, w.floor + 0.6, -DRUM_R]), 2.2)).not.toBeNull();
     // use at the winch raises it; the grille's aim box starts above the raised grid
     winch.use();
     expect(winch.label()).toBe('Lower portcullis');

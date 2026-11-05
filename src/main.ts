@@ -109,7 +109,7 @@ async function main() {
   } else if (testRoom) {
     builder = new Builder(); lights = [];
   } else {
-    ({ builder, lights } = buildCastle());
+    ({ builder, lights } = buildCastle(undefined, params.get('interior') === '0' ? [] : undefined)); // no doorways without interiors
     bridge = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
     bridgeTriangles = buildBridge(builder, bridge, rngFor('bridge-stones'));
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });

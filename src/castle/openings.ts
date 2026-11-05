@@ -1,4 +1,10 @@
-// Where a window, slit or loop may sit on a flat wall face. One rule: the opening with its dressing
+// Every opening in a castle wall, and where a window, slit or loop may sit on a flat wall face.
+// Doors (and the gate) are the interior plan's DoorSpecs: the plan places the ones on the courtyard faces by
+// the rule below, and the interior carves each doorway through the castle once, with the outlines its reveal
+// and leaf follow (doorGeom doorOutlines). castle.ts cuts no doors: on each face it first marks the doors
+// through it as taken (doorHoleOn, doorBox), then places windows around them, so a window never lands on a
+// door; the stone layer keeps off the same door holes. tests/world.test.ts checks the whole castle.
+// One rule: the opening with its dressing
 // (jambs, sill, voussoirs, hood) lies wholly on one face, CLEAR from the face's ends and from any other
 // building in front of or against it, and V_CLEAR from floors, string courses, plinth and parapet.
 // If it does not fit where planned it moves up or down within its storey to clear the bands, then slides
@@ -71,10 +77,13 @@ export function convexOverlap(p: V2[], q: V2[]): boolean {
   return true;
 }
 
-/** Does the dressed box fit at this spot: on the face, clear of other masses and taken boxes? (Bands: clampToGap.) */
-export function fits(f: Face, others: Mass[], taken: Box[], b: Box): boolean {
+/**
+ * Does the dressed box fit at this spot: on the face, clear of other masses and taken boxes? (Bands: clampToGap.)
+ * `ends` is the clearance from the face's ends: CLEAR at a corner; a polygonal tower's 45° facet joints are not corners.
+ */
+export function fits(f: Face, others: Mass[], taken: Box[], b: Box, ends = CLEAR): boolean {
   const L = Math.hypot(f.b[0] - f.a[0], f.b[1] - f.a[1]);
-  if (b.s0 < CLEAR || b.s1 > L - CLEAR) return false;
+  if (b.s0 < ends || b.s1 > L - ends) return false;
   if (taken.some((t) => b.s0 < t.s1 && b.s1 > t.s0 && b.y0 < t.y1 && b.y1 > t.y0)) return false;
   const front = frontRect(f, b);
   return !others.some((m) => m.id !== f.owner && m.top + V_CLEAR > b.y0 && convexOverlap(front, m.poly));
@@ -106,4 +115,40 @@ export function clampToGap(bands: [number, number][], d: Dressed, y: number): nu
   const ymin = lo + d.below, ymax = hi - d.above;
   if (ymin > ymax + 1e-9) return null;
   return Math.min(Math.max(y, ymin), ymax);
+}
+
+// ---------------------------------------------------------------- doors in the castle's walls
+
+/** A door as the castle's walls see it (from the plan's DoorSpec and doorGeom's outlines). */
+export interface DoorHole {
+  id: string;
+  c: V2; along: V2; normal: V2; wall: number;
+  clear: V2[]; reb: V2[];   // (u along `along`, y absolute): the clear outline, and the rebated one round a leaf
+  swing: -1 | 0 | 1;        // the side of the mid-plane (along normal) the leaf swings to; 0 without a leaf
+  stop: number;             // the stop's distance from the mid-plane toward the swing side
+}
+
+/**
+ * Where a door passes through a wall face, in the face's (s, y): its rebated outline on the swing side of
+ * the stop, its clear outline elsewhere (what the interior's carve leaves of the face); null when it does not.
+ */
+export function doorHoleOn(f: { a: V2; b: V2; out: V2; y0?: number; y1?: number }, h: DoorHole): V2[] | null {
+  const dn = dot(h.normal, f.out);
+  if (Math.abs(dn) < 0.5) return null;
+  const e = norm(sub(f.b, f.a)), L = Math.hypot(f.b[0] - f.a[0], f.b[1] - f.a[1]);
+  const tAt = (u: number) => -dot(sub(add(h.c, scale(h.along, u)), f.a), f.out) / dn; // face's depth along normal
+  const t = tAt(0);
+  if (Math.abs(t) > h.wall / 2 + 0.06) return null;
+  const o = h.swing !== 0 && t * h.swing > h.stop ? h.reb : h.clear;
+  const pts = o.map(([u, y]): V2 => [dot(sub(add(add(h.c, scale(h.along, u)), scale(h.normal, tAt(u))), f.a), e), y]);
+  const ss = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  if (Math.max(...ss) < 0 || Math.min(...ss) > L) return null;
+  if (f.y0 !== undefined && f.y1 !== undefined && (Math.min(...ys) > f.y1 || Math.max(...ys) < f.y0)) return null;
+  return pts;
+}
+
+/** The taken box of a door's hole on a face: its outline, with the jamb stones either side and an arch ring over it. */
+export function doorBox(pts: V2[]): Box {
+  const ss = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return { s0: Math.min(...ss) - 0.3, s1: Math.max(...ss) + 0.3, y0: Math.min(...ys), y1: Math.max(...ys) + 0.4 };
 }
