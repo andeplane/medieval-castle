@@ -23,7 +23,7 @@ export const VIEWS: View[] = [
   { name: 'ward', label: 'East ward', mode: 'walk', pos: [44, 0, 27], target: [20, 22, -6] },
   { name: 'moat', label: 'Across the moat', mode: 'orbit', pos: [-92, 4.8, 58], target: [-10, 20, 4] },
   { name: 'courtyard', label: 'Courtyard', mode: 'walk', pos: [-11, 0, 4], target: [12, 22, -8] },
-  { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-24, 56, -16], target: [80, 20, 160] },
+  { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-28, 56, -12], target: [80, 20, 160] }, // over the keep's south parapet, clear of the cap house and the corner turret
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
   { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
 ];
@@ -81,7 +81,9 @@ export class CameraRig {
     this.camera.lookAt(new THREE.Vector3(...v.target));
     this.orbit.target.set(...v.target);
     this.setMode(v.mode);
-    // OrbitControls.update() would push a close walk/fly bookmark out to minDistance
+    // only orbit views go through the orbit control: its update pushes a close bookmark out to
+    // minDistance and clamps the polar angle, which lifted walk views looking up at the walls to the
+    // target's height (the courtyard view ended up inside the west wing)
     if (v.mode === 'orbit') this.orbit.update();
   }
 

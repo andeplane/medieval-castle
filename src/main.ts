@@ -1,12 +1,14 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
+// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
+import { StoneField } from './castle/stones/field';
+import { StoneSet } from './castle/stones/set';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
 import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable } from './world/terrain';
@@ -72,6 +74,12 @@ async function main() {
   }
   const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(castle);
+  const tStones = performance.now();
+  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
+  const layoutMs = Math.round(performance.now() - tStones);
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
+  scene.add(stones.group);
+  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
   // the main gate: two leaves with a wicket, and the portcullis (until the shell emits all DoorSpecs)
   const audio = new DoorAudio(camera);
   const gateSpecs = test ? [] : gateDoorSpecs();
@@ -174,17 +182,18 @@ async function main() {
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
   await say('LIGHTING…');
+  stones.update(camera.position, Infinity);
   await renderer.compileAsync(scene, camera);
 
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { veg?.update(camera); pipeline.render(); },
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
     tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
     use: () => interaction.use(),
     doors,
     stats: () => ({
-      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
@@ -192,6 +201,7 @@ async function main() {
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
+    info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
     screen.dispose();
     hooks.ready = true;
     return;
@@ -205,6 +215,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { fpsEl.textContent = `${Math.round(frames / acc)} fps`; frames = 0; acc = 0; }
     rig.update(dt);
+    stones.update(camera.position);
     doors.update(dt, camera.position);
     interaction.update();
     veg?.update(camera);

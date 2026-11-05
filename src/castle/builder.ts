@@ -4,6 +4,7 @@
 import * as THREE from 'three/webgpu';
 import { ShapeUtils, Vector2 } from 'three/webgpu';
 import type { V2 } from '../core/math2d';
+import type { StoneFace, Exclusion } from './stones/layout';
 
 export type MatKey = 'old' | 'new' | 'trim' | 'slate' | 'lead' | 'wood' | 'iron' | 'void' | 'glass';
 export const TILE: Record<MatKey, number> = { old: 4, new: 4, trim: 2, slate: 2, lead: 4, wood: 2, iron: 1, void: 1, glass: 1 };
@@ -42,9 +43,44 @@ export function wallFrame(a: V2, b: V2, out: V2): Frame {
 }
 
 export interface Opening { pts: V2[]; depth: number; fill: 'glass' | 'void' | 'wood' | 'none'; reveal: MatKey }
+export interface WallRecord { mat: MatKey; a: V2; b: V2; out: V2; y0: number; y1: number; openings: Opening[]; frame: Frame }
+
+/** Is the polygon corner at i convex (turning more than ~30°)? Polygon must be counter-clockwise. */
+const convexAt = (p: V2[], i: number) => {
+  const n = p.length, a = p[(i + n - 1) % n], b = p[i], c = p[(i + 1) % n];
+  const d0: V2 = [b[0] - a[0], b[1] - a[1]], d1: V2 = [c[0] - b[0], c[1] - b[1]];
+  return Math.atan2(d0[0] * d1[1] - d0[1] * d1[0], d0[0] * d1[0] + d0[1] * d1[1]) > 0.5;
+};
 
 export class Builder {
   bins: Record<MatKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin() };
+  walls: WallRecord[] = [];
+
+  // Stone records (src/castle/stones): every rubble/ashlar wall face, and every solid that stands proud
+  // of faces (so stones are not laid under jambs, sills, buttresses, string courses, plinths…).
+  stoneFaces: StoneFace[] = [];
+  stoneExcl: Exclusion[] = [];
+  /** Tag faces made now as silhouette elements (parapets, merlons, buttresses…). */
+  stoneSil = false;
+  /** Record stone faces at all (off for rubble debris and the like). */
+  stoneOn = true;
+  /** No stones below this height (buried or under water). */
+  stoneFloor = -0.35;
+  private owner = -1;
+  private owners = 0;
+  /** Run fn as one primitive: its faces are never cut by its own exclusion. */
+  private own<T>(fn: (id: number) => T): T {
+    if (this.owner >= 0) return fn(this.owner);
+    this.owner = this.owners++;
+    try { return fn(this.owner); } finally { this.owner = -1; }
+  }
+  /** Record a stone-faced rectangle of a surface drawn some other way (e.g. planar with a sloped top). */
+  stoneFace(mat: 'old' | 'new', f: Frame, s0: number, s1: number, y0: number, y1: number, u0 = 0) {
+    if (this.stoneOn && s1 - s0 >= 0.4 && y1 - y0 >= 0.3) this.stoneFaces.push({ mat, geom: { kind: 'plane', o: f.o, r: f.r, n: f.n }, s0, s1, y0, y1, u0, holes: [], ends: [false, false], sil: this.stoneSil, owner: this.owner });
+  }
+  /** A solid (given by its corner points) that stones must not be laid under. */
+  exclude(pts: V3[]) { this.stoneExcl.push({ owner: this.owner, pts }); }
+  private extrudedPts(poly: V2[], y0: number, y1: number): V3[] { return [...poly.map((q) => [q[0], y0, q[1]] as V3), ...poly.map((q) => [q[0], y1, q[1]] as V3)]; }
 
   /** Flat polygon given in a frame's (s, y) coords, facing frame.n, at depth d. */
   planar(mat: MatKey, f: Frame, pts: V2[], d = 0, holes: V2[][] = [], u0 = 0) {
@@ -62,10 +98,14 @@ export class Builder {
   }
 
   /** Vertical wall face from a to b (2D), y0..y1, outward normal out, with openings cut through it. */
-  wall(mat: MatKey, a: V2, b: V2, out: V2, y0: number, y1: number, openings: Opening[] = [], u0 = 0) {
+  wall(mat: MatKey, a: V2, b: V2, out: V2, y0: number, y1: number, openings: Opening[] = [], u0 = 0, ends: [boolean, boolean] = [false, false]) {
     const f = wallFrame(a, b, out), L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    this.walls.push({ mat, a, b, out, y0, y1, openings, frame: f });
     this.planar(mat, f, [[0, y0], [L, y0], [L, y1], [0, y1]], 0, openings.map((o) => o.pts), u0);
     for (const o of openings) this.openingInsides(f, o);
+    if (this.stoneOn && (mat === 'old' || mat === 'new') && L >= 0.4 && y1 - Math.max(y0, this.stoneFloor) >= 0.3) {
+      this.stoneFaces.push({ mat, geom: { kind: 'plane', o: f.o, r: f.r, n: f.n }, s0: 0, s1: L, y0: Math.max(y0, this.stoneFloor), y1, u0, holes: openings.map((o) => o.pts), ends, sil: this.stoneSil, owner: this.owner });
+    }
     return f;
   }
 
@@ -90,15 +130,19 @@ export class Builder {
 
   /** Extrude a polygon (x, z) between y0 and y1. Side faces get u along the perimeter. */
   prism(mat: MatKey, poly: V2[], y0: number, y1: number, opts: { top?: MatKey | null; bottom?: boolean; sideMat?: MatKey } = {}) {
+    this.own(() => this.prismInner(mat, poly, y0, y1, opts));
+  }
+  private prismInner(mat: MatKey, poly: V2[], y0: number, y1: number, opts: { top?: MatKey | null; bottom?: boolean; sideMat?: MatKey }) {
     let p = poly;
     let s = 0; for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a[0] * b[1] - b[0] * a[1]; }
     if (s < 0) p = [...p].reverse();
+    this.exclude(this.extrudedPts(p, y0, y1));
     let u = 0;
     for (let i = 0; i < p.length; i++) {
       const a = p[i], b = p[(i + 1) % p.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
       if (L < 1e-6) continue;
       const out: V2 = [(b[1] - a[1]) / L, -(b[0] - a[0]) / L];
-      this.wall(opts.sideMat ?? mat, a, b, out, y0, y1, [], u);
+      this.wall(opts.sideMat ?? mat, a, b, out, y0, y1, [], u, [convexAt(p, i), convexAt(p, (i + 1) % p.length)]);
       u += L;
     }
     const top = opts.top === undefined ? mat : opts.top;
@@ -118,12 +162,16 @@ export class Builder {
 
   /** Ring wall between an outer and inner polygon (parapets, machicolation galleries). */
   ringPrism(mat: MatKey, outer: V2[], inner: V2[], y0: number, y1: number, bottom = true) {
+    this.own(() => this.ringPrismInner(mat, outer, inner, y0, y1, bottom));
+  }
+  private ringPrismInner(mat: MatKey, outer: V2[], inner: V2[], y0: number, y1: number, bottom: boolean) {
+    this.exclude([...this.extrudedPts(outer, y0, y1), ...this.extrudedPts(inner, y0, y1)]);
     const ccw = (p: V2[]) => { let s = 0; for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a[0] * b[1] - b[0] * a[1]; } return s >= 0 ? p : [...p].reverse(); };
     const o = ccw(outer), inn = ccw(inner);
     let u = 0;
     for (let i = 0; i < o.length; i++) {
       const a = o[i], b = o[(i + 1) % o.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      this.wall(mat, a, b, [(b[1] - a[1]) / L, -(b[0] - a[0]) / L], y0, y1, [], u); u += L;
+      this.wall(mat, a, b, [(b[1] - a[1]) / L, -(b[0] - a[0]) / L], y0, y1, [], u, [convexAt(o, i), convexAt(o, (i + 1) % o.length)]); u += L;
     }
     u = 0;
     for (let i = 0; i < inn.length; i++) {
@@ -143,6 +191,10 @@ export class Builder {
 
   /** Frustum between polygon a at y0 and polygon b at y1 (same vertex count), e.g. a battered plinth. */
   loft(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number) {
+    this.own(() => this.loftInner(mat, a, y0, b, y1));
+  }
+  private loftInner(mat: MatKey, a: V2[], y0: number, b: V2[], y1: number) {
+    this.exclude([...a.map((q) => [q[0], y0, q[1]] as V3), ...b.map((q) => [q[0], y1, q[1]] as V3)]);
     const T = TILE[mat], n = a.length, bin = this.bins[mat];
     let u = 0;
     for (let i = 0; i < n; i++) {
@@ -154,8 +206,28 @@ export class Builder {
       const out = v3norm([mid[0] - cx, 0.2, mid[1] - cz]);
       const fn = v3norm(v3cross(v3sub(B, A), v3sub(D, A)));
       const nn: V3 = v3dot(fn, out) < 0 ? [-fn[0], -fn[1], -fn[2]] : fn;
-      bin.tri(A, B, C, nn, [u / T, y0 / T], [(u + L) / T, y0 / T], [(u + L) / T, y1 / T]);
-      bin.tri(A, C, D, nn, [u / T, y0 / T], [(u + L) / T, y1 / T], [u / T, y1 / T]);
+      // u is projected on the bottom edge (not stretched to the shorter top edge), so courses and the
+      // real stones on battered plinths line up with the texture
+      const r: V2 = [(a[j][0] - a[i][0]) / L, (a[j][1] - a[i][1]) / L];
+      const sC = (b[j][0] - a[i][0]) * r[0] + (b[j][1] - a[i][1]) * r[1], sD = (b[i][0] - a[i][0]) * r[0] + (b[i][1] - a[i][1]) * r[1];
+      bin.tri(A, B, C, nn, [u / T, y0 / T], [(u + L) / T, y0 / T], [(u + sC) / T, y1 / T]);
+      bin.tri(A, C, D, nn, [u / T, y0 / T], [(u + sC) / T, y1 / T], [(u + sD) / T, y1 / T]);
+      // stone faces: battered trapezoids (top edge parallel to the bottom edge)
+      const sideOk = Math.abs((b[j][0] - b[i][0]) * r[1] - (b[j][1] - b[i][1]) * r[0]) < 1e-3 * Math.max(1, L);
+      if (this.stoneOn && (mat === 'old' || mat === 'new') && sideOk && L >= 0.6 && y1 - y0 >= 0.5) {
+        let nh: V2 = [r[1], -r[0]];
+        if (nh[0] * (mid[0] - cx) + nh[1] * (mid[1] - cz) < 0) nh = [-nh[0], -nh[1]];
+        const run = (a[i][0] - b[i][0]) * nh[0] + (a[i][1] - b[i][1]) * nh[1], H = y1 - y0;
+        const ns = v3norm([nh[0] * H, run, nh[1] * H]);
+        const sMin = Math.min(0, sD), sMax = Math.max(L, sC);
+        const yb = Math.max(y0, this.stoneFloor);
+        if (y1 - yb >= 0.5) this.stoneFaces.push({
+          mat, geom: { kind: 'plane', o: [a[i][0], 0, a[i][1]], r: [r[0], 0, r[1]], n: [nh[0], 0, nh[1]], bat: { y0, H, run, ns } },
+          s0: sMin, s1: sMax, y0: yb, y1, u0: u,
+          holes: [[[sMin - 1, y0], [0, y0], [sD, y1], [sMin - 1, y1]], [[L, y0], [sMax + 1, y0], [sMax + 1, y1], [sC, y1]]],
+          ends: [false, false], sil: this.stoneSil, owner: this.owner,
+        });
+      }
       u += L;
     }
   }
@@ -172,6 +244,12 @@ export class Builder {
   cyl(mat: MatKey, cx: number, cz: number, r0: number, r1: number, y0: number, y1: number, seg = 32, opts: { top?: MatKey | null; a0?: number; a1?: number; inward?: boolean } = {}) {
     const T = TILE[mat], bin = this.bins[mat], a0 = opts.a0 ?? 0, a1 = opts.a1 ?? Math.PI * 2;
     const slope = (r0 - r1) / Math.max(1e-6, y1 - y0);
+    this.own((id) => {
+      if (!opts.inward) this.exclude(Array.from({ length: 32 }, (_, i) => { const t = a0 + ((a1 - a0) * (i >> 1)) / 15, r = i & 1 ? r1 : r0; return [cx + Math.cos(t) * r, i & 1 ? y1 : y0, cz + Math.sin(t) * r] as V3; }));
+      if (this.stoneOn && (mat === 'old' || mat === 'new') && !opts.inward && Math.abs(r0 - r1) < 1e-3 && r0 >= 0.8 && y1 - Math.max(y0, this.stoneFloor) >= 0.5) {
+        this.stoneFaces.push({ mat, geom: { kind: 'cyl', cx, cz, R: r0 }, s0: a0 * r0, s1: a1 * r0, y0: Math.max(y0, this.stoneFloor), y1, u0: 0, holes: [], ends: [false, false], sil: this.stoneSil, owner: id });
+      }
+    });
     const rm = (r0 + r1) / 2;
     const sign = opts.inward ? -1 : 1;
     for (let i = 0; i < seg; i++) {

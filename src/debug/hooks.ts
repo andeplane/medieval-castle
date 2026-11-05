@@ -33,8 +33,16 @@ export function installHooks(d: HookDeps) {
     }),
     views: () => VIEWS.map((v) => v.name),
     setCamera: (name: string) => { const v = VIEWS.find((x) => x.name === name); if (v) d.rig.go(v); return !!v; },
+    /** Free camera for close-up checks: __game.lookFrom([x, y, z], [tx, ty, tz]). */
+    lookFrom: (pos: [number, number, number], target: [number, number, number], mode: 'orbit' | 'fly' | 'walk' = 'fly') => {
+      d.rig.go({ name: 'custom', label: 'Custom', mode, pos, target });
+      if (mode === 'fly') d.camera.position.set(...pos); // go() lets the orbit control clamp to its 8 m minimum; same ray, so the look direction holds
+    },
     /** free camera pose for close-up material checks: setPose([x,y,z],[tx,ty,tz]) */
-    setPose: (pos: [number, number, number], target: [number, number, number]) => d.rig.go({ name: 'pose', label: 'pose', mode: 'fly', pos, target }),
+    setPose: (pos: [number, number, number], target: [number, number, number]) => {
+      d.rig.go({ name: 'pose', label: 'pose', mode: 'fly', pos, target });
+      d.camera.position.set(...pos);
+    },
     setTime: (h: number) => d.setTime(h),
     step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); d.tick?.(1 / 60); await d.renderNow(); } },
     /** Use what the crosshair is on; returns whether anything was used. */
