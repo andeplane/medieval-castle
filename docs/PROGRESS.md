@@ -306,3 +306,32 @@ Known issues / next
 - `tests/revetment.test.ts` replicates the near terrain grid (380 m / 420 cells). Update `NEAR` there if the grid changes.
 - `turf.ts` `rimMask` duplicates the terrain's island ground mask.
 - Physics must treat water as a barrier so the far bank stays unreachable.
+
+## 2026-11-05: UI through impeccable (branch `ui-impeccable`)
+
+Anders asked for the vendored `impeccable` skill to be used on every UI surface. Its launcher ran (`impeccable context`); `init` and `document` ran without a live interview (the agent was a subagent), so PRODUCT.md and DESIGN.md mark inferred facts for Anders to confirm.
+
+Done
+- `PRODUCT.md` (product truth), `DESIGN.md` + `.impeccable/design.json` (design system "Torchlight on Stone": ink, bone, one brass accent; IM Fell English SC for titles, system sans for everything read at a glance).
+- `src/ui/ui.css`: one stylesheet for tokens, loading caption, HUD, tools panel and boot error, linked from `index.html` and `props.html` (the inline styles are gone). The title face is self-hosted (`src/ui/fonts/`, OFL, 57 kB, in CREDITS.md).
+- `src/ui/hud.ts` `createHud(deps, opts)`: crosshair dot that opens a brass ring on a usable target, the use prompt ("E Open door"), a help line while the mouse is free, a Controls card on the first pointer lock that fades after 4.5 s (H shows it again), toasts, and the review tools panel (backquote toggles it, Esc closes it; opening it while locked releases the mouse). Document, keys and timers are injected.
+  - API for other modules (the physics player): `hud.setHelp(text | items)`, `hud.setPrompt(text | null, key?)`, `hud.setLocked(bool)`, `hud.toast(text, ms?)`, `hud.showControls()`, `hud.promptView` (pass as `createInteraction(..., { view })`). `__game.hud` exposes it for captures.
+- `src/ui/tools.ts` `createToolsPanel`: choice (segmented), range, actions grid and select sections; used by the castle page, `?test=doors` and `props.html`.
+- `src/ui/gameHud.ts` `wireGameHud(hud, { rig, views, time, walkFrom, search })`: camera mode, time of day (hh:mm), bookmarks, fps, and help per mode and lock state. The rig is an interface, so the physics controller can stand in. The tools start shut when the start bookmark is a walk view and open for orbit and fly.
+- `src/ui/help.ts`: help presets per mode, `parseHelp` for old "WASD walk · E use" strings, `?ui=` flags. `src/ui/error.ts`: a boot error with a Reload button instead of a bare text line.
+- `?ui` keeps the HUD under `?shot`: `?ui=locked` draws it as if the mouse were captured, `tools` / `notools` opens or shuts the panel, `card` holds the Controls card.
+- Loading caption: "Moated Castle" in the title face, the step in words and the percentage apart in tabular figures, `aria-valuetext`; step labels in sentence case.
+- `interact.ts` is unchanged: main.ts passes `view: hud.promptView`.
+- Tests: `tests/ui/*` (happy-dom + typed fakes for keys, timers and the rig), `src/ui/**` at 100 % lines in coverage.
+
+- The dot also shows whenever something usable is under it, even with the mouse free (drag-look).
+- `lights.html` (merged from main) uses the same chrome: tools panel "Firelight", help line, boot error.
+
+Checked in headless Chromium against the merged build (`?webgl&shot&ui`): backquote shuts and reopens the tools (focus goes to "Orbit"), Esc shuts them, H shows the Controls card. Standing 2.1 m from the gate in walk mode, the prompt read "Open gate"; pressing E on the keyboard (the player's key handler) opened it (`main-gate` 0 → 1 after 6 s). Contrast: bone on chip ink ≥ 6.5:1 and brass keycaps ≥ 4.6:1 over white sky (computed). Not checked: real pointer lock (headless cannot grab the mouse) and a real touch device.
+
+Known issues / next
+- Captures run on swiftshader on a loaded machine, so the locked HUD in captures is drawn via `__game.hud.setLocked(true)`, not real pointer lock.
+- The tools open on orbit/fly start views, which includes the default `hero` view on Pages; Anders may prefer them shut everywhere.
+- With interior bookmarks the Views grid has 17 entries and scrolls inside the panel; group exterior/interior when it grows.
+- The help line still names the old walk controls; the physics player should call `hud.setHelp` with its own (jump, crouch).
+- No touch controls: on a phone the HUD lays out, but the game cannot be played.

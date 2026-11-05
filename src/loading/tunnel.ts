@@ -67,20 +67,33 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
   const m = new LoadingModel({ fixed: opts.fixed, reduced: d.reducedMotion });
   const doc = root.ownerDocument;
   root.textContent = '';
+  root.classList.remove('plain'); // the static placeholder's look
   const canvas = doc.createElement('canvas');
   const caption = doc.createElement('div');
   caption.className = 'cap';
   const title = doc.createElement('div');
   title.className = 'title';
-  title.textContent = 'MOATED CASTLE';
+  title.textContent = 'Moated Castle';
+  // the step in words, then the percentage in tabular figures so the line does not jitter
   const labelEl = doc.createElement('div');
   labelEl.className = 'label';
+  const stepEl = doc.createElement('span');
+  stepEl.className = 'step';
+  const pctEl = doc.createElement('span');
+  pctEl.className = 'pct';
+  labelEl.append(stepEl, pctEl);
   caption.append(title, labelEl);
   root.append(canvas, caption);
   root.setAttribute('role', 'progressbar');
+  root.setAttribute('aria-label', 'Loading Moated Castle');
   root.setAttribute('aria-valuemin', '0');
   root.setAttribute('aria-valuemax', '100');
-  const syncLabel = () => { labelEl.textContent = m.caption; root.setAttribute('aria-valuenow', String(m.percent)); };
+  const syncLabel = () => {
+    stepEl.textContent = m.label;
+    pctEl.textContent = `${m.percent}%`;
+    root.setAttribute('aria-valuenow', String(m.percent));
+    root.setAttribute('aria-valuetext', m.caption);
+  };
 
   const gl = d.getGL(canvas);
   const renderer = gl ? d.makeRenderer(gl, PALETTE, d.reducedMotion) : null;
