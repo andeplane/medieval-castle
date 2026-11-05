@@ -48,9 +48,9 @@ export interface Physics extends PhysicsApi, CharacterPhysics {
   onFixed(cb: (dt: number) => void): () => void;
   /**
    * Walk an object's meshes, bake world matrices, one trimesh per tag. Instanced meshes add one copy
-   * per instance, skipping instances whose origin lies outside `crop`. Returns triangles added.
+   * per instance, keeping only instances whose origin (x, z) passes `keep`. Returns triangles added.
    */
-  addObject(obj: THREE.Object3D, filter?: MeshFilter, tagOf?: (m: THREE.Mesh) => string, crop?: Crop): number;
+  addObject(obj: THREE.Object3D, filter?: MeshFilter, tagOf?: (m: THREE.Mesh) => string, keep?: (x: number, z: number) => boolean): number;
   /** Near terrain as an open trimesh (see gridSoup), with optional holes for stairs into cellars. */
   addTerrain(g: HeightGrid, crop: Crop, hole?: (x: number, z: number) => boolean, tag?: string): number;
   /** Invisible wall from y0(point) up to y1, blocking characters only (not rays). */
@@ -167,7 +167,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       addSoup(timed(() => weld(pos, index)), tag, G.world);
     },
 
-    addObject(obj, filter = solidMeshes, tagOf = defaultTag, crop) {
+    addObject(obj, filter = solidMeshes, tagOf = defaultTag, keep) {
       obj.updateMatrixWorld(true);
       const before = triangles;
       const soups = new Map<string, TriSoup[]>();
@@ -180,7 +180,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
           const arr = im.instanceMatrix.array;
           for (let i = 0; i < im.count; i++) {
             const e = mul4(im.matrixWorld.elements, arr, i * 16);
-            if (crop && (e[12] < crop.x0 || e[12] > crop.x1 || e[14] < crop.z0 || e[14] > crop.z1)) continue;
+            if (keep && !keep(e[12], e[14])) continue;
             const { pos, index } = bakePositions(im.geometry, e);
             push(tagOf(m), weld(pos, index));
           }

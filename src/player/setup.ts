@@ -65,9 +65,9 @@ export async function setupPlay(d: PlayDeps) {
   const crop = { x0: ix0 - 6, x1: ix1 + 6, z0: iz0 - 6, z1: iz1 + 6 };
   const grid = terrainGrid(d.terrain);
   const terrainTris = grid ? physics.addTerrain(grid, crop, hole) : 0;
-  // the landscape's near rocks (instanced) that stand on or by the island
+  // the landscape's near rocks (instanced) that stand on the island; the moat-bank ones are out of reach
   const rocks = d.terrain.getObjectByName('rocks');
-  const rockTris = rocks ? physics.addObject(rocks, (m) => m.name.startsWith('rocks-near'), () => 'rock', crop) : 0;
+  const rockTris = rocks ? physics.addObject(rocks, (m) => m.name.startsWith('rocks-near'), () => 'rock', (x, z) => pointInPoly(ISLAND, x, z)) : 0;
 
   // the island boundary: only near the surface, so cellars and the moat tunnel can pass under it
   const boundary = boundaryOutline(ISLAND, d.bridge ?? undefined);
