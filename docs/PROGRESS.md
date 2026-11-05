@@ -25,7 +25,7 @@ Done
 Numbers (headless WebGL2, `__game.state()`, 1600×900)
 - castleTriangles: 128,085 → 128,177.
 - Same view and frame, paving shown vs hidden: +4 draw calls and +164 triangles. That is the one paving mesh (41 triangles) in each of the four passes that draw it (main, AO pre-pass, water reflector and one more), and it is the same in every view.
-- Per bookmark, before (main) → after: courtyard 716 → 726, gate 542 → 550, gatepass-court 446 → 442, court-ground 718 → 726, court-close 380 → 390. The paving accounts for 4 of each difference. The rest is not pinned down: the well dressing goes into existing bins, and the first frame after a camera jump also re-renders shadows, so the counts move by a few between runs.
+- Per bookmark, before (main) → after: courtyard 716 → 726, gate 542 → 550, gatepass-court 446 → 442, court-ground 718 → 726, court-close 380 → 390, court-stair 542 → 534. Measured on the second frame, court-ground is 708 with the paving and 704 without. The paving accounts for 4 of each difference. The rest is not pinned down: the well dressing goes into existing bins, and the first frame after a camera jump also re-renders shadows, so the counts move by a few between runs.
 
 Captures: `castle-plan/courtyard/` holds before/after pairs of `court-ground`, `court-close`, `gatepass-court`, `courtyard`, `gate` and `court-stair`.
 
