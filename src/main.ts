@@ -1,7 +1,8 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
 // ?ao=0 (no ambient occlusion), ?shot (hide UI), ?debug (three Inspector), ?seed=N,
-// ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn).
+// ?play (start walking at the spawn), ?test=walk (movement test course on the east lawn),
+// ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -9,7 +10,7 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
@@ -26,13 +27,19 @@ import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { setupPlay, type InteriorCollision } from './player/setup';
+import type { LoadingScreen } from './loading/tunnel';
+import { stepProgress, textureProgress } from './loading/model';
+import { setTextureProgress } from './render/texpool';
 
 const params = new URLSearchParams(location.search);
-const loading = document.getElementById('loading')!;
-const say = (s: string) => { loading.textContent = s; return new Promise((r) => setTimeout(r, 0)); };
+// Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel;
+// texture jobs fill CUTTING → RAISING.
+let screen: LoadingScreen;
+const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -54,16 +61,29 @@ async function main() {
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
+  await terrainReady;
 
   await say('RAISING THE WALLS…');
-  const { builder, lights } = buildCastle();
-  const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, heightAt);
-  buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
+  const test = params.get('test');
+  let builder, lights: unknown[];
+  let bridge: ReturnType<typeof buildBridge> | null = null;
+  if (test === 'stairs') {
+    const { buildStairTest } = await import('./debug/stairtest');
+    const t = buildStairTest(params.has('cut'));
+    builder = t.builder; lights = t.lights;
+    for (const l of t.lights) scene.add(l);
+    VIEWS.splice(0, VIEWS.length, ...t.views);
+  } else {
+    ({ builder, lights } = buildCastle());
+    const b = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly, heightAt);
+    buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - b.start[0], z - b.start[1]) < 3.2);
+    bridge = b;
+  }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
   const castle = builder.build(mats);
   scene.add(castle);
   let course: { info: CourseInfo; object: THREE.Object3D } | null = null;
-  if (params.get('test') === 'walk') {
+  if (test === 'walk') {
     const cb = new Builder();
     const info = buildCourse(cb);
     course = { info, object: cb.build(mats) };
@@ -80,7 +100,7 @@ async function main() {
 
   await say('PLANTING TREES…');
   let veg: Vegetation | null = null;
-  try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
+  if (!test) try { veg = await buildVegetation({ renderer, scene, keepClear: VIEWS.map((v) => [v.pos[0], v.pos[2]]), macro: M.macro }); scene.add(veg.group); } catch (e) { console.error('vegetation failed', e); }
 
   // post: GTAO from a single-sampled normal pre-pass, then the main pass, then a light grade
   // (threejs-postprocessing). ?ao=0 drops AO, ?aoview shows it, ?grade=0 drops the grade.
@@ -129,6 +149,8 @@ async function main() {
   const orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = true; orbit.dampingFactor = 0.08;
   orbit.minDistance = 8; orbit.maxDistance = 1200; orbit.maxPolarAngle = Math.PI * 0.495;
+  // the stair bookmarks are close, upward-looking views: lift the orbit clamps
+  if (test === 'stairs') { orbit.minDistance = 0.01; orbit.maxPolarAngle = Math.PI; }
   const rig = new CameraRig(camera, orbit, input);
   rig.player = player;
   rig.alpha = () => physics.alpha;
@@ -210,7 +232,7 @@ async function main() {
     physics, player, input: scripted, course: course?.info ?? null, interior,
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint() },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, vegetation: veg?.stats(), windows: lights.length,
+      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       physics: { ...physics.stats(), ...play.timings },
     }),
@@ -218,7 +240,7 @@ async function main() {
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
-    loading.remove();
+    screen.dispose();
     hooks.ready = true;
     return;
   }
@@ -236,9 +258,13 @@ async function main() {
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  loading.style.opacity = '0';
-  setTimeout(() => loading.remove(), 700);
   hooks.ready = true;
+  await screen.finish();
 }
 
-main().catch((e) => { console.error(e); loading.textContent = 'Something went wrong: ' + (e?.message ?? e); });
+/** Boot the castle behind the loading screen (called by src/loading/entry.ts). */
+export function boot(loading: LoadingScreen) {
+  screen = loading;
+  setTextureProgress((done, total) => void screen.progress(textureProgress(done, total)));
+  return main().catch((e) => { console.error(e); screen.dispose(); const el = document.createElement('div'); el.id = 'loading'; el.textContent = 'Something went wrong: ' + (e?.message ?? e); document.body.appendChild(el); });
+}

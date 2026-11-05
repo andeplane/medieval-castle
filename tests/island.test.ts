@@ -27,9 +27,18 @@ function terrainObject(size = 240, seg = 160) {
   const p = g.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < p.count; i++) p.setY(i, heightAt(p.getX(i), p.getZ(i)));
   const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial()); mesh.name = 'terrain-near';
-  const grp = new THREE.Group(); grp.add(mesh);
+  // a rock on the lawn (near: collides) and one far away (far detail: ignored), like buildRocks
+  const rocks = new THREE.Group(); rocks.name = 'rocks';
+  for (const tag of ['near', 'far']) {
+    const im = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), new THREE.MeshBasicMaterial(), 1);
+    im.name = `rocks-${tag}-0`;
+    im.setMatrixAt(0, new THREE.Matrix4().makeTranslation(ROCK[0], heightAt(ROCK[0], ROCK[1]) + 0.4, ROCK[1]));
+    rocks.add(im);
+  }
+  const grp = new THREE.Group(); grp.add(mesh, rocks);
   return grp;
 }
+const ROCK: V2 = (() => { const e = ISLAND[24], l = Math.hypot(e[0], e[1]); return [e[0] * (1 - 12 / l), e[1] * (1 - 12 / l)]; })();
 
 describe('walking the island', { timeout: 60_000 }, () => {
   let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>;
@@ -66,6 +75,8 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(t.castleTris).toBeGreaterThan(50_000);
     expect(t.terrainTris).toBeGreaterThan(10_000);
     expect(t.interiorTris).toBe(12);
+    expect(t.rockTris).toBe(12); // the near rock only
+    expect(play.physics.raycast([ROCK[0], 60, ROCK[1]], [0, -1, 0], 80)?.tag).toBe('rock');
     expect(play.physics.stats().characters).toBe(1);
   });
 

@@ -8,7 +8,7 @@ import type { PhysicsApi, V3, Quat } from '../castle/interior/types';
 import type { V2 } from '../core/math2d';
 import { type Clock, systemClock } from '../core/clock';
 import type { CharacterBody, CharacterPhysics, CharacterShape, CharacterHit } from '../character/types';
-import { bakePositions, weld, mergeSoups, gridSoup, ribbon, type TriSoup, type HeightGrid } from './mesh';
+import { bakePositions, mul4, weld, mergeSoups, gridSoup, ribbon, type TriSoup, type HeightGrid } from './mesh';
 
 export const DT = 1 / 60;
 const MAX_STEPS = 5;
@@ -46,8 +46,11 @@ export interface Physics extends PhysicsApi, CharacterPhysics {
   readonly alpha: number;
   /** Called every fixed tick before the world steps (characters, doors). Returns an unsubscribe. */
   onFixed(cb: (dt: number) => void): () => void;
-  /** Walk an object's meshes, bake world matrices, one trimesh per tag. Returns triangles added. */
-  addObject(obj: THREE.Object3D, filter?: MeshFilter, tagOf?: (m: THREE.Mesh) => string): number;
+  /**
+   * Walk an object's meshes, bake world matrices, one trimesh per tag. Instanced meshes add one copy
+   * per instance, skipping instances whose origin lies outside `crop`. Returns triangles added.
+   */
+  addObject(obj: THREE.Object3D, filter?: MeshFilter, tagOf?: (m: THREE.Mesh) => string, crop?: Crop): number;
   /** Near terrain as an open trimesh (see gridSoup), with optional holes for stairs into cellars. */
   addTerrain(g: HeightGrid, crop: Crop, hole?: (x: number, z: number) => boolean, tag?: string): number;
   /** Invisible wall from y0(point) up to y1, blocking characters only (not rays). */
@@ -164,16 +167,27 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
       addSoup(timed(() => weld(pos, index)), tag, G.world);
     },
 
-    addObject(obj, filter = solidMeshes, tagOf = defaultTag) {
+    addObject(obj, filter = solidMeshes, tagOf = defaultTag, crop) {
       obj.updateMatrixWorld(true);
       const before = triangles;
       const soups = new Map<string, TriSoup[]>();
+      const push = (tag: string, s: TriSoup) => (soups.get(tag) ?? soups.set(tag, []).get(tag)!).push(s);
       timed(() => obj.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh || !filter(m)) return;
+        const im = o as THREE.InstancedMesh;
+        if (im.isInstancedMesh) {
+          const arr = im.instanceMatrix.array;
+          for (let i = 0; i < im.count; i++) {
+            const e = mul4(im.matrixWorld.elements, arr, i * 16);
+            if (crop && (e[12] < crop.x0 || e[12] > crop.x1 || e[14] < crop.z0 || e[14] > crop.z1)) continue;
+            const { pos, index } = bakePositions(im.geometry, e);
+            push(tagOf(m), weld(pos, index));
+          }
+          return;
+        }
         const { pos, index } = bakePositions(m.geometry, m.matrixWorld.elements);
-        const tag = tagOf(m);
-        (soups.get(tag) ?? soups.set(tag, []).get(tag)!).push(weld(pos, index));
+        push(tagOf(m), weld(pos, index));
       }));
       for (const [tag, list] of soups) addSoup(list.length === 1 ? list[0] : mergeSoups(list), tag, G.world);
       return triangles - before;

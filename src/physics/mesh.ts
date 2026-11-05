@@ -7,6 +7,17 @@ import type { V2 } from '../core/math2d';
 export interface TriSoup { vertices: Float32Array; indices: Uint32Array }
 
 /** World-space positions (and index, if any) of a geometry under a matrix (column-major 4×4). */
+/** Column-major 4×4 product a·b (Matrix4.elements layout); b is read from `bo` on (instance arrays). */
+export function mul4(a: ArrayLike<number>, b: ArrayLike<number>, bo = 0): number[] {
+  const o = new Array<number>(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[bo + c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+
 export function bakePositions(geometry: THREE.BufferGeometry, m?: ArrayLike<number>): { pos: Float32Array; index: ArrayLike<number> | null } {
   const a = geometry.getAttribute('position') as THREE.BufferAttribute;
   const n = a.count, pos = new Float32Array(n * 3);

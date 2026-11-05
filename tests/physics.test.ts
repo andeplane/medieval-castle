@@ -2,7 +2,7 @@
 // meshes from three objects, terrain with holes, kinematic boxes, raycasts, the fixed-step accumulator.
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { weld, gridSoup, ribbon, mergeSoups, bakePositions } from '../src/physics/mesh';
+import { weld, gridSoup, ribbon, mergeSoups, bakePositions, mul4 } from '../src/physics/mesh';
 import { boundaryOutline } from '../src/physics/boundary';
 import { createPhysics, DT, solidMeshes, type Physics } from '../src/physics/world';
 import { pointInPoly, type V2 } from '../src/core/math2d';
@@ -79,6 +79,23 @@ describe('physics world', () => {
     expect(P.raycast([24.5, 5, 0.5], [0, -2, 0], 10)?.tag).toBe('mesh');
     expect(solidMeshes(hidden)).toBe(false);
     expect(P.addObject(grp, () => false)).toBe(0);
+  });
+
+  it('adds instanced meshes one copy per instance, cropped by instance origin', () => {
+    const grp = new THREE.Group(); grp.position.set(0, 0, 30);
+    const im = new THREE.InstancedMesh(boxGeometry(-0.5, 0.5, 0, 1, -0.5, 0.5), new THREE.MeshBasicMaterial(), 3);
+    im.name = 'rocks-near-0';
+    const m = new THREE.Matrix4();
+    [0, 5, 50].forEach((x, i) => im.setMatrixAt(i, m.makeRotationY(i).setPosition(x, 0, 0)));
+    grp.add(im);
+    expect(P.addObject(grp, undefined, () => 'rock', { x0: -10, x1: 10, z0: 20, z1: 40 })).toBe(24);
+    expect(P.raycast([5, 5, 30], [0, -1, 0], 10)?.tag).toBe('rock');
+    expect(P.raycast([5, 5, 30], [0, -1, 0], 10)?.point[1]).toBeCloseTo(1, 3);
+    expect(P.raycast([50, 5, 30], [0, -1, 0], 10)).toBeNull(); // cropped away
+    expect(P.addObject(grp)).toBe(36); // no crop: all three, tagged by name
+    // mul4 matches Matrix4.multiply
+    const a = new THREE.Matrix4().makeRotationX(0.3).setPosition(1, 2, 3), b = new THREE.Matrix4().makeScale(2, 3, 4).setPosition(-1, 0, 5);
+    expect(mul4(a.elements, b.elements)).toEqual(new THREE.Matrix4().multiplyMatrices(a, b).elements.map((v) => expect.closeTo(v, 9)));
   });
 
   it('raycasts return point, normal, distance and tag, or null', () => {

@@ -5,7 +5,7 @@
 // it read as old.
 import * as THREE from 'three/webgpu';
 import {
-  texture, uv, positionWorld, normalWorld, mix, vec2, vec3, vec4, float, int, color, smoothstep, normalMap, clamp, fract, floor, round, abs, min, max, attribute, sin, time,
+  texture, uv, positionWorld, normalWorld, mix, vec2, vec3, vec4, float, int, color, smoothstep, normalMap, clamp, fract, floor, round, abs, min, max, sin, time,
   positionLocal, instanceIndex, positionView, normalViewGeometry, cameraViewMatrix, uniform, hash, select, Fn, Loop, Break, If,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
@@ -88,6 +88,7 @@ function parallax(set: GpuSet, o: Pom) {
   })().toVar('pom');
   return { uv: res.xy, depth: res.z, shadow: res.w, gx, gy };
 }
+import { makeTerrainMaterial, type GroundData } from '../world/terrainMaterial';
 
 function dataTex(data: Uint8Array, N: number, srgb: boolean) {
   const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -216,29 +217,7 @@ export async function makeMaterials(): Promise<Materials> {
     glass.metalnessNode = mix(float(0.15), float(0.4), leadMask);
   }
 
-  // Terrain: four albedo layers blended by a per-vertex mask (grass, dirt, rock, mud) plus snow by height.
-  const G = T.ground as unknown as { size: number; grass: Uint8Array; dirt: Uint8Array; rock: Uint8Array; mud: Uint8Array; normal: Uint8Array };
-  const gl = { grass: dataTex(G.grass, G.size, true), dirt: dataTex(G.dirt, G.size, true), rock: dataTex(G.rock, G.size, true), mud: dataTex(G.mud, G.size, true), normal: dataTex(G.normal, G.size, false) };
-  const terrain = new THREE.MeshStandardNodeMaterial({ roughness: 0.95, metalness: 0 });
-  {
-    const p = positionWorld;
-    const w = attribute('mask', 'vec4');
-    const uvA = uv(), uvB = vec2(p.x.mul(0.8).sub(p.z.mul(0.6)), p.x.mul(0.6).add(p.z.mul(0.8))).mul(1 / 13.1);
-    const layer = (tx: THREE.Texture) => mix(texture(tx, uvA).rgb, texture(tx, uvB).rgb, 0.4);
-    const mac = texture(macro, p.xz.mul(1 / 180));
-    const mac2 = texture(macro, p.xz.mul(1 / 1400));
-    let col = layer(gl.grass).mul(w.x).add(layer(gl.dirt).mul(w.y)).add(layer(gl.rock).mul(w.z)).add(layer(gl.mud).mul(w.w));
-    // meadow colour drift (dry/green) at two scales so distant hills are not one flat green
-    const dry = smoothstep(0.45, 0.75, mac.r.mul(0.6).add(mac2.g.mul(0.6)));
-    col = mix(col, col.mul(vec3(1.25, 1.08, 0.72)), dry.mul(w.x).mul(0.7));
-    col = col.mul(mac.b.mul(0.35).add(0.83));
-    // snow on high, flattish ground
-    const snow = smoothstep(780, 980, p.y.add(mac.a.mul(140))).mul(smoothstep(0.55, 0.8, normalWorld.y));
-    col = mix(col, vec3(0.82, 0.84, 0.88), snow);
-    terrain.colorNode = col;
-    terrain.roughnessNode = mix(float(0.97), float(0.6), w.w.mul(0.6)).sub(snow.mul(0.3));
-    terrain.normalNode = normalMap(texture(gl.normal, uvA), vec2(0.6, 0.6));
-  }
+  const terrain = makeTerrainMaterial(T.ground as unknown as GroundData, macro);
 
   return { old, new: nw, trim, slate: slateM, lead, wood, iron, void: voidM, glass, terrain, macro };
 }

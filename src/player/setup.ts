@@ -20,7 +20,7 @@ export interface InteriorCollision { collision?: THREE.BufferGeometry[]; terrain
 
 export interface PlayDeps {
   castle: THREE.Object3D; terrain: THREE.Object3D; input: InputSource; view: CameraView; footsteps: Footsteps; clock: Clock;
-  bridge: { start: V2; dir: V2; width: number; breakAt: number };
+  bridge?: { start: V2; dir: V2; width: number; breakAt: number } | null;   // null in ?test=stairs
   interior?: InteriorCollision | null;
   extra?: { object: THREE.Object3D; holes: V2[][] } | null;   // e.g. the ?test=walk course
 }
@@ -62,11 +62,15 @@ export async function setupPlay(d: PlayDeps) {
   const hole = (x: number, z: number) => holes.some((p, i) => { const b = boxes[i]; return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && pointInPoly(p, x, z); });
   let ix0 = 1e9, ix1 = -1e9, iz0 = 1e9, iz1 = -1e9;
   for (const [x, z] of ISLAND) { ix0 = Math.min(ix0, x); ix1 = Math.max(ix1, x); iz0 = Math.min(iz0, z); iz1 = Math.max(iz1, z); }
+  const crop = { x0: ix0 - 6, x1: ix1 + 6, z0: iz0 - 6, z1: iz1 + 6 };
   const grid = terrainGrid(d.terrain);
-  const terrainTris = grid ? physics.addTerrain(grid, { x0: ix0 - 6, x1: ix1 + 6, z0: iz0 - 6, z1: iz1 + 6 }, hole) : 0;
+  const terrainTris = grid ? physics.addTerrain(grid, crop, hole) : 0;
+  // the landscape's near rocks (instanced) that stand on or by the island
+  const rocks = d.terrain.getObjectByName('rocks');
+  const rockTris = rocks ? physics.addObject(rocks, (m) => m.name.startsWith('rocks-near'), () => 'rock', crop) : 0;
 
   // the island boundary: only near the surface, so cellars and the moat tunnel can pass under it
-  const boundary = boundaryOutline(ISLAND, d.bridge);
+  const boundary = boundaryOutline(ISLAND, d.bridge ?? undefined);
   physics.addBoundary(boundary, (p) => Math.max(heightAt(p[0], p[1]) - 1, 0.3), 40);
 
   const motor = new CharacterMotor(physics.createCharacter(shapeFrom()));
@@ -78,6 +82,6 @@ export async function setupPlay(d: PlayDeps) {
   return {
     physics, player, boundary,
     walkable: (x: number, z: number) => pointInPoly(boundary, x, z),
-    timings: { wasmMs: Math.round(tInit), totalMs: Math.round(totalMs), castleTris, interiorTris, terrainTris },
+    timings: { wasmMs: Math.round(tInit), totalMs: Math.round(totalMs), castleTris, interiorTris, terrainTris, rockTris },
   };
 }
