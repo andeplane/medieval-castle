@@ -5,14 +5,14 @@ import * as THREE from 'three/webgpu';
 import type { PhysicsApi, V3 } from '../castle/interior/types';
 import type { CharacterMotor, Footfall, MotorIntent } from '../character/motor';
 import type { InputSource } from './input';
-import { TUNING, type MoveInput, targetSpeed, wishVelocity, headBob, damp } from './movement';
+import { TUNING, type MoveInput, targetSpeed, wishVelocity, headBob, damp, eyeClamp } from './movement';
 
 export type Surface = 'stone' | 'wood' | 'grass' | 'dirt';
 export type SurfaceResolver = (tag: string | undefined, x: number, z: number) => Surface;
 export const defaultSurface: SurfaceResolver = (tag) => (!tag ? 'stone' : tag.includes('wood') ? 'wood' : tag.includes('terrain') ? 'grass' : 'stone');
 
 /** The bits of a PerspectiveCamera the player writes. */
-export interface CameraView { position: THREE.Vector3; quaternion: THREE.Quaternion; fov: number; updateProjectionMatrix(): void }
+export interface CameraView { position: THREE.Vector3; quaternion: THREE.Quaternion; fov: number; near: number; updateProjectionMatrix(): void }
 
 export interface PlayerDeps {
   motor: CharacterMotor;
@@ -120,12 +120,15 @@ export class PlayerController {
   frame(alpha: number, dt: number) {
     const m = this.motor, v = this.view;
     this.eyeH = damp(this.eyeH, m.crouched ? T.crouchEye : T.eye, 12, dt);
-    const [bu, bs] = headBob(m.phase, this.bobW, this.runMix);
+    const [bu, sway] = headBob(m.phase, this.bobW, this.runMix);
+    // the eye never leaves the capsule: sideways sway within the controller's skin, height under its top
+    const bs = Math.max(-T.skin, Math.min(T.skin, sway));
     const off = this.prevStepOff + (this.stepOff - this.prevStepOff) * alpha;
     const lerp = (i: 0 | 1 | 2) => m.prevFeet[i] + (m.feet[i] - m.prevFeet[i]) * alpha;
-    v.position.set(lerp(0) + Math.cos(this.yaw) * bs, lerp(1) + this.eyeH + off - this.dip + bu, lerp(2) - Math.sin(this.yaw) * bs);
+    const up = eyeClamp(this.eyeH + off - this.dip + bu, m.height);
+    v.position.set(lerp(0) + Math.cos(this.yaw) * bs, lerp(1) + up, lerp(2) - Math.sin(this.yaw) * bs);
     v.quaternion.setFromEuler(euler.set(this.pitch, this.yaw, 0, 'YXZ'));
-    if (Math.abs(v.fov - this.fov) > 0.01) { v.fov = this.fov; v.updateProjectionMatrix(); }
+    if (Math.abs(v.fov - this.fov) > 0.01 || v.near !== T.near) { v.fov = this.fov; v.near = T.near; v.updateProjectionMatrix(); }
   }
 
   state() {

@@ -14,7 +14,7 @@ import { setupPlay, surfaceAt } from '../src/player/setup';
 import { ScriptedInput } from '../src/player/input';
 import { Footsteps } from '../src/player/footsteps';
 import { spawnPoint } from '../src/camera/controls';
-import { TUNING } from '../src/player/movement';
+import { TUNING, nearCorner } from '../src/player/movement';
 import { GATEHOUSE } from '../src/castle/spec';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
 import { fakeClock, fakeView } from './helpers';
@@ -43,6 +43,7 @@ const ROCK: V2 = (() => { const e = ISLAND[24], l = Math.hypot(e[0], e[1]); retu
 
 describe('walking the island', { timeout: 60_000 }, () => {
   let play: Awaited<ReturnType<typeof setupPlay>>, input: ScriptedInput, course: CourseInfo, bridge: ReturnType<typeof buildBridge>;
+  const view = fakeView();
   const walk = (keys: string[], s: number) => {
     input.hold(keys);
     let minY = 1e9;
@@ -64,7 +65,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     course = buildCourse(cb);
     input = new ScriptedInput();
     play = await setupPlay({
-      castle, terrain: terrainObject(), bridge, input, view: fakeView(), footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
+      castle, terrain: terrainObject(), bridge, input, view, footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
       interior: { collision: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 0, -200)], terrainHoles: [] },
       extra: { object: cb.build(mats()), holes: course.holes },
     });
@@ -155,6 +156,44 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(down[2]).toBeLessThan(lane('descent').endZ + 1.5);
     // the ground above the tunnel end is real terrain, well above your head
     expect(heightAt(down[0], down[2])).toBeGreaterThan(down[1] + TUNING.height);
+  });
+
+  it('the walk camera never gets closer to a collider than the capsule radius (walls) or the near plane (anything)', () => {
+    // rays from the eye: 24 horizontal, 16 tilted up and down, 1 straight up
+    const dirs: [number, number, number][] = [];
+    for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2; dirs.push([Math.cos(a), 0, Math.sin(a)]); }
+    for (let i = 0; i < 16; i++) { const a = (i / 8) * Math.PI, e = i % 2 ? 0.6 : -0.6; dirs.push([Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e)]); }
+    dirs.push([0, 1, 0]);
+    let wall = 9, any = 9, frames = 0;
+    const probe = (keys: string[], s: number) => {
+      input.hold(keys);
+      for (let i = 0; i < Math.round(s * 60); i++) {
+        play.physics.tick(); play.player.frame(1, 1 / 60); frames++;
+        const p = view.position;
+        dirs.forEach((d, k) => {
+          const h = play.physics.raycast([p.x, p.y, p.z], d, 1);
+          if (!h) return;
+          if (k < 24) wall = Math.min(wall, h.dist); else any = Math.min(any, h.dist);
+        });
+      }
+      input.hold([]);
+    };
+    const s = spawnPoint(), g = gatehouseFrame();
+    stand(44, 27, face([44, 27], [20, -6])); probe(['KeyW', 'ShiftLeft'], 5);           // run at the east wing and slide along it
+    stand(s.x, s.z, s.yaw + 0.55); probe(['KeyW'], 4); probe(['KeyW', 'KeyD'], 2);      // into the gatehouse front at an angle
+    const gx = g.base[0] + g.out[0] * (GATEHOUSE.project + 1.5) + g.dir[0] * 4.5, gz = g.base[1] + g.out[1] * (GATEHOUSE.project + 1.5) + g.dir[1] * 4.5;
+    stand(gx, gz, face([gx, gz], g.base)); probe(['KeyW', 'ShiftLeft'], 2); probe(['KeyA', 'KeyW'], 2); // into the batter and along it
+    const b = course.lanes.find((l) => l.name === 'beam')!;
+    play.player.teleport(b.x, course.slab, b.z0, 0, 0.5); probe(['KeyW', 'KeyC'], 2.4); probe(['KeyC'], 0.5); // crouched under the beam, looking up
+    play.player.teleport(b.x, course.slab, b.z0, 0, 0); probe(['KeyW'], 3);              // head-first into the beam standing
+    expect(frames).toBeGreaterThan(1000);
+    expect(view.near).toBe(TUNING.near);
+    expect(wall).toBeGreaterThanOrEqual(TUNING.radius);
+    // the near plane's corners (widest fov with the run kick, a 21:9 screen) stay inside that clearance
+    const reach = nearCorner(TUNING.near, TUNING.fov + TUNING.fovRunKick, 21 / 9);
+    expect(reach).toBeLessThan(TUNING.radius / 2);
+    expect(any).toBeGreaterThan(reach + 0.03);
+    expect(wall).toBeLessThan(0.45); // and the probes really were pressed against walls
   });
 
   it('course origin is deterministic, surfaces resolve by place', () => {

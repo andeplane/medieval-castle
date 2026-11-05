@@ -14,10 +14,22 @@ export const TUNING = {
   bobWalk: 0.032, bobRun: 0.055, swayWalk: 0.018, swayRun: 0.028,
   fov: 70, fovRunKick: 6,
   stepSmooth: 14,                        // 1/s: how fast the camera catches up after a step
+  // camera vs walls: the eye stays on the capsule axis (sway ≤ skin) and below the capsule top, and the
+  // near plane is small enough that its corners stay well inside the capsule (nearCorner < radius)
+  near: 0.06, headroom: 0.1,
 };
 export type Tuning = typeof TUNING;
 
 export interface MoveInput { fwd: number; str: number; run: boolean; crouch: boolean; jump: boolean }
+
+/** Distance from the eye to a corner of the near plane (how far the view frustum reaches out sideways). */
+export const nearCorner = (near: number, fovDeg: number, aspect: number) => {
+  const h = near * Math.tan((fovDeg * Math.PI) / 360);
+  return Math.hypot(near, h, h * aspect);
+};
+
+/** Eye height above the feet, kept inside the capsule (never above its top less `headroom`). */
+export const eyeClamp = (eye: number, capsuleHeight: number, t: Tuning = TUNING) => Math.min(Math.max(eye, t.radius), capsuleHeight - t.headroom);
 
 export const jumpSpeed = (t: Tuning = TUNING) => Math.sqrt(2 * t.gravity * t.jumpHeight);
 

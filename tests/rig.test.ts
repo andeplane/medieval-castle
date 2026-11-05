@@ -74,6 +74,7 @@ describe('CameraRig', () => {
     expect(player.yaw).toBe(0.4);
     rig.update(1 / 60);
     expect(cam.fov).toBeCloseTo(TUNING.fov, 0);
+    expect(cam.near).toBe(TUNING.near); // small near plane while walking: the frustum stays inside the capsule
   });
 
   it('entering walk mode drops you under the camera on the island, else at the spawn', () => {
@@ -83,8 +84,10 @@ describe('CameraRig', () => {
     rig.setMode('walk');
     expect(player.feet[0]).toBe(30);
     expect(player.feet[1]).toBeCloseTo(heightAt(30, 30));
+    rig.update(1 / 60);
     rig.setMode('fly');
     expect(cam.fov).toBe(55);
+    expect(cam.near).toBe(0.25);
     rig.walkable = () => false;
     rig.setMode('walk');
     const s = spawnPoint();

@@ -39,7 +39,7 @@ export function spawnPoint() {
   return { x: p[0], z: p[1], yaw };
 }
 
-const REVIEW_FOV = 55;
+const REVIEW_FOV = 55, REVIEW_NEAR = 0.25; // walk mode uses TUNING.near (the player sets it)
 /** Yaw and pitch that look from `from` toward `to` (yaw 0 = north, −z). */
 export function aim(from: THREE.Vector3, to: THREE.Vector3) {
   const d = to.clone().sub(from);
@@ -92,7 +92,7 @@ export class CameraRig {
       const dir = new THREE.Vector3(); this.camera.getWorldDirection(dir);
       this.orbit.target.copy(this.camera.position).addScaledVector(dir, 60);
     }
-    if (m !== 'walk' && this.camera.fov !== REVIEW_FOV) { this.camera.fov = REVIEW_FOV; this.camera.updateProjectionMatrix(); }
+    if (m !== 'walk' && (this.camera.fov !== REVIEW_FOV || this.camera.near !== REVIEW_NEAR)) { this.camera.fov = REVIEW_FOV; this.camera.near = REVIEW_NEAR; this.camera.updateProjectionMatrix(); }
     this.onModeChange?.(m);
   }
 

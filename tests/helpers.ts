@@ -16,6 +16,6 @@ export const addBox = (P: Physics, x0: number, x1: number, y0: number, y1: numbe
 export const fakeClock = (step = 0.5): Clock => { let t = 0; return { now: () => (t += step) }; };
 
 export const fakeView = (): CameraView & { projUpdates: number } => {
-  const v = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), fov: 55, projUpdates: 0, updateProjectionMatrix: () => { v.projUpdates++; } };
+  const v = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), fov: 55, near: 0.25, projUpdates: 0, updateProjectionMatrix: () => { v.projUpdates++; } };
   return v;
 };
