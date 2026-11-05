@@ -11,7 +11,9 @@ Done
 - Cone roofs and the pyramid roofs (east turret, stair tower) get a soffit under the eave, so the sky no longer shows through the overhang as a white seam.
 - Tests: `tests/openings.test.ts` (default seed + 4 seeds: every placed opening inside its face with clearance, clear of every other building, no overlaps) and an interior test that every embrasure sits behind a placed opening.
 
-Numbers: exterior (pre-carve) 116k → 98k triangles, window lights 300 → 222.
+- Review items: 8 (N courtyard window behind the stair tower) is one of the drops; 7 (towerroom "blind" niche): both great-2 embrasures open onto real windows (`niche-north`, `niche-south` captures), the niche only looks blind from the bookmark's oblique angle; 11 (cone seam) is the soffit.
+
+Numbers (default seed): exterior bins before carving 116k → 98k triangles (before the soffits), window lights 300 → 222, embrasures 141 → 135. After merging main: `__game.state()` castleTriangles 128,135, interior 239,714 triangles; gate 1,448 draw calls / 7.27 M triangles, courtyard 1,390 / 6.49 M, ward 1,476 / 7.22 M (still over budget, review item 5). Captures: `castle-plan/windows/`.
 
 Next
 - The S wing top floor now has courtyard windows only; give it dormers or lower its corbel table if Anders wants windows there.
