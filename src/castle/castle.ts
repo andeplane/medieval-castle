@@ -200,6 +200,7 @@ function roundParapetInner(B: Builder, r: Rng, cx: number, cz: number, R: number
 function curvedOpening(B: Builder, cx: number, cz: number, R: number, a: number, y: number, w: number, h: number, glass: boolean, lights: WindowLight[]) {
   const n: V2 = [Math.cos(a), Math.sin(a)], tan: V2 = [-Math.sin(a), Math.cos(a)];
   const p = (d: number): V3 => [cx + n[0] * (R + d), y + h / 2, cz + n[1] * (R + d)];
+  B.curved.push({ c: [cx, cz], R, a, y, w, h, glass });
   B.box('trim', p(0.03), [w + 0.5, h + 0.5, 0.14], tan);
   B.box(glass ? 'glass' : 'void', p(0.11), [w, h, 0.02], tan);
   B.box('trim', [cx + n[0] * (R + 0.12), y - 0.1, cz + n[1] * (R + 0.12)], [w + 0.6, 0.16, 0.3], tan);
