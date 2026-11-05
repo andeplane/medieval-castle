@@ -291,7 +291,7 @@ export async function makeMaterials(): Promise<Materials> {
     // where the wall meets the ground, soil and moss settle into the lowest courses: a height blend that
     // fills the joints first and then creeps over the stones, so the foot merges into the bank
     const soil = smoothstep(0, 0.6, float(GROUND + 0.3).sub(p.y).div(0.45).add(dep.sub(0.55).mul(1.4)))
-      .mul(smoothstep(GROUND - 0.9, GROUND - 0.4, p.y)).toVar();
+      .mul(smoothstep(GROUND - 0.35, GROUND - 0.1, p.y)).toVar(); // none lower down (cellar vaults crown at 1.9)
     col = mix(col, mix(vec3(0.11, 0.095, 0.07), vec3(0.075, 0.085, 0.04), mac.b).mul(grainC.mul(kDet.mul(0.5)).add(1)), soil);
 
     m.colorNode = col;

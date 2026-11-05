@@ -237,7 +237,8 @@ describe('other generated sets', () => {
   it('builds the ground layers', () => {
     const g = groundLayers();
     for (const k of ['grass', 'dirt', 'rock', 'mud', 'normal'] as const) expect(g[k].length).toBe(g.size * g.size * 4);
-  });
+  }, 120_000); // full-size layers: slow on a loaded machine
+
   it('exposes weighted wall colours, including the pinning stones', () => {
     expect(STONE_GREYS.rubble.at(-1)!.c).toBe(PIN_COL);
     expect(STONE_GREYS.ashlar.every((g) => g.w > 0)).toBe(true);

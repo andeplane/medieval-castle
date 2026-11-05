@@ -31,6 +31,8 @@ export const VIEWS: View[] = [
   { name: 'closeup-ashlar', label: 'Ashlar 1.5 m', mode: 'fly', pos: [-7.71, 6.8, 19.37], target: [-14.14, 5.45, 13.21] },
   { name: 'closeup-shade', label: 'Shade 2 m', mode: 'fly', pos: [-5.65, 7.0, -22.68], target: [-0.13, 5.85, -15.67] },
   { name: 'closeup-corner', label: 'Quoin 3 m', mode: 'fly', pos: [-25.16, 8.0, 24.51], target: [-19.66, 6.81, 17.49] },
+  // Anders' live screenshot (2026-11-05): on foot at the base of the S wing (ashlar), 1.1 m out, looking west along it
+  { name: 'closeup-walk', label: 'Wall foot', mode: 'walk', pos: [-9.157, 0, 19.096], target: [-12.638, GROUND + 2.3, 18.288] },
 ];
 
 export class CameraRig {

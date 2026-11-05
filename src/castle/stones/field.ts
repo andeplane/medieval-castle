@@ -17,7 +17,7 @@ import type { StoneSet } from './set';
 import { GeoBuf, writeStone } from './mesh';
 
 export interface LodParams { hi: number; mid: number; lo: number; sil: number; plain: number; hyst: number; cell: number; minChunk: number; ashlar: number }
-export const LOD: LodParams = { hi: 8, mid: 24, lo: 40, sil: 80, plain: 0, hyst: 3, cell: 12, minChunk: 150, ashlar: 1.25 };
+export const LOD: LodParams = { hi: 8, mid: 20, lo: 32, sil: 45, plain: 0, hyst: 3, cell: 12, minChunk: 150, ashlar: 1.25 };
 
 export type Level = 0 | 1 | 2 | 3; // off, lo, mid, hi
 export interface LodState { level: Level; silOnly: boolean }

@@ -14,14 +14,29 @@ Done
 - Bookmarks `closeup-rubble` (1.2 m, SW tower), `closeup-ashlar` (1.5 m, S wing), `closeup-shade` (north face), `closeup-corner` (SW tower quoins, 3 m). Their targets sit 9 m out because `go()` runs OrbitControls' minDistance 8.
 - Tests: `tests/texgen.test.ts` covers SDF sign and continuity at the outline, mortar set-back, AO, per-stone and in-stone variation, no blue, veins, cracks, iron and pins, id/lith round trip, and the detail texture (determinism, content, tileable Voronoi). texgen.ts is in the coverage include at ~100 % lines. All generators take size, rng and noise as parameters.
 
+GPU depth instead of plain 3D stones (Anders on the live site: "it looks terrible up front", `castle-plan/feedback/closeup-wall-live-1525.png`: soft pillows, blurry pits, stair-stepped black joint edges, a flat untextured slab)
+- Parallax (`materials.ts` `parallax`): the number of layers follows the ray's length on screen, or in texels if coarser: about one layer per 1.5 px, 6–64 layers, with an early out. So no joint is stepped over at 0.3 m or at grazing angles, and 5 binary refinement steps put the hit within 1/32 of a layer. This removes the stair-stepped joint edges. Depth is in world metres on every mesh (rubble 6 cm, ashlar 5 cm, dressed 2.5 cm; uv = metres / tile).
+- Pixel depth offset (`material.depthNode`): the fragment depth is where the ray hit, so the ground, steps and other walls meet the stones, not the flat polygon. The depth pre-pass for GTAO uses the same depth. The shadow pass uses its own override material and is unaffected.
+- Self-shadow: a second march towards the actual sun direction (4–16 taps, by the ray's length on screen), weighted towards its start, gives crisp contact shadows between stones. Up to 88 % of the sun is blocked.
+- Crevices: a narrow, occluded band where the mortar meets each stone, taken from the SDF (crisp at any distance). It darkens albedo and indirect light. Per-stone value and warm/cool spread are a little wider.
+- Wall foot: soil and moss fill the lowest joints first and then creep over the stones, within ~0.3 m of the island ground (a height blend on the masonry depth). Normals flatten there and the depth offset shrinks to match. This is the MeshBlend idea (`castle-plan/feedback/reference-sergeev-meshblend.png`) done in one shader.
+- 3D stones cut back (`stones/field.ts`): plain stones are built only within `LOD.plain` (default 0), so real stones remain only on silhouettes (merlons, parapets, buttresses, turrets, quoins and the revetment edge). Their distances are now hi 8 / mid 20 / lo 32 / silhouette 45 m (were 8/24/40/80). `?stones=all` restores every stone for comparison.
+- The untextured slab was the sides of 3D stones: every side vertex sampled the same edge texel of the squeezed face UVs, so 6–9 cm of side showed one smeared texel. Sides now fold the texture inward by their depth below the face (`stones/mesh.ts` `push`), so they carry stone at its real density.
+- New bookmark `closeup-walk`: on foot at the S wing foot, 1.1 m out, looking west (Anders' viewpoint).
+
 Numbers
+- Stone triangles, from `__game.state().stones` (the frame counts them twice, once more in the GTAO pre-pass): closeup-rubble 1,654,722 → 235,556; closeup-ashlar 1,588,976 → 217,412; closeup-shade 1,765,172 → 548,704; closeup-corner 1,492,346 → 235,194; gate 679,264 → 99,220. For comparison, the frame without any stones is ≈ 2.6M (terrain, vegetation and castle, also counted twice).
 - Texel density unchanged: 512 texels/m base (2048 px per 4 m tile), plus the detail layer at 1280 texels/m. Raising the base resolution was not needed, because the SDF carries edges and the detail layer carries grain.
 - GPU memory for stone: rubble and ashlar 3 × 2048² RGBA8 with mips ≈ 67 MB each, dressed ≈ 17 MB, detail +5.6 MB. That is ≈ 156 MB, of which only the 5.6 MB detail texture is new.
 - Generation (single thread, node, same machine back to back): rubble ~9 s, ashlar ~8–9 s, dressed ~2 s, detail ~2–3 s, against old rubble ~10 s, ashlar ~7.5 s, dressed ~1.7 s. The worker pool runs these in parallel, so wall time stays at the slowest job. The container was heavily loaded (load average 15–30) while this was measured, so treat these numbers as rough.
 - Shader: per stone pixel, 3 detail taps + 1 lichen tap, 5 binary-refinement height taps, and up to 1.8× march steps below 6 m. Triangles and draw calls are unchanged (castle 113,962 triangles).
 
 Known issues / next
-- Rubble at 1 m still reads a little "soap-bar": faces are smooth between the facets and the arris is uniform. A real split face needs sharper conchoidal ridges. The geometric-stone branch (stones-3d) will take over at that range.
+- Silhouette stones that are still 3D (buttresses, `closeup-shade`) look pillowy at 0.5 m. Their sides are textured now, but they show swirls where the fold meets the face.
+- The window jamb blocks stick out of the rubble towers as plain boxes.
+- Rubble faces between the facets are still smooth at 1 m. A real split face needs sharper conchoidal ridges.
+- POM silhouettes on outside corners (FPOM-style clipping) and the camera-following displaced patch (phase 2) are not done. Corners keep the 3D quoins instead.
+- The pixel depth offset turns off early-z for stone. Measure it on WebGPU at 1440p; the march itself is bounded at 64 + 5 + 16 taps.
 - Upper rubble walls in sun at 3–8 m show strong dark undersides from the deep raked joints. This is plausible, but heavier than the reference photos.
 - Sunlit ashlar in `gate` measures sRGB ≈ 115, against the STYLE target of 90–100 (it was ≈ 107 before this branch).
 - Bright mineral flecks can still read as salt at 0.5 m on granite stones.
