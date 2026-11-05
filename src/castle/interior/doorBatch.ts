@@ -11,6 +11,7 @@ export interface BatchLike {
   addInstance(geometry: number): number;
   setMatrixAt(instance: number, m: M4): void;
   setColorAt(instance: number, rgb: V3): void;
+  setVisibleAt(instance: number, visible: boolean): void;
 }
 export type BatchFactory = (name: string, material: THREE.Material, maxInstances: number, maxVertices: number) => BatchLike;
 
@@ -33,5 +34,6 @@ export const threeBatch: BatchFactory = (name, material, maxInstances, maxVertic
     addInstance: (g) => mesh.addInstance(g),
     setMatrixAt: (i, m) => { mesh.setMatrixAt(i, _m.fromArray(m)); },
     setColorAt: (i, rgb) => { mesh.setColorAt(i, _c.setRGB(rgb[0], rgb[1], rgb[2])); },
+    setVisibleAt: (i, v) => { mesh.setVisibleAt(i, v); },
   };
 };

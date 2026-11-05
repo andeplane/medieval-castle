@@ -28,7 +28,7 @@ const TORCH_ROOMS = new Set(['hall', 'gate', 'undercroft']);
  * every ~10 m along that wall. `groupOf(room)` names the visibility group; rooms without a group are
  * skipped. At most `max`.
  */
-export function wallTorches(plan: InteriorPlan, groupOf: (room: SpaceId) => string | undefined, max = 32): FireSources {
+export function wallTorches(plan: InteriorPlan, groupOf: (room: SpaceId) => string | undefined, max = 64): FireSources {
   const out: FireSources = { emitters: [], flames: [], group: [] };
   for (const r of plan.rooms) {
     if (out.emitters.length >= max) break;

@@ -75,7 +75,7 @@ export class LoadingModel {
 
 /** Progress for each boot step label in main.ts; unknown labels (new steps) advance a little. */
 export const BOOT_STEPS: Record<string, number> = {
-  'Cutting the stone…': 0.06, 'Raising the walls…': 0.62, 'Shaping the land…': 0.74, 'Planting trees…': 0.82, 'Lighting the halls…': 0.9,
+  'Cutting the stone…': 0.06, 'Raising the walls…': 0.62, 'Shaping the land…': 0.74, 'Planting trees…': 0.82, 'Laying the floors…': 0.86, 'Lighting the halls…': 0.9,
 };
 export function stepProgress(label: string, shown: number): number {
   return BOOT_STEPS[label] ?? shown + (0.92 - shown) * 0.3;

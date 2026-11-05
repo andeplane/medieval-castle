@@ -36,6 +36,8 @@ export interface DoorSystem {
   blocksPlayer(p: Vec3Like): boolean;
   /** Triangles in one copy of every leaf placed (for budgets). */
   triangles: number;
+  /** Show or hide a door's leaves (and wicket, fixed iron) with its rooms (cell visibility). */
+  setVisible(id: string, visible: boolean): void;
 }
 
 export interface DoorOptions {
@@ -207,6 +209,9 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
   const iron: BatchLike = makeBatch('doors-iron', M.iron, pending.length * 2 + ports.length, ironV);
   object.add(wood.object, iron.object);
   const ids = new Map<string, { wood: number; iron: number; fixed: number }>();
+  // batch instances per door id, for setVisible
+  const inst = new Map<string, { wood: number[]; iron: number[] }>();
+  const instOf = (door: string) => inst.get(door) ?? inst.set(door, { wood: [], iron: [] }).get(door)!;
   for (const [k, v] of variants) ids.set(k, { wood: v.wood.pos.length ? wood.addGeometry(v.wood) : -1, iron: v.iron.pos.length ? iron.addGeometry(v.iron) : -1, fixed: v.fixed.pos.length ? iron.addGeometry(v.fixed) : -1 });
   for (const { leaf, vk, fixed } of pending) {
     const id = ids.get(vk)!, v = variants.get(vk)!;
@@ -218,9 +223,12 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       wood.setColorAt(leaf.wood, [k * (1 - grey * 0.12), k * (0.9 - grey * 0.02), k * (0.8 + grey * 0.12)]);
     }
     if (id.iron >= 0) leaf.iron = iron.addInstance(id.iron);
-    if (fixed && id.fixed >= 0) iron.setMatrixAt(iron.addInstance(id.fixed), leafMatrix(leaf.place, m4swing(0)));
+    const own = instOf(leaf.place.door);
+    if (leaf.wood >= 0) own.wood.push(leaf.wood);
+    if (leaf.iron >= 0) own.iron.push(leaf.iron);
+    if (fixed && id.fixed >= 0) { const f = iron.addInstance(id.fixed); own.iron.push(f); iron.setMatrixAt(f, leafMatrix(leaf.place, m4swing(0))); }
   }
-  for (const p of ports) { p.iron = iron.addInstance(iron.addGeometry(p.geom)); tris += p.geom.pos.length / 9; }
+  for (const p of ports) { p.iron = iron.addInstance(iron.addGeometry(p.geom)); instOf(p.spec.id).iron.push(p.iron); tris += p.geom.pos.length / 9; }
 
   // --- physics: one kinematic box per solid part of each leaf
   if (physics) {
@@ -427,6 +435,12 @@ export function buildDoors(doors: DoorSpec[], M: { wood: THREE.Material; iron: T
       for (const p of ports) if (p.moving) stepPort(p, dt, who);
     },
     setOpen,
+    setVisible(id, visible) {
+      const own = inst.get(id);
+      if (!own) return;
+      for (const i of own.wood) wood.setVisibleAt(i, visible);
+      for (const i of own.iron) iron.setVisibleAt(i, visible);
+    },
     state() {
       const o: Record<string, number> = {};
       for (const u of units) o[u.id] = Math.round(openness(u) * 1000) / 1000;

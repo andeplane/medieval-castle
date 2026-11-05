@@ -47,9 +47,9 @@ const det3 = (m: number[]) => m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1]
 // --------------------------------------------------------------------------- fakes
 
 function fakeBatch() {
-  const made: { name: string; geoms: PartBin[]; inst: number[]; mats: Map<number, number[]>; cols: Map<number, V3> }[] = [];
+  const made: { name: string; geoms: PartBin[]; inst: number[]; mats: Map<number, number[]>; cols: Map<number, V3>; hidden: Set<number> }[] = [];
   const factory: BatchFactory = (name) => {
-    const b = { name, geoms: [] as PartBin[], inst: [] as number[], mats: new Map<number, number[]>(), cols: new Map<number, V3>() };
+    const b = { name, geoms: [] as PartBin[], inst: [] as number[], mats: new Map<number, number[]>(), cols: new Map<number, V3>(), hidden: new Set<number>() };
     made.push(b);
     return {
       object: new THREE.Object3D(),
@@ -57,6 +57,7 @@ function fakeBatch() {
       addInstance: (g) => b.inst.push(g) - 1,
       setMatrixAt: (i, m) => { b.mats.set(i, [...m]); },
       setColorAt: (i, c) => { b.cols.set(i, c); },
+      setVisibleAt: (i, v) => { if (v) b.hidden.delete(i); else b.hidden.add(i); },
     };
   };
   return { factory, made };
@@ -316,6 +317,13 @@ describe('door system', () => {
     expect(fb.made[0].geoms.length).toBeLessThan(leaves);
     for (const m of fb.made[1].mats.values()) expect(det3(m)).toBeCloseTo(1, 6);
     for (const c of fb.made[0].cols.values()) for (const k of c) { expect(k).toBeGreaterThan(0.4); expect(k).toBeLessThan(1.1); }
+    // cell visibility: one door's instances hide and show together; unknown ids are ignored
+    const d0 = doors.find((d) => d.leaf && d.kind !== 'grille')!;
+    sys.setVisible(d0.id, false);
+    expect(fb.made[0].hidden.size).toBe(placeLeaves(d0).length);
+    expect(fb.made[1].hidden.size).toBeGreaterThan(0);
+    sys.setVisible(d0.id, true); sys.setVisible('nope', false);
+    expect(fb.made[0].hidden.size + fb.made[1].hidden.size).toBe(0);
   });
 
   it('builds real BatchedMeshes by default', () => {
@@ -325,6 +333,8 @@ describe('door system', () => {
     const g = b.addGeometry({ pos: [0, 0, 0, 1, 0, 0, 0, 1, 0], nor: [0, 0, 1, 0, 0, 1, 0, 0, 1], uv: [0, 0, 1, 0, 0, 1] });
     const i = b.addInstance(g);
     b.setMatrixAt(i, m4translate(1, 2, 3)); b.setColorAt(i, [1, 0.5, 0.2]);
+    b.setVisibleAt(i, false);
+    expect((b.object as THREE.BatchedMesh).getVisibleAt(i)).toBe(false);
     const m = new THREE.Matrix4(); (b.object as THREE.BatchedMesh).getMatrixAt(i, m);
     expect(m.elements[13]).toBe(2);
   });

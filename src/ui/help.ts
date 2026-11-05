@@ -31,8 +31,8 @@ export const HELP: Record<HelpMode, { free: HelpItem[]; locked: HelpItem[] }> = 
     locked: [{ keys: 'WASD', action: 'fly' }, { keys: 'E/Q', action: 'up / down' }, { keys: 'Shift', action: 'fast' }, { keys: 'Click', action: 'use' }, { keys: 'Esc', action: 'release the mouse' }],
   },
   walk: {
-    free: [{ keys: 'Click', action: 'to look around' }, { keys: 'WASD', action: 'walk' }, { keys: 'Shift', action: 'run' }, { keys: 'E', action: 'use' }],
-    locked: [{ keys: 'WASD', action: 'walk' }, { keys: 'Shift', action: 'run' }, { keys: 'E', action: 'open, close, use' }, { keys: 'Esc', action: 'release the mouse' }],
+    free: [{ keys: 'Click', action: 'to look around' }, { keys: 'WASD', action: 'walk' }, { keys: 'Shift', action: 'run' }, { keys: 'Space', action: 'jump' }, { keys: 'C', action: 'crouch' }, { keys: 'E', action: 'use' }],
+    locked: [{ keys: 'WASD', action: 'walk' }, { keys: 'Shift', action: 'run' }, { keys: 'Space', action: 'jump' }, { keys: 'C', action: 'crouch' }, { keys: 'E', action: 'open, close, use' }, { keys: 'Esc', action: 'release the mouse' }],
   },
 };
 
