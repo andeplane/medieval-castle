@@ -6,6 +6,7 @@ import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
 import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, type Dressing } from '../src/props/dress';
 import { makeProp } from '../src/props/kit';
+import { portcullisInPlan } from '../src/castle/interior/portcullis';
 
 // a 6 × 5 m room with doors on its west and east walls, and a store room behind the north wall
 const room = (id: string, poly: V2[], kind: RoomSpec['kind'] = 'chamber', floor = 3): RoomSpec => ({ id, zone: 'N', floor, kind, poly, y0: 10, y1: 13.5 });
@@ -173,6 +174,14 @@ describe('dressing the castle plan', () => {
       const entries = P.doors.filter((x) => x.spaces.includes(r.id)).map((x) => doorEntry(x, r.id).at).filter((e) => pointInPoly(r.poly, e[0], e[1]));
       expect(walkable(r.poly, d.obstacles, entries), d.room).toBe(true);
     }
+  });
+  it('leaves the portcullis windlass and the space to work it clear', () => {
+    const w = portcullisInPlan(P.doors.find((d) => d.id === 'gate-main')!, P.rooms);
+    const id = w.winch!.room!;
+    const zone = keepOutFor(P.rooms.find((r) => r.id === id)!, P).at(-1)!;
+    expect(pointInPoly(zone, w.centre[0], w.centre[2])).toBe(true);
+    const floor = D.rooms.find((r) => r.room === id)!.placed.filter((p) => p.prop.kind.placement === 'floor');
+    for (const p of floor) expect(convexOverlap(footRect(p), zone), p.prop.kind.name).toBe(false);
   });
   it('has the signature rooms', () => {
     const hall = D.rooms.find((r) => r.role === 'hall')!;
