@@ -64,12 +64,15 @@ function keycaps(doc: Document, parent: HTMLElement, items: readonly HelpItem[],
     const row = doc.createElement(tag);
     row.className = 'hint';
     if (it.keys) {
+      const keys = doc.createElement('span');
+      keys.className = 'hint-keys';
+      row.append(keys);
       for (const [i, k] of it.keys.split('/').entries()) {
-        if (i) row.append(doc.createTextNode('/'));
+        if (i) keys.append(doc.createTextNode('/'));
         const kbd = doc.createElement('kbd');
         kbd.textContent = k;
         if (/^[^A-Za-z0-9]$/.test(k)) kbd.className = 'glyph';
-        row.append(kbd);
+        keys.append(kbd);
       }
     }
     const a = doc.createElement('span');

@@ -51,7 +51,7 @@ kbd {
   font: 600 11px/1 var(--ui); letter-spacing: 0.03em; white-space: nowrap;
 }
 /* a lone punctuation key (` , /) needs a bigger glyph to be seen */
-kbd.glyph { font-size: 15px; font-weight: 500; }
+kbd.glyph { font-size: 19px; font-weight: 700; line-height: 0; padding-top: 7px; }
 
 /* ---------------------------------------------------------------- loading */
 #loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--night); color: var(--bone); z-index: 10; transition: opacity 0.7s ease-out; }
@@ -106,6 +106,7 @@ kbd.glyph { font-size: 15px; font-weight: 500; }
   display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; padding: 7px 14px; border-radius: var(--r-md); background: var(--chip);
 }
 .hint { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hint-keys { display: inline-flex; align-items: center; gap: 2px; color: var(--bone-dim); }
 .hint-action { color: var(--bone); }
 
 /* shown once on the first pointer lock, then it fades */
@@ -116,8 +117,7 @@ kbd.glyph { font-size: 15px; font-weight: 500; }
 }
 .hud-card h2 { margin: 0 0 10px; font: 400 21px/1 var(--display); letter-spacing: 0.03em; color: var(--brass); }
 .hud-card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
-.hud-card li { display: grid; grid-template-columns: 6.5em 1fr; align-items: center; gap: 12px; }
-.hud-card li kbd + kbd { margin-left: 2px; }
+.hud-card li { display: grid; grid-template-columns: 5.5em 1fr; align-items: center; gap: 12px; }
 .hud-card.is-out { opacity: 0; }
 @keyframes hud-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
