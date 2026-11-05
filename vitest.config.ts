@@ -10,7 +10,7 @@ export default defineConfig({
       // Browser entry points (page boot, UI) are checked by captures instead.
       include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/light/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,layout,spec,openings}.ts', 'src/castle/{bridge,revetment,turf,rubble}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/*.ts', 'src/camera/interiorViews.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts', 'src/render/texgen.ts',
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts',
-        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/debug/bench.ts'],
+        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts'],
       exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/props/preview.ts', 'src/light/preview.ts', 'src/castle/interior/types.ts'],
       thresholds: {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
@@ -40,7 +40,7 @@ export default defineConfig({
         // HUD, tools panel, help and boot error (happy-dom + fakes in tests/ui)
         'src/ui/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         // frame stats and the benchmark runner
-        'src/{render/perf,debug/bench}.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/{render/perf,render/resolution,debug/bench}.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
       },
     },
   },

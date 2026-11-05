@@ -56,7 +56,8 @@ import { createHud, browserHudDeps } from './ui/hud';
 import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 import { createStatsOverlay } from './ui/statsOverlay';
-import { FrameStats, pixelRatio } from './render/perf';
+import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
+import { ResolutionGovernor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 
 const params = new URLSearchParams(location.search);
@@ -238,6 +239,9 @@ async function main() {
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
+    // the AO is computed at half resolution, so its normal/depth pre-pass needs no more (it was a full
+    // second drawing of the scene at full size: ~7 ms of a 20 ms frame on an M4 at retina 2×)
+    pre.setResolutionScale(0.5);
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
     // metre-scale occlusion so window reveals, corbels and machicolations read with depth
@@ -429,7 +433,6 @@ async function main() {
 
   // rendering stats (I, or ?stats) and the benchmark (?bench, or __game.bench())
   const frameStats = new FrameStats(240);
-  let computeMs = 0;
   const statsView = createStatsOverlay(document, document.body, params.has('stats') || params.has('bench'));
   const backendName = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
   const renderInfo = () => { const s = renderer.getDrawingBufferSize(new THREE.Vector2()); return { width: s.x, height: s.y, pixelRatio: renderer.getPixelRatio(), backend: backendName }; };
@@ -438,7 +441,7 @@ async function main() {
     const steps = o.steps ? BENCH_STEPS.filter((s) => o.steps!.includes(s.name)) : BENCH_STEPS;
     const rows = await runBench(steps, {
       go: (from) => {
-        if (from === 'spawn') { hooks.player.spawn(); return true; }
+        if (from === 'spawn') { rig.setMode('walk'); rig.toSpawn(); return true; }
         const v = VIEWS.find((x) => x.name === from); if (!v) return false;
         rig.go(v); return true;
       },
@@ -465,15 +468,28 @@ async function main() {
     return;
   }
   let last = performance.now(), frames = 0, acc = 0;
+  // the render resolution follows the GPU's load unless ?scale= fixes it (?dynres=0 keeps the screen's)
+  const dynres = params.has('scale') || params.get('dynres') === '0' ? null : new ResolutionGovernor({ max: renderer.getPixelRatio() });
   // GPU time from WebGPU timestamp queries only (the WebGL2 timer-query path reads nonsense here)
   const gpuTimed = backendName === 'webgpu' && (renderer.backend as unknown as { trackTimestamp?: boolean }).trackTimestamp === true;
+  const gpuPool = () => (renderer.backend as unknown as { timestampQueryPool: { render: { timestamps: Map<string, number> } } }).timestampQueryPool.render;
+  const adapterVendor = (renderer.backend as unknown as { device?: { adapterInfo?: { vendor?: string } } }).device?.adapterInfo?.vendor;
+  const tiledGpu = adapterVendor ? adapterVendor === 'apple' : /Mac/.test(navigator.userAgent); // see gpuFrameTimes
+  let gpuPending = false;
   renderer.setAnimationLoop(() => {
     const now = performance.now(), raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
     frames++; acc += raw;
     if (acc > 0.25) {
       ui.setFps(frames / acc);
-      statsView.update(frameStats.summary(), renderInfo());
+      const sum = frameStats.summary();
+      statsView.update(sum, renderInfo());
       frames = 0; acc = 0;
+      // dynamic resolution: step the pixel ratio by the GPU time (frame time without timestamps)
+      if (dynres && sum.frames >= 30) {
+        // without GPU timestamps the frame time is tied to vsync: only a missed 60 Hz frame says anything
+        const r = dynres.update(sum.gpuMs ?? (sum.p50 > 17.5 ? sum.p50 : 0), now);
+        if (r !== renderer.getPixelRatio()) { renderer.setPixelRatio(r); frameStats.clear(); }
+      }
     }
     tick(dt);
     stones.update(camera.position);
@@ -484,8 +500,14 @@ async function main() {
     pipeline.render();
     exposure.measure();
     frameStats.push({ frameMs: raw * 1000, cpuMs: performance.now() - now, drawCalls: info.render.drawCalls, triangles: info.render.triangles });
-    if (gpuTimed) void renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then((ms) => frameStats.pushGpu((ms ?? 0) + (computeMs ?? 0)));
-    if (gpuTimed) void renderer.resolveTimestampsAsync(THREE.TimestampQuery.COMPUTE).then((ms) => { computeMs = ms ?? 0; });
+    // GPU time per frame from the timestamp pool's per-pass durations (one resolve in flight at a time)
+    if (gpuTimed && !gpuPending) {
+      gpuPending = true;
+      void renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => {
+        for (const ms of gpuFrameTimes(gpuPool().timestamps, tiledGpu)) frameStats.pushGpu(ms);
+        gpuPending = false;
+      });
+    }
   });
   // two frames, then reveal
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
