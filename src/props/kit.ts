@@ -545,7 +545,7 @@ export const lectern: PropKind = {
 export const altar: PropKind = {
   name: 'altar', placement: 'floor', blocksNav: true,
   build(m, r) {
-    const W = range(r, 1.6, 2.2), D = range(r, 0.7, 0.85), H = 1.0, emit: Emitter[] = [];
+    const W = range(r, 1.2, 2.0), D = range(r, 0.6, 0.8), H = 1.0, emit: Emitter[] = [];
     m.tinted(woodTint(r), () => m.box('wood', [0, H / 2, 0], [W, H, D], { bevel: 0.01, grain: 0 }));
     m.tinted(jitterTint(r, CLOTH.linen), () => m.sheet('cloth', (s, t) => {
       const x = (s - 0.5) * (W + 0.02), z = (t - 0.5) * (D + 0.5), over = Math.max(0, Math.abs(z) - D / 2);
