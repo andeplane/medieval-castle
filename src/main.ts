@@ -1,12 +1,14 @@
 // Castle exterior review build. Boot: renderer → textures/materials → castle → world → compile → run.
 // URL flags: ?webgl (force WebGL2, used for headless captures), ?view=<bookmark>, ?time=<hours>,
-// ?ao=0 (no ambient occlusion), ?shot (hide UI; add ?ui=locked,tools,card to keep the HUD), ?debug (three Inspector), ?seed=N,
+// ?ao=0 (no ambient occlusion), ?stones=0 (no real stones), ?shot (hide UI; add ?ui=locked,tools,card to keep the HUD), ?debug (three Inspector), ?seed=N,
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum).
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
+import { StoneField } from './castle/stones/field';
+import { StoneSet } from './castle/stones/set';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
 import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, islandWalkable } from './world/terrain';
@@ -14,6 +16,8 @@ import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS } from './camera/controls';
+import { buildInterior } from './castle/interior';
+import { interiorViews } from './camera/interiorViews';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
@@ -73,8 +77,18 @@ async function main() {
     const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
     buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   }
-  const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
+  const interior = params.get('interior') === '0' || test ? null : buildInterior(mats, builder, { heightAt });
+  const castle = builder.build(mats);
   scene.add(castle);
+  if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
+  const tStones = performance.now();
+  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
+  const layoutMs = Math.round(performance.now() - tStones);
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
+  scene.add(stones.group);
+  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
   // the main gate: two leaves with a wicket, and the portcullis (until the shell emits all DoorSpecs)
   const audio = new DoorAudio(camera);
   const gateSpecs = test ? [] : gateDoorSpecs();
@@ -152,24 +166,29 @@ async function main() {
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
   await say('Lighting the halls…');
+  stones.update(camera.position, Infinity);
   await renderer.compileAsync(scene, camera);
 
   const info = renderer.info;
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
-    renderNow: async () => { veg?.update(camera); pipeline.render(); },
+    renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
     tick: (dt) => { doors.update(dt, camera.position); interaction.update(); ui.sync(); },
     use: () => interaction.use(),
     doors, hud,
     stats: () => ({
-      castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
+      castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
 
+  (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
+    info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
     screen.dispose();
     hooks.ready = true;
     return;
@@ -180,6 +199,7 @@ async function main() {
     frames++; acc += raw;
     if (acc > 0.5) { ui.setFps(frames / acc); frames = 0; acc = 0; }
     rig.update(dt);
+    stones.update(camera.position);
     doors.update(dt, camera.position);
     interaction.update();
     ui.sync();

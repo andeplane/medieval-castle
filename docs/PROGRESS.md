@@ -1,5 +1,50 @@
 # Progress
 
+## 2026-11-05: firelight (shared flame and light system, `src/light/`)
+
+Anders: "what we really need to nail here is amazing lighting. realistic flames and warm great feeling". One system for every fire: the prop kit, the castle interiors (interior-light consumes it) and later NPC-carried torches.
+
+Done
+- `types.ts`: `FlameKind` (candle, torch, lantern, brazier, hearth), `Flame` (base, height, up) and `LightEmitter` (the prop kit's `Emitter` is now this, with a `kind`).
+- `flicker.ts`: deterministic flicker per kind and seed: slow breathing, a faster lick, crackle and occasional gutters (a draught pulls the flame down for ~0.2 s), plus a small wander of the light centre so shadows move. Profiles hold colour temperature, candela per candle unit and range.
+- `blackbody.ts`: fire colour from Kelvin (1600–2000 K), linear and normalised.
+- `budget.ts` + `rig.ts`: `LightRig` keeps a fixed pool of point lights (default 2 shadow casters + 10 plain, so materials never recompile), ranks fires by brightness over distance for any eye, cross-fades sources between pools with hysteresis (no popping), takes an injected `visible(id)` for room culling, and supports `add`/`move`/`setScale` for carried torches and fires that go out. `meanLights()` feeds bounce bakes. Engine-free: the three.js side is a `LightFactory` (`three.ts`); tests use a typed fake.
+- `flames.ts` + `three.ts`: flame sprites in three instanced draws for any number of flames: a turbulent teardrop body (two noise octaves, licks that break off at the tip, black-body ramp, blue cup at candle wicks, additive HDR), a camera-facing halo, and a thin smoke column over torches. Each flame is linked to its light, so the flame and the room gutter together. Flame motion runs on a uniform clock (deterministic captures).
+- `look.ts`: the warm interior look: Neutral tone mapping (keeps flame hue; AgX turned flames cream), exposure 0.58, bloom on the flames, a whisper of cool fill so shadows are deep blue-grey rather than dead black, a partial white balance (the eye adapting to firelight), mild vignette, dark warm haze. `lookFromParams` for review overrides.
+- Warm bounce: `LightProbeGrid` (three r187 addon) baked once per volume with every fire at its mean brightness, one extra bounce (cellar 7×3×5 + tunnel 16×2×2 probes, ~3 s in SwiftShader).
+- Prop kit: candles, sconce torches and chandeliers now mark flames (`PropMesh.addFlame`, carried through transforms and `append`) instead of lathe flame meshes; candles get a charred wick, torch heads are charred dark. `props.html` lights its rooms through the shared rig and sprites.
+- Review page `lights.html` (`src/light/preview.ts`, geometry in `stage.ts`): a 12 × 7.2 m segmental-vaulted cellar with a supper table and chandelier, a door into a 29 m barrel-vaulted tunnel with torches every 4.5 m. Views: cellar, supper, torch, tunnel, door. Flags: `?t=` freeze time, `?still`, `?exposure`, `?bloom`, `?fill`, `?haze`, `?adapt`, `?tm=agx|aces|neutral`, `?gi=0`, `?shadows=N`, `?lights=N`, `?nowalls` (flames on black for tuning). `URL=http://localhost:5173/lights.html QUERY=t=3.2 npm run shots`.
+- Tests: `tests/light/*` with fakes in `tests/light/fakes.ts`; `src/light` at 100 % lines/functions/statements, 99 % branches (`npm run coverage`).
+
+How interiors use it (agreed with the castle build thread): place fixtures, `rig.setEmitters(emitters)`, `makeFlameSprites(linkFlames(mesh.flames, emitters))`; each frame `rig.update(t, dt, eye, visible)` and `sprites.update(flameBrightness(...), t)`. Interior materials add `factory.lights` to their `lightsNode`. The interior-light exposure controller owns exposure and takes `WARM_INTERIOR` as parameters.
+
+Numbers: the review page has 13 emitters and 20 flames → 12 point lights (2 with 512² cube shadows), 3 flame draw calls; prop triangles 12.5k. Castle page unchanged.
+
+Next
+- Hook into `interior-shell` rooms when it lands (probe grids per room group, visibility from `createVisibility`).
+- Embers and sparks over braziers and hearths; brazier, lantern and hearth props (profiles and looks exist).
+- Check frame time on the M4 (WebGPU): shadowed point lights are the main cost; drop to one shadow caster if needed.
+- Floor flagstones read a little like modern tiles under raking light; the rubble's pits show at grazing angles near torches.
+
+## 2026-11-05: interior plan and shell (branch `interior-shell`, PR #15)
+
+Done
+- `src/castle/interior/plan.ts`: `planInterior(seed)` is a pure function of the seed. It lays out 206 rooms: 20 per wing floor in enfilade, the hall on N1, a chapel in the east turret, tower rooms on every storey including the tops, five rooms over the gate, cellars under the N and W wings and the great tower, and five tunnels. It also lays out 244 doors and 6 stairs. The gate passage (`gate-0` under the gatehouse, `gate-1` through the S wing, 10 m) has the leaved gate `gate-main` (kind `gate`, centred on the gatehouse front's mid plane, width = clear arch, rebate 1.5 m for the portcullis groove and leaves), open arches at the S wing and the courtyard, ribbed vaults and murder holes. There are courtyard doors into N, E and W. Spirals of 1.9 m radius in the four corner towers and the 2.0 m courtyard stair tower (one landing per storey, so main's stair planner climbs whole turns with 2 m headroom), plus a straight cellar stair from N0. The moat tunnel runs from the great-tower cellar at −1.8 down 0.2/0.3 steps to −6.5 (crown −3.8, 1.2 m of rock under the moat bed), back up to a sally port on the far bank, which is barred by a locked grille (`sallyport-grille`). Old work has round heads, new work has pointed or segmental heads, and every door head is fitted below its ceiling or vault (`fitDoorHeads`).
+- `validatePlan`: every room is reachable from outside and from the courtyard, the far bank never is, and only the moat tunnel leaves the island. It also checks door sizes ≥ 0.9 × 2.0 m with heads clear of the ceilings, rooms inside the footprint and apart, stair landings on their floors, and each stair against `validateStair`. All 256 seeds pass (64 in CI).
+- `src/castle/interior/shell.ts`: room walls with door holes (reveals, rebate step on the leaf side, gate cheeks and portcullis groove). Every exterior window gets an embrasure (splayed niche, glass pane where the exterior is glazed, daylight through open lights). Flagstone ground floors, board floors, beamed ceilings, barrel vaults (pointed in new work), tunnels via `buildTunnel`, and the sally-port housing on the far bank. Every interior volume is carved out of the exterior bins (`carve.ts`), so the zero-thickness exterior shells no longer cross rooms.
+- `navGraph(plan)` (`nav.ts`) links room, door and landing nodes, where flights follow `stairNavPath`. `findPath` runs A* and skips locked edges, and `floorPolys` gives clean walkable outlines. Tests show that every room is reachable.
+- `buildInterior(materials, ext, deps)` returns groups `${zone}:${floor}` and `stairs:<id>` with one mesh per material, plus colliders per group. `main.ts` adds them and sets `__game.interior`. Use `?interior=0` to build without interiors. New bookmarks: gatepass, hall, chamber, towerroom, undercroft, tunnel, cellar.
+- Tests are in `tests/interior.test.ts` and `tests/interior-geom.test.ts`, with coverage of 98–100 % lines over the interior modules (thresholds in `vitest.config.ts`).
+
+Numbers (headless WebGL2, seed default): interior 239.6k triangles (most of it the real stairs), 85 groups, 296 meshes (one per material per group), 131 embrasures, 50 windows skipped (enclosed by towers or other masses). Castle exterior after carving: 131.6k triangles. Carving takes about 2.4 s in the browser and 1.2 s in node.
+
+Captures (1600×900, `QUERY=exposure=1.6`): gatepass, hall, chamber, towerroom, tunnel, undercroft, cellar, courtyard, hero. Copies are in `castle-plan/interior/shell-*.png`. `CameraRig.go()` no longer applies a damped orbit update to walk/fly bookmarks; it had nudged the `courtyard` view into the W wing.
+
+Known issues / next
+- Draw calls: all 296 interior meshes together exceed the ~250 budget. The visibility work has to switch groups off, because only a few cells should render at once.
+- Exterior windows enclosed by other masses get no embrasure. Two-door landings are not supported by the stair planner, so the stair tower opens onto N or E on each floor, not both.
+- Interior light is still flat (interior-light agent).
+
 ## 2026-11-05: procedural prop kit (furniture, not yet placed in the castle)
 
 Sourcing decision (Anders, 2026-11-05): code + free CC0 only; no store packs (their licences forbid shipping raw files from a public repo); Meshy (already paid for) may be used later for a few organic hero props.
@@ -71,6 +116,46 @@ Known issues / next
 - Far forests are low-poly blobs; swap for impostor cards.
 - Stone texture could use a close-up detail normal for first-person distance.
 - Courtyard is plain; no doors on the outer walls except the gate.
+
+## 2026-11-05: real stones (D.1 stone course data model)
+
+Done
+- `src/castle/stones/`: every rubble/ashlar wall face (planar walls, box and prism sides, round towers, battered plinths, revetment) is a list of courses of real stones. The layout is the masonry texture's own layout (`masonryLayout()` / `masonryWarp()` split out of `texgen.ts`), tiled exactly as the wall UVs tile the texture, so each 3D stone sits on the texture stone it replaces, joints follow the texture's warped joints, and the near/far switch is invisible (brief: "same course layout in texture and stones").
+- Stones skip openings and anything standing proud of the face (jambs, sills, voussoirs, quoins, buttresses, string courses, plinths, corbels): the Builder records stone faces and exclusion solids (`stoneFaces`, `stoneExcl`). End stones interlock round convex corners on alternate courses.
+- Geometry: chamfered slabs proud of the wall (rubble 5–9 cm, ashlar 4–6.5 cm), the flat wall behind acts as mortar. Three LODs per 12 m chunk × material × facing: hi (rounded, chipped, domed, 84 tris) ≤ 8 m, mid (chamfered, 22) ≤ 24 m, lo (slabs, 10) ≤ 40 m; ashlar 1.25× further. Silhouette stones (parapets, merlons, buttresses, turrets, corners, revetment) stay as lo out to 80 m via a draw range. Chunks facing away are hidden; geometry is built lazily (4 ms/frame budget) and evicted when far.
+- Dressing stands proud of the stones (jambs 11 / 8.5 cm, quoins 11 cm); parapet copings are separate coping stones.
+- `?stones=0` hides the real stones for A/B; `__game.lookFrom(pos, target)` for close-up captures; `state().stones` reports counts; captures now report per-shot draw calls/triangles.
+- Tests: `tests/stones.test.ts` (courses cover the face and tile end to end, inner joints are the texture joints, no stone overlaps an opening or a solid, corners interlock, deterministic).
+- Close-up pass after Anders' "does NOT look good close up" (feedback/2026-11-05-stone-closeup-bad.png): stone faces now sample only the interior of their texture stone (UVs squeezed toward the stone centre, an extended corner stone maps onto its own cell), so the texture's joint outlines, bevel shading and mortar mask never land on a geometric stone. Hi LOD (≤ 8 m, 84 tris) has a 12-point outline, a rounded arris with random chips knocked back and down, and an unevenly domed face. The flat wall between the stones is the mortar; its colour and grain come from the texture (being rebuilt on `stone-closeup`).
+- Exclusions are clipped to the stone layer: a solid blocks the convex outline where it passes through the face's stone layer (hull of corner points inside it plus corner-to-corner crossings), not its bounding box. Battered plinths no longer leave bare bands on the buttress sides.
+- Dependency injection and coverage (Anders' rules): `StoneSet` (src/castle/stones/set.ts) lays out every stone once from injected faces, exclusion solids, masonry specs (`SpecFor`, built from an injected rng via `makeMasonrySpec`) and seed salt, and answers `stonesNear(point, r)` for physics and NPCs. `StoneField` takes the set, materials, LOD distances and a clock; `update()` takes a camera position. `pickLevel`, `facingAway`, `boxDistance` and `makeChunks` are pure and exported. `buildCastle`, `buildBridge` and `buildRevetment` take their rng as a parameter. Tests: `tests/stones-model.test.ts` (toy masonry spec, all geometry levels on plane, cylinder, battered and mirrored faces, stonesNear vs brute force, LOD bands/hysteresis/budget/eviction with a fake camera and clock) and `tests/castle-stones.test.ts` (whole castle with injected rngs and ground). Coverage of src/castle/**: ~99 % statements, 100 % lines in src/castle/stones.
+
+Numbers (headless WebGL2, 1600×900, frame incl. shadow + AO pre-pass; the ~14 M baseline is mostly the near trees):
+
+| View | Draw calls (stones off → on) | Frame triangles (off → on) | Stone triangles |
+|---|---|---|---|
+| gate | 124 → 482 | 14.12 M → 15.03 M | 0.53 M |
+| ward | 120 → 386 | 14.12 M → 14.81 M | 0.46 M |
+| north | → 182 | → 14.21 M | 0.02 M |
+| moat | → 308 | → 14.35 M | 0.06 M |
+| hero | 130 → 130 | 14.13 M → 14.13 M | 0 (nothing within 80 m) |
+| close-up, rubble wall 2 m away | → 466 | → 16.17 M | 1.71 M (12 hi chunks) |
+| close-up, corner | → 552 | → 16.40 M | 1.81 M (13 hi chunks) |
+
+159k stones in 465 chunks. Layout takes 2–7 s at startup on the shared container CPU (once; well under 1 s on the M4 is the expectation, to be measured). Geometry is 30–100 MB depending on where the camera has been.
+- `Builder.walls` (`WallRecord`, shape agreed with the interior branch) records every wall face; real stones stay exterior-only.
+
+- Bookmarks: `CameraRig.go()` ran the orbit control's update for every view. Its polar-angle clamp lifted walk and fly views that look up at the walls to about the target's height, so the courtyard view sat inside the west wing at y ≈ 22. Only orbit views go through it now, so walk bookmarks (gate, ward, courtyard) are at real eye height. The `towertop` view is now over the keep's south parapet, clear of the cap house (it used to sit inside it) and of the corner turret.
+- Coverage: `src/castle/**` is in `npm run coverage`. Thresholds: castle lines 99 / functions 100 / branches 92 / statements 99; stones lines 100 / functions 100 / branches 97 / statements 99.
+- After merging main (shadows, vegetation, landscape): gate 696 draw calls / 6.44 M frame triangles (stones 0.56 M), ward 682 / 6.09 M (0.54 M), courtyard 570 / 5.92 M (1.62 M), towertop 392 / 5.54 M (1.52 M), rubble close-up 602 / 6.62 M (1.76 M). Walk views now sit at eye height, so these are not comparable with the table above.
+
+Known issues / next
+- Triangles: stones add ~0.5–1.8 M per frame in close views (counted twice because of the GTAO normal pre-pass). Trees still dominate the frame budget.
+- Geometry is built on the main thread; a big chunk can cost a few ms when it first comes into range. Move to a worker if it shows up as a hitch on the M4.
+- Battered round-tower bases (frustums) and arch spandrels are still flat texture.
+- Mortar between the stones is the texture's (speckled, grey); the `stone-closeup` branch rebuilds it as sandy lime, and the stones pick that up with no change here.
+- `npm test` is ~13 s wall on the loaded container (8 s CPU), above the brief's 5 s: most of it is importing three and building the whole castle twice in `castle-stones.test.ts`.
+- The gatehouse plinth runs across the bottom of the gate arch (pre-existing).
 
 ## 2026-11-05: vegetation
 

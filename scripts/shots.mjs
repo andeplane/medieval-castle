@@ -27,6 +27,7 @@ for (const v of list) {
   await page.evaluate((name) => window.__game.setCamera(name), v);
   await page.evaluate(() => window.__game.step(1));
   await page.screenshot({ path: `${OUT}/${v}.png`, timeout: 300_000 });
-  console.log('shot', v, ((Date.now() - t) / 1000).toFixed(1), 's');
+  const st = await page.evaluate(() => window.__game.state());
+  console.log('shot', v, ((Date.now() - t) / 1000).toFixed(1), 's', JSON.stringify({ drawCalls: st.drawCalls, frameTriangles: st.frameTriangles, stones: st.stones }));
 }
 await browser.close();
