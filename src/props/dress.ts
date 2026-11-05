@@ -10,6 +10,7 @@ import type { V2 } from '../core/math2d';
 import { pointInPoly } from '../core/math2d';
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
 import type { InteriorPlan, RoomSpec, DoorSpec, SpaceId } from '../castle/interior/types';
+import { portcullisInPlan, DRUM_R } from '../castle/interior/portcullis';
 import { orient, convexOverlap, centroidOf } from '../castle/interior/geom';
 import { KIND, makeProp, type Prop } from './kit';
 import { yawXZ, type Placed } from './place';
@@ -113,6 +114,14 @@ export function keepOutFor(r: RoomSpec, P: InteriorPlan): V2[][] {
       const d = [b[0] - a[0], b[1] - a[1]], L = Math.hypot(d[0], d[1]) || 1, u: V2 = [d[0] / L, d[1] / L];
       zones.push(strip([a[0] - u[0] * 1.2, a[1] - u[1] * 1.2], [b[0] + u[0] * 1.2, b[1] + u[1] * 1.2], s.width / 2 + 0.4));
     }
+  }
+  // the portcullis windlass in the room over a gate: its frames, slot and room to heave the spokes
+  for (const d of P.doors) {
+    if (d.kind !== 'gate') continue;
+    const w = portcullisInPlan(d, P.rooms);
+    if (w.winch?.room !== r.id) continue;
+    const half = Math.max(w.width / 2 + 0.2, w.winch.frameAt + 0.9), c: V2 = [w.centre[0] - w.inward[0] * DRUM_R, w.centre[2] - w.inward[1] * DRUM_R];
+    zones.push(strip([c[0] - w.along[0] * half, c[1] - w.along[1] * half], [c[0] + w.along[0] * half, c[1] + w.along[1] * half], 1.4));
   }
   return zones;
 }
