@@ -17,6 +17,8 @@ import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, type Mode } from './camera/controls';
+import { buildInterior } from './castle/interior';
+import { interiorViews } from './camera/interiorViews';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
@@ -83,8 +85,12 @@ async function main() {
     const bridge = buildBridge(builder, ISLAND, MOAT_OUTER, pointInPoly);
     buildRevetment(builder, ISLAND, heightAt, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2);
   }
-  const castle = builder.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass };
+  // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
+  const interior = params.get('interior') === '0' || test ? null : buildInterior(mats, builder, { heightAt });
+  const castle = builder.build(mats);
   scene.add(castle);
+  if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
   const layoutMs = Math.round(performance.now() - tStones);
@@ -104,24 +110,40 @@ async function main() {
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
-  // interior: the shell's groups when it lands (buildInterior(IM, …)); the test hall for now
+  // interior light (render/interiorLight.ts): the shell's meshes switch to the sun-only interior
+  // materials; the test cell (?test=room) brings its own hall and chamber
   const interiorLight = createInteriorLight();
   const IM = makeInteriorMaterials(M, sky.sun, interiorLight);
-  let interior: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: lights as WindowInput[] };
+  const swap = new Map<THREE.Material, THREE.Material>((['old', 'new', 'trim', 'wood', 'iron', 'glass'] as const).map((k) => [M[k], IM[k]]));
+  let lit: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: [] };
   const shells: THREE.Object3D[] = [castle];
+  if (interior) {
+    for (const g of interior.groups) g.object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) m.material = swap.get(m.material as THREE.Material) ?? m.material; });
+    // castle.ts window lights ({p, n, w, h}); the embrasure behind each one is fitted to its room
+    lit = { groups: interior.groups, plan: interior.plan, windows: lights as WindowInput[] };
+  }
   if (testRoom) {
     const t = buildRoomTest(M, IM);
     scene.add(t.exterior); shells.push(t.exterior);
     for (const g of t.groups) scene.add(g.object);
     VIEWS.push(...t.views);
-    interior = t;
+    lit = t;
   }
   const tB = performance.now();
-  const occluder = bvhOccluder([...shells, ...interior.groups.map((g) => g.object)]);
+  const occluder = bvhOccluder([...shells, ...lit.groups.map((g) => g.object)]);
   const bvhMs = performance.now() - tB;
-  const bake = bakeInteriorLight(interior.groups, occluder, { plan: interior.plan, windows: interior.windows, sun: sunStateOf(sky.sun), light: interiorLight });
-  if (interior.plan.rooms.length) scene.add(buildShadowSkins(interior.plan, bake.apertures));
+  const bake = bakeInteriorLight(lit.groups, occluder, { plan: lit.plan, windows: lit.windows, sun: sunStateOf(sky.sun), light: interiorLight });
+  if (lit.plan.rooms.length) scene.add(buildShadowSkins(lit.plan, bake.apertures));
   console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, bake ${bake.ms.toFixed(1)} ms, BVH ${bvhMs.toFixed(1)} ms over ${occluder.triangles} tris`);
+  // leaf doors (gate, wicket, portcullis) pass daylight on as they open: re-solve when one moves
+  const doorLit: Record<string, number> = {};
+  const syncDoorLight = () => {
+    for (const [id, o] of Object.entries(doors.state())) {
+      const was = doorLit[id];
+      if (was === undefined || Math.abs(was - o) > 0.05 || (o !== was && (o === 0 || o === 1))) { doorLit[id] = o; bake.setDoorOpen(id, o); }
+    }
+  };
+  syncDoorLight();
 
   await say('PLANTING TREES…');
   let veg: Vegetation | null = null;
@@ -175,7 +197,7 @@ async function main() {
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
   // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
-  const vis = createVisibility(camera, interior.groups, interior.plan, { scene, apertures: bake.apertures, ground: heightAt });
+  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt });
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
 
@@ -222,16 +244,17 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); exposure.update(1 / 60, vis.state); pipeline.render(); },
-    tick: (dt) => { doors.update(dt, camera.position); interaction.update(); },
+    tick: (dt) => { doors.update(dt, camera.position); syncDoorLight(); interaction.update(); },
     use: () => interaction.use(),
     doors,
     stats: () => ({
+      interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
       castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
-      interior: {
+      light: {
         room: vis.roomId, inside: vis.state.inside, deep: vis.state.deep, underground: vis.state.underground,
-        groupsShown: vis.state.visible.filter(Boolean).length, groups: interior.groups.length,
+        groupsShown: vis.state.visible.filter(Boolean).length, groups: lit.groups.length, meshesShown: lit.groups.reduce((s, g, i) => s + (vis.state.visible[i] ? g.object.children.length : 0), 0),
         exposure: Math.round(exposure.state.exposure * 1000) / 1000, meanLog2: Math.round(exposure.state.meanLog2 * 100) / 100,
         bakeMs: Math.round(bake.ms * 10) / 10, bvhMs: Math.round(bvhMs * 10) / 10, apertures: bake.apertures.length,
       },
@@ -240,6 +263,8 @@ async function main() {
 
   // the doors module reports leaf positions here: __game.interiorLight.setDoorOpen(id, 0..1)
   (hooks as Record<string, unknown>).interiorLight = { setDoorOpen: bake.setDoorOpen, roomLight: bake.roomLight, knobs: interiorLight, exposure: exposure.state, visibility: vis };
+  (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
     info.autoReset = false; // renderNow resets it, so state() reports the last captured frame
@@ -258,6 +283,7 @@ async function main() {
     rig.update(dt);
     stones.update(camera.position);
     doors.update(dt, camera.position);
+    syncDoorLight();
     interaction.update();
     veg?.update(camera);
     vis.update();

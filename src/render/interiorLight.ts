@@ -159,6 +159,8 @@ export interface BakeOpts {
 
 export interface InteriorBake {
   ms: number; rooms: number; triangles: number;
+  /** where the bake time went: room tagging, apertures, sun rays + solve + table */
+  timings: { tag: number; apertures: number; update: number };
   apertures: (Aperture & { group?: string })[];
   roomIndex: Map<SpaceId, number>;
   /** re-solve after the sun moves (sky.setTime) */
@@ -203,6 +205,7 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
   const rooms = opts.plan.rooms.slice(0, opts.light.maxRooms);
   const index = new Map(rooms.map((r, i) => [r.id, i] as [SpaceId, number]));
   const triangles = tagGroups(groups, rooms, index, opts.maxWall ?? 4.5);
+  const t1 = now();
   const aps: (Aperture & { group?: string })[] = [...windowsToApertures(rooms, opts.windows), ...doorsToApertures({ ...opts.plan, rooms }, index)];
   const groupOf = new Map<number, string>();
   for (const g of groups) for (const id of g.rooms) { const i = index.get(id); if (i !== undefined) groupOf.set(i, g.key); }
@@ -212,6 +215,7 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
     const a = index.get(s.spaces[i]), b = index.get(s.spaces[i + 1]);
     if (a !== undefined && b !== undefined && a !== b) links.push({ a, b, area: s.width * 2.2 });
   }
+  const t2 = now();
   const day: Daylight = { sunDir: [0, 1, 0], sunE: [3, 3, 3], skyL: [0.3, 0.3, 0.3], groundAlbedo: 0.18 };
   const skyBase = opts.skyL ?? [0.27, 0.285, 0.31];
   let solved = solveRooms(rooms, aps, day, [], links);
@@ -239,9 +243,11 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
     solved = solveRooms(rooms, aps, day, sunVis, links);
     write();
   };
+  const t3 = now();
   update();
+  const t4 = now();
   return {
-    ms: now() - t0, rooms: rooms.length, triangles, apertures: aps, roomIndex: index, update,
+    ms: t4 - t0, timings: { tag: t1 - t0, apertures: t2 - t1, update: t4 - t3 }, rooms: rooms.length, triangles, apertures: aps, roomIndex: index, update,
     setDoorOpen(id, open) {
       let hit = false;
       for (const a of aps) if (a.door === id) { a.open = Math.max(0, Math.min(1, open)); hit = true; }

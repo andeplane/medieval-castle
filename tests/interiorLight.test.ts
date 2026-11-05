@@ -108,7 +108,8 @@ describe('bake', () => {
     const light = createInteriorLight(1);
     let t = 0;
     const bake = bakeInteriorLight([floorGroup()], never, { plan, windows, sun, light, now: () => (t += 5) });
-    expect(bake.ms).toBe(5);
+    expect(bake.ms).toBe(20);                           // five clock reads, 5 ms apart
+    expect(bake.timings).toEqual({ tag: 5, apertures: 5, update: 5 });
     expect(bake.rooms).toBe(1);                         // the table holds one room
     expect(bake.apertures.map((a) => a.kind)).toEqual(['glass', 'open']);
     expect(bake.apertures[0].group).toBe('T:0');

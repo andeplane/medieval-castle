@@ -68,11 +68,30 @@ export function roomAt(rooms: RoomSpec[], p: V3, tol = 0): number {
 
 /** Room a surface belongs to: the nearest room volume within maxDist (embrasures and door reveals sit
  * in the wall thickness, outside every room polygon). `prefer` rooms win ties within 5 cm. */
+const boxes = new WeakMap<RoomSpec, [number, number, number, number]>();
+function boxOf(r: RoomSpec) {
+  let b = boxes.get(r);
+  if (!b) {
+    b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, z] of r.poly) { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], z); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], z); }
+    boxes.set(r, b);
+  }
+  return b;
+}
+
 export function nearestRoom(rooms: RoomSpec[], p: V3, maxDist: number, prefer?: Set<number>): number {
   let best = -1, bd = Infinity;
+  // fast path: strictly inside one of the preferred rooms (rooms do not overlap)
+  if (prefer) for (const i of prefer) {
+    const r = rooms[i];
+    if (p[1] >= r.y0 - 0.05 && p[1] <= r.y1 + 0.05 && inPoly(r.poly, p[0], p[2])) return i;
+  }
   for (let i = 0; i < rooms.length; i++) {
     const r = rooms[i];
     if (p[1] < r.y0 - 0.5 || p[1] > r.y1 + 1.2) continue;
+    // the plan box is a lower bound on the polygon distance: skip rooms that cannot win
+    const b = boxOf(r), bx = Math.max(b[0] - p[0], 0, p[0] - b[2]), bz = Math.max(b[1] - p[2], 0, p[2] - b[3]);
+    if (Math.hypot(bx, bz) > Math.min(maxDist, bd + 0.05)) continue;
     let d = polyDist(r.poly, p[0], p[2]);
     if (d > maxDist) continue;
     if (prefer?.has(i)) d -= 0.05;
