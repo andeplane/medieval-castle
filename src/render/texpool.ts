@@ -6,6 +6,7 @@ async function inline(jobs: string[]): Promise<Record<string, Out>> {
   const T = await import('./texgen');
   const run: Record<string, () => Out> = {
     ashlar: () => ({ ...T.ashlarSet() }), rubble: () => ({ ...T.rubbleSet() }), dressed: () => ({ ...T.dressedSet() }),
+    detail: () => ({ data: T.stoneDetail() }),
     slate: () => ({ ...T.slate() }), planks: () => ({ ...T.planks() }), macro: () => ({ data: T.macroNoise() }),
     ground: () => ({ ...T.groundLayers() }), water: () => ({ data: T.waterNormals() }),
   };

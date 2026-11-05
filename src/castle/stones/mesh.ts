@@ -100,10 +100,14 @@ export function writeStone(out: GeoBuf, f: StoneFace, st: Stone, level: 0 | 1 | 
   const faceD = (s: number, y: number, k: number) => D * (old ? 0.88 + 0.12 * h1(sd, 30 + k) : 0.96 + 0.04 * h1(sd, 30 + k)) + tilt * (y - cy) + (old ? 0.01 * (h1(sd, 40) - 0.5) * (s - cx) : 0);
 
   const base = out.verts;
+  // the sides (from the back up to the face) fold the texture inward by their depth below the face, so
+  // they carry stone at its real texel density instead of one texel smeared over 6-9 cm
   const push = (s: number, y: number, d: number) => {
     const p = faceToWorld(f, s, y, d);
     out.pos.push(p[0], p[1], p[2]);
-    out.uv.push((ucs + (s - us) * ku + f.u0) / T, (ucy + (y - uy) * kv) / T);
+    const du = (s - us) * ku, dv = (y - uy) * kv, r = Math.hypot(du, dv);
+    const k = r > 0 ? 1 - Math.min(Math.max(0, D - d), 0.7 * r) / r : 1;
+    out.uv.push((ucs + du * k + f.u0) / T, (ucy + dv * k) / T);
     out.nor.push(0, 0, 0);
   };
   const back = -0.012;
