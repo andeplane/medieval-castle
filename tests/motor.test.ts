@@ -170,6 +170,7 @@ describe('CharacterMotor with a fake body', () => {
     expect(mm.floorTag).toBe('fake');
     mm.update({ ...IDLE, crouch: true }, 1 / 60);
     expect(body.height).toBe(TUNING.crouchHeight);
+    expect(mm.height).toBe(TUNING.crouchHeight);
     body.fitsAnswer = false;
     mm.update(IDLE, 1 / 60);
     expect(mm.crouched).toBe(true);
@@ -177,5 +178,6 @@ describe('CharacterMotor with a fake body', () => {
     mm.update(IDLE, 1 / 60);
     expect(mm.crouched).toBe(false);
     expect(body.height).toBe(TUNING.height);
+    expect(mm.height).toBe(TUNING.height);
   });
 });

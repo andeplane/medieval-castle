@@ -9,15 +9,17 @@ Done
 - Everything is injected (physics, input, clock, camera view, audio); `src/player/setup.ts` wires it for `main.ts` and the island test alike.
 - Walk mode is now the physics player; orbit and fly stay. P/F/O switch, walk bookmarks teleport the player, `?play` starts walking at the spawn south of the gate. The bridge has landward steps up to the deck.
 - `?test=walk`: a movement course on the east lawn (stairs 0.15/0.20/0.30/0.35, 30° and 55° ramps, a low beam, and stairs down through a hole in the ground into a tunnel). `scripts/walktest.mjs` drives it in the real page.
+- Doors on physics: the main gate's leaves and portcullis (interior/doors.ts) are kinematic boxes in the same world, stepped each fixed tick; they stop the player and any NPC motors (`setupPlay().characters`), and the use ray is blocked by walls via physics raycasts. `?test=doors` walks with the physics player too.
+- UI kept minimal behind `Hud` (`src/player/hud.ts`: setHelp, setPrompt, setLocked, toast), so the impeccable HUD in src/ui can replace `MinimalHud` at merge.
 - Debug: `__game.player` (pos, teleport, look, state, spawn), `__game.input(keys, ms)` (steps physics synchronously, returns cost and a trace), `__game.physics` (stats, raycast), `__game.probes`.
 
 Numbers (headless WebGL2 on a shared 4-core box): physics init 0.76 s on a normal load (Rapier wasm 0.16 s, colliders 0.41 s for 145k triangles: castle 114k, terrain 31k), 1.8–2.3 s with `?test=walk` under load ~30. Physics tick (player + world step) median 0.25–0.39 ms, mean 0.35–0.86 ms. Rendering cost is unchanged; colliders draw nothing.
 
-Walk test: all checks pass (gate, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
+Walk test: all checks pass (closed gate leaves stop you on the sill, open gate lets you in, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
 
 Known issues / next
-- The gate is closed and the gatehouse plinth batter runs across it; the shell work must open the passage.
-- Doors (kinematic boxes) do not push the player; the KCC stops against them.
+- The gate passage ends at a dark panel 5.2 m in until the shell continues it into the courtyard.
+- Door leaves do not push the player; a leaf stops against a standing character (doors.ts) and the player stops against a leaf.
 - 0.15 m steps are ridden by snap rather than autostepped (it looks the same).
 - The test course does not cut the render terrain; the tunnel hole is visible only from the physics.
 - Collider build time should be measured on the M4; if it is long, split the castle trimesh or build it in a worker.
@@ -176,3 +178,26 @@ Known issues / next
 - The stone materials are exterior ones: rain streaks and lichen show on treads indoors (needs an interior material variant).
 - Fixed door angles that fall badly for a small radius can cost going or headroom; the plan reports it in `stats.problems`. Taking upper door angles from `spiralLandingAngles()` always works.
 - The ramp is steeper than 50° within ~0.65 m of the axis on wide stairs (the capsule only gets there hugging the newel).
+
+## 2026-11-05: interior doors (branch `interior-doors`)
+
+Done
+- `src/castle/interior/doors.ts`: `buildDoors(doors, M, physics?, opts)` builds every door leaf from the shared `DoorSpec`s. All leaves go into two BatchedMeshes (oak, iron), so there are 2 draw calls however many doors there are. Each leaf is one instance whose matrix is rewritten while it swings.
+  - Leaf kinds: plank doors (vertical oak boards with chamfers and gaps, shaped to round, pointed, segmental or flat heads; ledges and a brace with its foot on the hinge side; strap hinges with spear tips and knuckles on pintles; clinched nail heads; a ring and escutcheon outside; a thumb latch, keeper and pull ring inside), studded and banded posterns, iron grilles (yetts), and the gate (two leaves, a wicket in one, sag and judder while moving).
+  - The leaf geometry is shared per size class and generated as pure arrays in `doorParts.ts`. The placement maths (hinge side, swing space, rebate depth, swing limit near the jamb) is in `doorGeom.ts`.
+- Behaviour: doors open fast and settle slowly; they close accelerating and end with a thud and a latch click. A leaf stops short of any character in its arc: the player (passed to `update`) plus `opts.characters()` for NPCs. A seeded few doors start ajar. There is one kinematic box per solid leaf part through `PhysicsApi.addKinematicBox`.
+- NPC API: `request(id, open, { pos })` (within 2.6 m), `isOpen(id)`, `isPassable(id)`. For the gate, `isPassable` is true when there is enough gap, or the wicket is open, and the portcullis is up.
+- Main gate on main: `gateDoorSpecs()` and `gatePortcullisSpec()` are read from `gatehouseFrame()`. The wood fill in `castle.ts` is now a 5.2 m deep dark passage. The old static portcullis is replaced by a moving one: it ratchets up slowly with a clank per tooth and drops on the brake, but not onto anyone. In the normal scene, E (walk mode) or a click (pointer locked) opens the gate, the wicket or the portcullis. Walk mode can step into the gate passage when the leaves allow.
+- `src/game/interact.ts`: centre dot plus an "E Open door" chip (index.html tokens, hidden in `body.shot`), reach 2.2 m. Input and view are injected, and `pickTarget` is pure.
+- `src/game/doorAudio.ts`: procedural WebAudio creak, latch, thud, bump, clank and chain sounds. They are positional (distance gain, low-pass and pan) and start on the first gesture. They are logged in `__game.state().sounds`.
+- `?test=doors`: a rebated stone wall with every head and kind, a gate with a portcullis and a grille. `?doors=0|0.5|1` sets the starting openness and `&port=down` lowers the portcullis. `door-*` bookmarks.
+- `__game.use()`, and `__game.doors.{state,setOpen,tick}`. `scripts/doortest.mjs` drives both the test scene and the castle gate.
+- The gatehouse's battered plinth used to cover the lower half of the gate; it is now cut through at the gate (`gatehouseBatter` in castle.ts). There is a new `door-gate` bookmark in front of it.
+- `CameraRig.canWalk` / `groundAt` are injectable. Bookmarks no longer get pushed out to the orbit minDistance in walk or fly mode.
+
+Numbers: 150 mixed doors come to 2 draw calls and 187k triangles (about 1.25k per leaf; iron studs and rings are about half of that). They build in about 0.7 s in Node. The castle gate, wicket and portcullis come to 5.6k triangles. `npm run coverage` enforces thresholds on the door modules (measured: doors 100 / 95.4 / 100 / 100, doorParts 98.3 / 94 / 100 / 99.2, doorGeom and doorBatch 100, interact 98.9 / 90.6 / 94.4 / 98.2, doorAudio 99.4 / 96.7 / 93.3 / 100, as statements / branches / functions / lines). The interaction now reuses the page's `#crosshair` instead of adding a second dot.
+
+Known issues / next
+- Contract interpretations the shell should match: the leaf's back face sits on the stop at `rebate` from the swing face; the leaf fits inside the clear opening with 1.5 cm clearance (no lap over the stop, so thin light slits show); pointed heads rise 0.42·w (castle.ts gate arch), segmental 0.2·w. `openingOutline(head, w, h, seg, grow)` gives the exact outline, and `grow` gives a rebate recess.
+- Portcullis grid is iron, not iron-shod oak; there is no winch or windlass in the room above yet.
+- Doors are only in the main scene for the gate, until the shell's `plan.doors` lands.

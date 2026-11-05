@@ -16,6 +16,7 @@ import { Footsteps } from '../src/player/footsteps';
 import { spawnPoint } from '../src/camera/controls';
 import { TUNING } from '../src/player/movement';
 import { GATEHOUSE } from '../src/castle/spec';
+import { buildDoors, gateDoorSpecs, gatePortcullisSpec } from '../src/castle/interior/doors';
 import { fakeClock, fakeView } from './helpers';
 
 const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, m])) as unknown as Record<MatKey, THREE.Material>; };
@@ -80,17 +81,27 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(play.physics.stats().characters).toBe(1);
   });
 
-  it('spawns south of the gate facing it, and the gate wall stops you', () => {
-    const s = spawnPoint(), g = gatehouseFrame();
-    stand(s.x, s.z, s.yaw);
-    stand(s.x, s.z, s.yaw);
-    const w = walk(['KeyW'], 4);
+  it('spawns south of the gate facing it; the gate leaves stop you, and once open you walk in on the sill', () => {
+    // the real gate: leaves (kinematic boxes) and the portcullis, stepped with physics like main.ts
+    const doors = buildDoors(gateDoorSpecs(), { wood: new THREE.MeshBasicMaterial(), iron: new THREE.MeshBasicMaterial(), trim: new THREE.MeshBasicMaterial() }, play.physics,
+      { initial: 0, portcullis: [gatePortcullisSpec()], characters: play.characters });
+    play.physics.onFixed((dt) => doors.update(dt, play.playerCentre()));
+    const s = spawnPoint(), g = gatehouseFrame(), sill = gateDoorSpecs()[0].centre[1];
     // how far into the gatehouse (from its front face, along −out) the feet got
     const front: V2 = [g.base[0] + g.out[0] * GATEHOUSE.project, g.base[1] + g.out[1] * GATEHOUSE.project];
-    const into = -dot(sub([w.feet[0], w.feet[2]], front), g.out);
-    // the gatehouse plinth batter runs across the closed gate for now (exterior only), so you stop at it
-    expect(into).toBeGreaterThan(-1.5);
-    expect(into).toBeLessThan(2.7);      // and never through the closed gate (2.6 m deep)
+    const into = (f: number[]) => -dot(sub([f[0], f[2]], front), g.out);
+    stand(s.x, s.z, s.yaw);
+    const shut = walk(['KeyW'], 5).feet;
+    expect(into(shut)).toBeGreaterThan(0.5);   // through the arch, onto the sill…
+    expect(into(shut)).toBeLessThan(4.2);      // …but stopped by the closed leaves
+    expect(Math.abs(shut[1] - sill)).toBeLessThan(0.1);
+    doors.setOpen('main-gate', true, true);
+    const open = walk(['KeyW'], 3).feet;
+    expect(into(open)).toBeGreaterThan(4.5);   // to the end of the passage (the shell continues it)
+    expect(Math.abs(open[1] - sill)).toBeLessThan(0.1);
+    expect(play.npcs).toEqual([]);
+    expect(play.characters()).toEqual([]);
+    stand(s.x, s.z, s.yaw);
   });
 
   it('walls stop you elsewhere too', () => {

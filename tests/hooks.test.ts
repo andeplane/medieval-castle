@@ -17,7 +17,7 @@ class FakeWin implements HookWindow {
 }
 
 describe('__game hooks', () => {
-  let w: FakeWin, game: ReturnType<typeof installHooks>, renders = 0;
+  let w: FakeWin, game: ReturnType<typeof installHooks>, renders = 0, used = 0, open = false;
   beforeAll(async () => {
     const physics = await createPhysics(fakeClock());
     addBox(physics, -200, 200, -1, 0, -200, 200, 'floor');
@@ -34,6 +34,8 @@ describe('__game hooks', () => {
       setTime: (h) => { hours = h; }, getTime: () => hours, renderNow: async () => { renders++; },
       stats: () => ({ extra: 1 }), tick: (dt) => { physics.step(dt); rig.update(dt); },
       physics, player, input, course: { lanes: [] }, interior: null,
+      use: () => { used++; return true; },
+      doors: { state: () => ({ gate: open ? 1 : 0 }), setOpen: (_id, o) => { open = o; } },
     }, w, fakeClock());
   });
 
@@ -81,5 +83,15 @@ describe('__game hooks', () => {
     expect(game.physics.stats().characters).toBe(1);
     expect(game.physics.raycast([0, 5, 0], [0, -1, 0], 10)?.tag).toBe('floor');
     expect(game.course).toEqual({ lanes: [] });
+  });
+
+  it('use and doors pass through to the game', () => {
+    expect(game.use()).toBe(true);
+    expect(used).toBe(1);
+    game.doors!.setOpen('gate', true);
+    expect(game.doors!.state()).toEqual({ gate: 1 });
+    const ticks = game.physics.stats().ticks;
+    expect(game.doors!.tick(0.5)).toEqual({ gate: 1 });
+    expect(game.physics.stats().ticks).toBeGreaterThan(ticks); // doors advance with physics
   });
 });

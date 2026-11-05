@@ -8,7 +8,7 @@ export default defineConfig({
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
-      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/interior/{stairs,stairprobe}.ts',
+      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/interior/{stairs,stairprobe}.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts', 'src/game/{interact,doorAudio}.ts',
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts'],
       exclude: ['src/loading/entry.ts', 'src/props/preview.ts'],
       thresholds: {
@@ -16,6 +16,10 @@ export default defineConfig({
         'src/props/**': { lines: 99, functions: 100, branches: 95, statements: 99 },
         // measured 99.8 / 100 / 89.6 / 98.0
         'src/castle/interior/{stairs,stairprobe}.ts': { lines: 99, functions: 100, branches: 88, statements: 97 },
+        // measured: doorParts 98.3 / 94 / 100 / 99.2, doors 100 / 95.4 / 100 / 100, doorGeom + doorBatch 100
+        'src/castle/interior/{doors,doorGeom,doorParts,doorBatch}.ts': { lines: 99, functions: 100, branches: 94, statements: 98 },
+        // measured: interact 98.9 / 90.6 / 94.4 / 98.2, doorAudio 99.4 / 96.7 / 93.3 / 100
+        'src/game/{interact,doorAudio}.ts': { lines: 98, functions: 93, branches: 90, statements: 98 },
         // physics player; measured on 2026-11-05 (see PROGRESS)
         'src/{physics,character,player}/**': { lines: 98, functions: 95, branches: 85, statements: 98 },
         'src/{camera/controls,debug/hooks,debug/testcourse}.ts': { lines: 99, functions: 100, branches: 80, statements: 99 },

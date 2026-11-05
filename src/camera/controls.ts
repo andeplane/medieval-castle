@@ -4,7 +4,7 @@
 import * as THREE from 'three/webgpu';
 import { heightAt } from '../world/terrain';
 import { castleCentre, gatehouseFrame } from '../castle/layout';
-import { GATEHOUSE } from '../castle/spec';
+import { GATEHOUSE, GROUND } from '../castle/spec';
 import { add, scale } from '../core/math2d';
 import type { InputSource } from '../player/input';
 import type { Look } from './mouseLook';
@@ -15,6 +15,9 @@ export type Mode = 'orbit' | 'fly' | 'walk';
 export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
 
 const C = castleCentre();
+// in front of the main gate, a little off-axis, looking into the gate passage
+const GF = gatehouseFrame(), gAt = (s: number, d: number) => [GF.base[0] + GF.dir[0] * s + GF.out[0] * d, GF.base[1] + GF.dir[1] * s + GF.out[1] * d];
+const gEye = gAt(1.4, GATEHOUSE.project + 6.5), gLook = gAt(0, GATEHOUSE.project - 1.5);
 export const VIEWS: View[] = [
   { name: 'hero', label: 'Hero', mode: 'orbit', pos: [118, 52, 132], target: [C[0], 22, C[1]] },
   { name: 'aerial', label: 'Aerial', mode: 'orbit', pos: [-150, 150, 175], target: [C[0], 12, C[1]] },
@@ -25,6 +28,7 @@ export const VIEWS: View[] = [
   { name: 'courtyard', label: 'Courtyard', mode: 'walk', pos: [-11, 0, 4], target: [12, 22, -8] },
   { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-24, 56, -16], target: [80, 20, 160] },
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
+  { name: 'door-gate', label: 'Main gate', mode: 'walk', pos: [gEye[0], 0, gEye[1]], target: [gLook[0], GROUND + 2.2, gLook[1]] },
 ];
 
 /** Where play starts: on the lawn just south of the gate, facing it. Not a bookmark (trees avoid those). */
@@ -60,6 +64,8 @@ export class CameraRig {
   /** Mouse look, attached after construction (it reads and writes the rig's look). */
   mouse: MouseControl | null = null;
   onModeChange?: (mode: Mode) => void;
+  /** Ground height under the camera (fly floor; walk bookmarks without a player). */
+  groundAt: (x: number, z: number) => number = heightAt;
 
   constructor(public camera: THREE.PerspectiveCamera, public orbit: Orbiter, private keys: InputSource) {}
 
@@ -121,12 +127,13 @@ export class CameraRig {
       return;
     }
     const p = new THREE.Vector3(...v.pos);
-    if (v.mode === 'walk') p.y = heightAt(p.x, p.z) + TUNING.eye;
+    if (v.mode === 'walk') p.y = this.groundAt(p.x, p.z) + TUNING.eye;
     this.camera.position.copy(p);
     this.camera.lookAt(target);
     this.orbit.target.copy(target);
     this.setMode(v.mode);
-    this.orbit.update();
+    // OrbitControls.update() would push a close walk/fly bookmark out to minDistance
+    if (v.mode === 'orbit') this.orbit.update();
   }
 
   update(dt: number) {
@@ -143,7 +150,7 @@ export class CameraRig {
     const move = new THREE.Vector3().addScaledVector(look, fwd).addScaledVector(right, str);
     move.y += up;
     this.camera.position.addScaledVector(move, this.speed.fly * fast * dt);
-    const floor = heightAt(this.camera.position.x, this.camera.position.z) + 1.0;
+    const floor = this.groundAt(this.camera.position.x, this.camera.position.z) + 1.0;
     if (this.camera.position.y < floor) this.camera.position.y = floor;
   }
 }

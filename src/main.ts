@@ -27,6 +27,10 @@ import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { setupPlay, type InteriorCollision } from './player/setup';
+import { MinimalHud, type Hud } from './player/hud';
+import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
+import { createInteraction, domPromptView } from './game/interact';
+import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
 import { stepProgress, textureProgress } from './loading/model';
 import { setTextureProgress } from './render/texpool';
@@ -39,6 +43,7 @@ const say = (s: string) => screen.progress(stepProgress(s, screen.shown), s);
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  if (params.get('test') === 'doors') { const { runDoorTest } = await import('./test/doorScene'); return runDoorTest(screen); }
   const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
@@ -165,7 +170,32 @@ async function main() {
   rig.mouse = mouse;
   input.capture = () => mouse.locked;
   try { const s = Number(localStorage.getItem('mouseSens')); if (s > 0) mouse.sensitivity = s; } catch { /* storage blocked */ }
-  const tick = (dt: number) => { physics.step(dt); rig.update(dt); };
+  // doors (G.2): the main gate's two leaves with a wicket, and the portcullis, until the shell emits all
+  // DoorSpecs. Every leaf is a kinematic box in the physics world, posed each fixed tick; the player and
+  // any NPC motors stop a swinging leaf.
+  const audio = new DoorAudio(camera);
+  const gateSpecs = test ? [] : gateDoorSpecs();
+  const doors = buildDoors(gateSpecs, M, physics, {
+    portcullis: test ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
+    initial: params.has('doors') ? Number(params.get('doors')) : undefined,
+  });
+  scene.add(doors.object);
+  // the fly camera's floor in the gate passage is the sill, not the terrain under the gatehouse
+  rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
+  // the player blocks leaves by its body in walk mode; a flying camera by where it is
+  physics.onFixed((dt) => doors.update(dt, rig.mode === 'walk' ? play.playerCentre() : camera.position));
+
+  // the HUD bits play needs (crosshair, help, use prompt), behind Hud so src/ui can replace it
+  const hud: Hud = new MinimalHud(
+    { help: document.getElementById('help')!, crosshair: document.getElementById('crosshair')! },
+    domPromptView(document), { set: (f, ms) => setTimeout(f, ms), clear: (h) => clearTimeout(h as number) });
+  const interaction = createInteraction(camera, renderer.domElement, () => doors.interactables, {
+    enabled: () => rig.mode !== 'fly',
+    view: { show: (l) => hud.setPrompt(l), dispose: () => hud.setPrompt(null) },
+    // walls between you and a door stop the use ray; door leaves themselves do not
+    occluder: (f, dir, max) => { const h = physics.raycast([f.x, f.y, f.z], [dir.x, dir.y, dir.z], max); return h && !h.tag?.startsWith('door:') ? h.dist : null; },
+  });
+  const tick = (dt: number) => { physics.step(dt); rig.update(dt); interaction.update(); };
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? 'hero')) ?? VIEWS[0];
@@ -177,20 +207,18 @@ async function main() {
   const modeRow = document.createElement('div'); modeRow.className = 'row';
   const viewRow = document.createElement('div'); viewRow.className = 'row';
   const modeBtns: Record<string, HTMLButtonElement> = {};
-  const help = document.getElementById('help')!;
   const keysText = 'P walk · F fly · O orbit';
   const walkKeys = 'WASD walk · Shift run · Space jump · C (or Ctrl) crouch · M sound';
   const helpText: Record<Mode, string> = {
     orbit: `Drag to orbit · right-drag to pan · scroll to zoom · ${keysText}`,
     fly: `Click to look with the mouse · WASD move · E/Q up/down · Shift fast · ${keysText}`,
-    walk: `Click to look with the mouse · ${walkKeys} · ${keysText}`,
+    walk: `Click to look with the mouse · ${walkKeys} · E to use (gate, portcullis) · ${keysText}`,
   };
-  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · Esc to release mouse', walk: `${walkKeys} · Esc to release mouse` };
-  const crosshair = document.getElementById('crosshair')!;
+  const lockedText: Record<Mode, string> = { orbit: helpText.orbit, fly: 'WASD move · E/Q up/down · Shift fast · click to use · Esc to release mouse', walk: `${walkKeys} · E or click to use · Esc to release mouse` };
   const syncMode = () => {
     for (const [k, b] of Object.entries(modeBtns)) b.classList.toggle('on', k === rig.mode);
-    help.textContent = (rig.locked ? lockedText : helpText)[rig.mode];
-    crosshair.hidden = !rig.locked;
+    hud.setHelp((rig.locked ? lockedText : helpText)[rig.mode]);
+    hud.setLocked(rig.locked);
   };
   rig.onModeChange = () => syncMode();
   input.onPress = (code) => {
@@ -198,7 +226,7 @@ async function main() {
     if (code === 'KeyP') rig.setMode('walk');
     else if (code === 'KeyF') rig.setMode('fly');
     else if (code === 'KeyO') rig.setMode('orbit');
-    else if (code === 'KeyM') footsteps.enabled = !footsteps.enabled;
+    else if (code === 'KeyM') { footsteps.enabled = !footsteps.enabled; hud.toast(footsteps.enabled ? 'Footsteps on' : 'Footsteps off'); }
   };
   renderer.domElement.addEventListener('pointerdown', () => footsteps.unlock());
   for (const m of ['orbit', 'fly', 'walk'] as Mode[]) {
@@ -230,9 +258,12 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     renderNow: async () => { veg?.update(camera); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior,
-    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint() },
+    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint(), gateDoors: gateSpecs },
+    use: () => interaction.use(),
+    doors,
     stats: () => ({
       castleTriangles: castle.userData.triangles, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
+      doorTriangles: doors.triangles, doors: doors.state(), target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
       physics: { ...physics.stats(), ...play.timings },
     }),

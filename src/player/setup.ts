@@ -79,8 +79,15 @@ export async function setupPlay(d: PlayDeps) {
   // first step so the query structures hold every collider
   physics.world.step();
   const totalMs = d.clock.now() - t0;
+  /** NPC motors sharing this world (add with physics.createCharacter); the player is not listed. */
+  const npcs: CharacterMotor[] = [];
+  const centre = (m: CharacterMotor) => ({ x: m.feet[0], y: m.feet[1] + m.height / 2, z: m.feet[2] });
   return {
-    physics, player, boundary,
+    physics, player, boundary, npcs,
+    /** Body centres of the NPCs (doors stop a swinging leaf against them). */
+    characters: () => npcs.map(centre),
+    /** The player's body centre. */
+    playerCentre: () => centre(motor),
     walkable: (x: number, z: number) => pointInPoly(boundary, x, z),
     timings: { wasmMs: Math.round(tInit), totalMs: Math.round(totalMs), castleTris, interiorTris, terrainTris, rockTris },
   };

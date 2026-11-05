@@ -41,12 +41,17 @@ const face = (a, b) => Math.atan2(-(b[0] - a[0]), -(b[1] - a[1]));
 const tickMs = [];
 const run = async (keys, ms) => { const r = await input(keys, ms); tickMs.push(r.tickMs); return r; };
 
-// 1. spawn, walk into the gate: the closed gate (and its plinth) stops you
+// 1. spawn, walk into the gate: the closed leaves (kinematic boxes) stop you; opened, you walk in
+const g = P.gate, front = [g.base[0] + g.out[0] * g.project, g.base[1] + g.out[1] * g.project];
+const into = (s) => -((s.x - front[0]) * g.out[0] + (s.z - front[1]) * g.out[1]);
+const sill = P.gateDoors[0].centre[1];
+await page.evaluate(() => window.__game.doors.setOpen('main-gate', false, true));
 await page.evaluate(() => window.__game.player.spawn());
 let r = await run(['KeyW'], 5000);
-const g = P.gate, front = [g.base[0] + g.out[0] * g.project, g.base[1] + g.out[1] * g.project];
-const into = -((r.x - front[0]) * g.out[0] + (r.z - front[1]) * g.out[1]);
-check('gate wall stops you', into < 2.7 && into > -1.5, `into gatehouse ${into.toFixed(2)} m (closed gate at 2.6)`);
+check('closed gate leaves stop you on the sill', into(r) > 0.5 && into(r) < 4.2 && Math.abs(r.y - sill) < 0.1, `into the gatehouse ${into(r).toFixed(2)} m, y ${r.y.toFixed(2)} (sill ${sill.toFixed(2)})`);
+await page.evaluate(() => window.__game.doors.setOpen('main-gate', true, true));
+r = await run(['KeyW'], 3000);
+check('open gate: walk in to the end of the passage', into(r) > 4.5 && Math.abs(r.y - sill) < 0.1, `into the gatehouse ${into(r).toFixed(2)} m`);
 
 // 2. walls elsewhere: run at the east wing
 await tele(44, null, 27, face([44, 27], [20, -6]));

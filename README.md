@@ -21,7 +21,8 @@ Walk is the physics player (Rapier capsule, 1.75 m, eye at 1.62 m). Open the pag
 | Shift | run (6 m/s) | fast |
 | Space | jump (~0.9 m) | up |
 | C or Ctrl (hold) | crouch (1.1 m; you stay down under low ceilings) | down (C) |
-| E / Q | | up / down |
+| Q | | down |
+| E (or click while looking) | use the door or portcullis under the crosshair | up (E) |
 | M | footstep sound on/off | |
 | P / F / O | switch to walk / fly / orbit | |
 

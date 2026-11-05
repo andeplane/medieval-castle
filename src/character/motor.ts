@@ -47,6 +47,9 @@ export class CharacterMotor {
 
   constructor(readonly body: CharacterBody, readonly t: Tuning = TUNING) { this.feet = body.feet(); this.prevFeet = [...this.feet]; }
 
+  /** Current capsule height (standing or crouched). */
+  get height() { return this.crouched ? this.t.crouchHeight : this.t.height; }
+
   teleport(p: V3) {
     this.body.teleport(p);
     this.feet = [...p]; this.prevFeet = [...p];
