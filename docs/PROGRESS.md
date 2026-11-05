@@ -1,5 +1,8 @@
 # Progress
 
+## 2026-11-05: the game starts walking
+
+Anders: "default should be walk for sure". The page now starts in walk mode at the spawn on the lawn outside the gate, facing it, with the tools panel shut; O switches to orbit and F to fly. A `?view=` bookmark, `?shot` captures and the `?test=` scenes keep their review camera as before, and `?play` still forces walking. I checked it in the real page (headless WebGL2): the default URL reports mode `walk`, the player is grounded at the spawn (5.48, 2.66, 29.79), and the tools panel is closed.
 
 ## 2026-11-05: loading tunnel in a worker, time-based progress
 
@@ -549,7 +552,7 @@ Checked in headless Chromium against the merged build (`?webgl&shot&ui`): backqu
 
 Known issues / next
 - Captures run on swiftshader on a loaded machine, so the locked HUD in captures is drawn via `__game.hud.setLocked(true)`, not real pointer lock.
-- The tools open on orbit/fly start views, which includes the default `hero` view on Pages; Anders may prefer them shut everywhere.
+- The tools open on orbit/fly start views (`?view=hero` and other review bookmarks); the default page starts walking with them shut.
 - With interior bookmarks the Views grid has 17 entries and scrolls inside the panel; group exterior/interior when it grows.
 - The help line still names the old walk controls; the physics player should call `hud.setHelp` with its own (jump, crouch).
 - No touch controls: on a phone the HUD lays out, but the game cannot be played.
