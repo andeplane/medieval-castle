@@ -126,6 +126,8 @@ Done
 
 ## 2026-11-05: furniture in the castle rooms (behind `?furniture=1`)
 
+Update: furniture now takes the interior clones of its materials (`InteriorMaterialSet.adopt`, underground set for cellars and tunnels) and is room-tagged after the bake, so it gets the room's daylight, irradiance and firelight instead of the outdoor sky (sacks no longer blow out underground).
+
 Done
 - `src/props/dress.ts` (pure): every room gets a role from its kind, floor and size (hall, chapel, bedchamber, solar, study, guard room, kitchen, store, cellar, gate, passage) and a recipe that puts props against walls, in the middle, on table tops, on walls (sconces, tapestries) and from the ceiling. Tall props and hangings go on inner walls only (outer walls have windows). Props come from 6 seeded variants per kind.
 - Walkable by construction: clear zones inside every doorway (door swing + a step) and around straight stair ends; after placing, a flood fill on a 0.2 m grid (agent radius 0.3 m, wall clearance) must still connect every door of the room, or props are taken out again, last first. Tests check this for every room of the plan.

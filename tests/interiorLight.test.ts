@@ -58,6 +58,18 @@ describe('interior materials', () => {
     expect(un.getLights()).toEqual([]);
     UM.setDynamicLights([torch]);
     expect(un.getLights()).toEqual([torch]);
+    // furniture materials join a set: same lights node, same clone per source, recompiled with the set
+    const wood = new THREE.MeshStandardNodeMaterial(), plain = new THREE.MeshStandardNodeMaterial();
+    wood.name = 'prop-wood';
+    const a = UM.adopt(wood);
+    expect(a).not.toBe(wood);
+    expect(a.name).toBe('interior-under-prop-wood');
+    expect(UM.adopt(wood)).toBe(a);
+    expect(UM.adopt(plain).name).toBe('interior-under-prop');
+    expect((a.lightsNode as unknown as { getLights(): THREE.Light[] }).getLights()).toEqual([torch]);
+    const va = a.version;
+    UM.setDynamicLights([]);
+    expect(a.version).toBeGreaterThan(va);
   });
   test('sunStateOf reads direction and irradiance', () => {
     const l = new THREE.DirectionalLight(0xffffff, 2); l.position.set(0, 10, 0);

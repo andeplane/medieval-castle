@@ -28,7 +28,7 @@ import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
-import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
+import { makeInteriorMaterials, tagGroups, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility } from './world/visibility';
 import { fromFurniture, wallTorches } from './render/interiorFire';
@@ -37,7 +37,7 @@ import { LightRig } from './light/rig';
 import { threeLightFactory, makeFlameSprites } from './light/three';
 import { linkFlames, flameBrightness } from './light/flames';
 import { buildRoomTest } from './debug/roomtest';
-import type { InteriorGroup, InteriorPlan } from './castle/interior/types';
+import type { InteriorGroup, InteriorPlan, SpaceId } from './castle/interior/types';
 import type { WindowInput } from './render/interiorMath';
 import { buildCourse, type CourseInfo } from './debug/testcourse';
 import { KeyboardInput, ScriptedInput, MergedInput } from './player/input';
@@ -194,8 +194,24 @@ async function main() {
       if (was === undefined || Math.abs(was - o) > 0.05 || (o !== was && (o === 0 || o === 1))) { doorLit[id] = o; bake.setDoorOpen(id, o); }
     }
   };
-  // props join their groups after the bake: they keep their own materials and are not room-tagged
-  if (furniture && interior) for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
+  // props join their groups after the bake (they don't shadow the sun-visibility rays): they take the
+  // interior clones of their materials and are room-tagged like the shell, so they get the room's light
+  if (furniture && interior) {
+    const tf = performance.now();
+    const rooms = interior.plan.rooms.slice(0, interiorLight.maxRooms);
+    const index = new Map(rooms.map((r, i) => [r.id, i] as [SpaceId, number]));
+    const tagged: InteriorGroup[] = [];
+    for (const g of interior.groups) {
+      const o = furniture.objects.get(g.key);
+      if (!o) continue;
+      const set = g.floor < 0 ? IMu : IM;
+      o.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && (m.material as THREE.MeshStandardNodeMaterial).isMeshStandardNodeMaterial) m.material = set.adopt(m.material as THREE.MeshStandardNodeMaterial); });
+      tagged.push({ ...g, object: o });
+      g.object.add(o);
+    }
+    tagGroups(tagged, rooms, index, 4.5);
+    console.info(`furniture: interior materials + room tags in ${(performance.now() - tf).toFixed(0)} ms`);
+  }
   // exterior windows (render/windowGlass.ts): see-through into rooms that are shown, a dark pane
   // (warm at night when the room has firelight) while their group is culled
   const winFlags = createWindowFlags(Math.max(1, lit.groups.length));

@@ -34,7 +34,12 @@ export type InteriorMaterials = Record<InteriorKey, THREE.MeshStandardNodeMateri
  * torches) join the sun in every interior material. Pass a stable pool and move/dim its lights
  * rather than changing the list: a new list recompiles the interior shaders. Non-enumerable, so
  * `Object.entries(materials)` still lists only materials. */
-export type InteriorMaterialSet = InteriorMaterials & { readonly setDynamicLights: (extra: THREE.Light[]) => void };
+export type InteriorMaterialSet = InteriorMaterials & {
+  readonly setDynamicLights: (extra: THREE.Light[]) => void;
+  /** An interior clone of any other standard material (furniture), lit like the rest of this set
+   * and following its dynamic lights. The same source always gives the same clone. */
+  readonly adopt: (src: THREE.MeshStandardNodeMaterial) => THREE.MeshStandardNodeMaterial;
+};
 
 /** The room table the shader reads and the artist knobs (live-tweakable from __game.interiorLight). */
 export interface InteriorLight {
@@ -81,13 +86,22 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
   glass.opacityNode = mix(float(0.3), float(1), float(1).sub(smoothstep(0.03, 0.07, line)));
   const set = { old: mk(M.old, 'old'), new: mk(M.new, 'new'), trim: mk(M.trim, 'trim'), wood: mk(M.wood, 'wood'), iron: mk(M.iron, 'iron'), glass };
   let current: THREE.Light[] = [];
+  const adopted = new Map<THREE.Material, THREE.MeshStandardNodeMaterial>();
   Object.defineProperty(set, 'setDynamicLights', {
     enumerable: false,
     value: (extra: THREE.Light[]) => {
       if (extra.length === current.length && extra.every((l, i) => l === current[i])) return;
       current = [...extra];
       sunOnly.setLights([...base, ...current]);
-      for (const m of Object.values(set)) m.needsUpdate = true;
+      for (const m of [...Object.values(set), ...adopted.values()]) m.needsUpdate = true;
+    },
+  });
+  Object.defineProperty(set, 'adopt', {
+    enumerable: false,
+    value: (src: THREE.MeshStandardNodeMaterial) => {
+      let m = adopted.get(src);
+      if (!m) { m = mk(src, src.name || 'prop'); adopted.set(src, m); }
+      return m;
     },
   });
   return set as InteriorMaterialSet;
