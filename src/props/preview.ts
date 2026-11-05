@@ -1,7 +1,7 @@
 // Prop-kit review page (props.html): every kind in a gallery cell against a stone wall, plus three
 // dressed rooms (hall, chamber, store). Same window.__game contract as the castle page, so
 // `URL=http://localhost:5173/props.html npm run shots` captures every bookmark.
-// URL flags: ?webgl, ?shot, ?view=<name>, ?seed=N (prop variants), ?spin (turntable the camera).
+// URL flags: ?webgl, ?shot (add ?ui to keep the tools), ?view=<name>, ?seed=N (prop variants), ?spin (turntable).
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateTextures } from '../render/texpool';
@@ -9,10 +9,16 @@ import type { TexSet } from '../render/texgen';
 import { woodTex, ironTex, clothTex, strawTex, ceramicTex } from './textures';
 import { makePropMaterials, meshFromProp } from './render';
 import { mergePlaced, previewLayout } from './place';
+import { LightRig } from '../light/rig';
+import { linkFlames, flameBrightness } from '../light/flames';
+import { threeLightFactory, makeFlameSprites } from '../light/three';
+import { createHud, browserHudDeps } from '../ui/hud';
+import { HELP } from '../ui/help';
+import { showBootError } from '../ui/error';
 
 const params = new URLSearchParams(location.search);
 const loading = document.getElementById('loading')!;
-if (params.has('shot')) document.body.classList.add('shot');
+if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 function dataTex(data: Uint8Array, N: number, srgb: boolean, rep: number) {
   const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -55,11 +61,11 @@ async function main() {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  loading.textContent = 'CUTTING THE STONE…';
+  loading.textContent = 'Cutting the stone…';
   const t0 = performance.now();
   const T = await generateTextures(['rubble', 'dressed']);
   const floorM = stoneMat(T.dressed as unknown as TexSet, 1, 0xb8b2a8), wallM = stoneMat(T.rubble as unknown as TexSet, 1, 0xd8d2c8);
-  loading.textContent = 'SHAPING THE FURNITURE…';
+  loading.textContent = 'Shaping the furniture…';
   const mats = makePropMaterials({ wood: woodTex(), iron: ironTex(), cloth: clothTex(), straw: strawTex(), ceramic: ceramicTex() });
   const tTex = performance.now() - t0;
 
@@ -89,11 +95,13 @@ async function main() {
   Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 90 });
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
   scene.add(sun, sun.target);
-  for (const e of emitters.slice(0, 16)) {
-    const l = new THREE.PointLight(new THREE.Color(...e.colour), e.intensity * 0.9, 7, 2);
-    l.position.set(...e.position);
-    scene.add(l);
-  }
+  // fixtures light the rooms through the shared fire system (src/light): flickering lights + flame sprites
+  const rig = new LightRig(threeLightFactory(scene), { shadows: 0, lights: 12 });
+  rig.setEmitters(emitters);
+  const flames = linkFlames(mesh.flames, emitters);
+  const sprites = makeFlameSprites(flames);
+  scene.add(sprites.group);
+  const bright = new Float32Array(flames.length);
 
   const go = (name: string) => {
     const v = L.views.find((x) => x.name === name) ?? L.views[0];
@@ -102,20 +110,28 @@ async function main() {
   };
   go(params.get('view') ?? 'kit');
 
-  // UI: one button per room view and a select for every kind
-  const ui = document.getElementById('ui')!;
-  const row = document.createElement('div'); row.className = 'row';
-  for (const v of L.views.filter((x) => !x.name.startsWith('p-'))) { const b = document.createElement('button'); b.textContent = v.label; b.onclick = () => go(v.name); row.appendChild(b); }
-  const sel = document.createElement('select');
-  sel.innerHTML = '<option value="">Piece…</option>' + L.views.filter((x) => x.name.startsWith('p-')).map((v) => `<option value="${v.name}">${v.label}</option>`).join('');
-  sel.onchange = () => sel.value && go(sel.value);
-  row.appendChild(sel); ui.appendChild(row);
+  // UI: the castle page's tools panel (` toggles it), one button per room and a picker for every kind
+  const hud = createHud(browserHudDeps());
+  hud.setHelp([...HELP.orbit.free, { keys: '`', action: 'tools' }]);
+  const pieces = L.views.filter((x) => x.name.startsWith('p-'));
+  hud.tools({ title: 'Prop kit', sections: [
+    { kind: 'actions', id: 'rooms', label: 'Rooms', options: L.views.filter((x) => !x.name.startsWith('p-')).map((v) => ({ id: v.name, label: v.label })), onPick: go },
+    { kind: 'select', id: 'piece', label: `Pieces (${pieces.length})`, placeholder: 'Choose a piece…', options: pieces.map((v) => ({ id: v.name, label: v.label })), onPick: go },
+  ] }, true);
 
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   await renderer.compileAsync(scene, camera);
 
   const spin = params.has('spin');
-  const render = () => { if (spin) { controls.autoRotate = true; controls.autoRotateSpeed = 1.5; } controls.update(); renderer.render(scene, camera); };
+  const t0r = performance.now();
+  const render = () => {
+    if (spin) { controls.autoRotate = true; controls.autoRotateSpeed = 1.5; }
+    controls.update();
+    const t = (performance.now() - t0r) / 1000, eye: [number, number, number] = [camera.position.x, camera.position.y, camera.position.z];
+    rig.update(t, 1 / 60, eye);
+    sprites.update(flameBrightness(flames, t, 1, bright), t);
+    renderer.render(scene, camera);
+  };
   const info = renderer.info;
   const errors: string[] = [];
   addEventListener('error', (e) => errors.push(String(e.message)));
@@ -139,4 +155,4 @@ async function main() {
   hooks.ready = true;
 }
 
-main().catch((e) => { loading.textContent = 'FAILED: ' + (e as Error).message; console.error(e); });
+main().catch((e) => { console.error(e); loading.remove(); showBootError(document, e, () => location.reload(), 'The prop kit'); });

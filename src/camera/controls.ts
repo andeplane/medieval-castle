@@ -33,6 +33,9 @@ export const VIEWS: View[] = [
   { name: 'closeup-corner', label: 'Quoin 3 m', mode: 'fly', pos: [-25.16, 8.0, 24.51], target: [-19.66, 6.81, 17.49] },
   // Anders' live screenshot (2026-11-05): on foot at the base of the S wing (ashlar), 1.1 m out, looking west along it
   { name: 'closeup-walk', label: 'Wall foot', mode: 'walk', pos: [-9.157, 0, 19.096], target: [-12.638, GROUND + 2.3, 18.288] },
+  // walk views of the moat edge: by the bridge looking along it, and along the revetment
+  { name: 'bridge', label: 'Bridge', mode: 'walk', pos: [20.7, 0, 53.4], target: [14.5, 1.2, 67.8] },
+  { name: 'rim', label: 'Moat edge', mode: 'walk', pos: [48.4, 0, 32.0], target: [59.5, 1.2, 13.5] },
 ];
 
 export class CameraRig {

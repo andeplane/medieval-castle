@@ -5,7 +5,8 @@ import { STONE_GREYS } from '../../src/render/texgen';
 import { fakeDeps } from './fakes';
 
 const root = () => { document.body.innerHTML = '<div id="loading">BUILDING THE CASTLE…</div>'; return document.getElementById('loading')!; };
-const label = () => document.querySelector('#loading .label')?.textContent;
+/** "step | pct" as the two parts of the caption line show them */
+const label = () => { const l = document.querySelector('#loading .label'); return l ? `${l.querySelector('.step')?.textContent} | ${l.querySelector('.pct')?.textContent}` : undefined; };
 
 describe('renderSize', () => {
   it('renders at 0.75 of device pixels with DPR capped at 2', () => {
@@ -29,8 +30,10 @@ describe('createLoadingScreen', () => {
     const d = fakeDeps();
     createLoadingScreen(el, {}, d);
     expect(el.querySelector('canvas')).not.toBeNull();
-    expect(el.querySelector('.title')?.textContent).toBe('MOATED CASTLE');
-    expect(label()).toBe('DOWN TO THE CELLAR…  0%');
+    expect(el.querySelector('.title')?.textContent).toBe('Moated Castle');
+    expect(label()).toBe('Down to the cellar… | 0%');
+    expect(el.getAttribute('aria-label')).toBe('Loading Moated Castle');
+    expect(el.getAttribute('aria-valuetext')).toBe('Down to the cellar… 0%');
     expect(el.getAttribute('role')).toBe('progressbar');
     expect(el.getAttribute('aria-valuenow')).toBe('0');
   });
@@ -44,7 +47,7 @@ describe('createLoadingScreen', () => {
     await s.progress(0.3, 'Cutting the stone…');
     for (let i = 0; i < 120; i++) d.frame();
     expect(s.shown).toBeCloseTo(0.3);
-    expect(label()).toBe('CUTTING THE STONE…  30%');
+    expect(label()).toBe('Cutting the stone… | 30%');
     const lit = (d.gl!.uniforms.get('uI') as number[]).filter((x) => x > 0).length;
     expect(lit).toBe(3);
     const c = el.querySelector('canvas')!;
@@ -119,7 +122,7 @@ describe('createLoadingScreen', () => {
       const s = createLoadingScreen(root(), {}, d);
       await s.progress(0.5);
       for (let i = 0; i < 100; i++) d.frame();
-      expect(label()).toBe('DOWN TO THE CELLAR…  50%');
+      expect(label()).toBe('Down to the cellar… | 50%');
       s.dispose();
     }
   });
