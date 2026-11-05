@@ -263,7 +263,7 @@ function sampleIn(T: Ctx, x: number, z: number): Sample {
   if (r < 140 && sI < 0) {
     const e = eI;
     const dc = Math.hypot(x - CC[0], z - CC[1]);
-    let h = GROUND + 0.35 * fbm(n1, x / 40, z / 40, 3) - 0.9 * smoothstep(28, 60, dc);
+    let h = GROUND + 0.35 * fbm(n1, x / 40, z / 40, 3) - 0.75 * smoothstep(28, 60, dc);
     // little rocky rise by the great tower, hollows in the south-east lawn
     h += 1.1 * Math.max(0, 1 - Math.hypot(x + 40, z + 24) / 11) * (0.7 + 0.3 * n2(x / 6, z / 6));
     h -= 0.35 * Math.max(0, n2(x / 25 + 3, z / 25)) * smoothstep(35, 50, dc);
@@ -271,9 +271,10 @@ function sampleIn(T: Ctx, x: number, z: number): Sample {
     const fd = footDist(x, z);
     h = h + (GROUND - 0.05 - h) * (1 - smoothstep(2, 9, fd));
     if (pointInPoly(COURT, x, z)) h = GROUND + 0.02;
-    // the bank is faced with a stone revetment, so the ground holds its level right to the edge
-    const bank = smoothstep(0.1, 0.9, e);
-    h = -1.4 + (h + 1.4) * bank;
+    // the bank is faced with a stone revetment (castle/revetment.ts) whose coping and turf strip cover the
+    // outer 1.8 m: the ground holds its level to 0.35 m from the edge, then drops under the wall
+    const bank = smoothstep(0.05, 0.35, e);
+    h = -1.6 + (h + 1.6) * bank;
     return { h, zone: 'island', dEdge: e };
   }
   const s = moatSigned(x, z, r);

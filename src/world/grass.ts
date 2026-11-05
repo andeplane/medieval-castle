@@ -369,7 +369,7 @@ export function buildGroundCover(terrain: THREE.Mesh, macro: THREE.Texture): Gro
       }
     }
   };
-  walk(ISLAND, 1, [0.3, 1.6]);
+  walk(ISLAND, 1, [1.3, 2.5]); // clear of the revetment face (castle/revetment.ts: 0.75 m out, battered to ~1.2 m at the foot)
   walk(MOAT_OUTER, -1, [-1.2, 1.0]);
   let reedCount = 0;
   const reedChunk = (ci: number, cj: number) => {
