@@ -12,6 +12,7 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - Keep it simple. Build the smallest thing that does the job; no abstractions, options or frameworks before a second real use needs them. Don't over-engineer.
 - Don't invent what Anders will see. If a task needs a visible design choice he hasn't asked for (what a gate looks like, a door type, a style), use the plainest choice and name it as an assumption in the PR and report so he can veto it before it gets built out.
 - "Works" means used, not looked at. Before saying the player can do something (walk in, open, climb, reach), do it: walk it in the game or run a test through the same code the player uses. A capture of a state is not proof of an interaction.
+- Look at your own captures as a player would before reporting them. Anything odd (a hole, a black cutout, a floating piece, a seam, a door that makes no sense) is a defect to fix or flag, not a detail.
 - Report what you checked and what you didn't. No "should work"; say which path was walked, which test covers it, and what is still untested.
 
 ## Rules
@@ -25,6 +26,7 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - Dependency injection: modules take their collaborators (physics, input, clock, rng, materials, scene, audio) as typed parameters or interfaces, so tests use small type-safe fakes. No hidden globals, singletons or module-level side effects.
 - Fire and firelight go through `src/light/` (one flame/light system: `LightRig`, flame sprites, `WARM_INTERIOR` look); don't add point lights or flame meshes elsewhere.
 - NPC-ready: navigating NPCs will be added later. Character movement is a reusable motor over `PhysicsApi` (the player is just one user of it); the interior plan exposes a room/door/stair navigation graph; doors can be opened by any agent; nothing assumes there is only one character.
+- Doors: a door is a whole leaf (or none, e.g. the portcullis-only main gate). No wicket or cutout doors inside leaves.
 - Key paths have a test (vitest, no browser, using the same walk/collision code as the player): bridge → gate → passage → courtyard, courtyard → a ground-floor room → stair up one floor, and a cellar → the moat tunnel to the locked grille. Add a path when a feature adds a new way in; don't test every room.
 - Look changes (stone, materials, light) get one close-range walk-mode capture (≈ 0.5 m from a wall) as well as the usual bookmarks.
 - Coverage thresholds live per folder in `vitest.config.ts`; add new tested modules to its `include`. Example of DI with type-safe fakes: `src/loading/` + `tests/loading/fakes.ts`.
