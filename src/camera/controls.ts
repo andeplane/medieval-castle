@@ -5,6 +5,7 @@ import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { heightAt, islandWalkable } from '../world/terrain';
 import { castleCentre } from '../castle/layout';
+import { MouseLook } from './mouseLook';
 
 export type Mode = 'orbit' | 'fly' | 'walk';
 export interface View { name: string; label: string; mode: Mode; pos: [number, number, number]; target: [number, number, number] }
@@ -27,7 +28,6 @@ export class CameraRig {
   orbit: OrbitControls;
   private keys = new Set<string>();
   private yaw = 0; private pitch = 0;
-  private dragging = false;
   speed = { fly: 22, walk: 4.2 };
 
   constructor(public camera: THREE.PerspectiveCamera, dom: HTMLElement) {
@@ -37,43 +37,24 @@ export class CameraRig {
     addEventListener('keydown', (e) => { if ((e.target as HTMLElement)?.tagName === 'INPUT') return; this.keys.add(e.code); });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
-    // FPS look: a click on the canvas grabs the pointer (walk and fly), the mouse turns the head while
-    // locked, Esc releases it (the browser does that for us). Dragging still looks around as a fallback
-    // where pointer lock is unavailable (headless captures, some embeds).
-    dom.addEventListener('pointerdown', (e) => {
-      if (this.mode === 'orbit') return;
-      if (document.pointerLockElement !== dom && dom.requestPointerLock) {
-        const r = dom.requestPointerLock() as unknown as Promise<void> | undefined;
-        r?.catch?.(() => {});
-      }
-      this.dragging = true;
-      try { dom.setPointerCapture(e.pointerId); } catch { /* not allowed while locked */ }
-    });
-    dom.addEventListener('pointerup', () => { this.dragging = false; });
-    dom.addEventListener('mousemove', (e) => {
-      if (this.mode === 'orbit') return;
-      if (!this.locked && !this.dragging) return;
-      // some browsers report a huge first delta right after locking; drop it
-      if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
-      this.yaw -= e.movementX * this.sensitivity;
-      this.pitch = THREE.MathUtils.clamp(this.pitch - e.movementY * this.sensitivity, -1.5, 1.5);
-    });
-    document.addEventListener('pointerlockchange', () => {
-      this.locked = document.pointerLockElement === dom;
-      this.dragging = false;
-      if (!this.locked) this.keys.clear();
-      this.onLockChange?.(this.locked);
+    this.look = new MouseLook({
+      el: dom, doc: document,
+      enabled: () => this.mode !== 'orbit',
+      get: () => ({ yaw: this.yaw, pitch: this.pitch }),
+      set: (l) => { this.yaw = l.yaw; this.pitch = l.pitch; },
+      // clear held keys on release so the player does not keep walking after Esc
+      onLockChange: (locked) => { if (!locked) this.keys.clear(); this.onLockChange?.(locked); },
     });
   }
 
+  look: MouseLook;
   /** True while the pointer is captured for mouse look. */
-  locked = false;
-  sensitivity = 0.0022;
+  get locked() { return this.look.locked; }
   onLockChange?: (locked: boolean) => void;
 
   setMode(m: Mode) {
     this.mode = m;
-    if (m === 'orbit' && document.pointerLockElement) document.exitPointerLock();
+    if (m === 'orbit') this.look.release();
     this.orbit.enabled = m === 'orbit';
     if (m !== 'orbit') {
       const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
