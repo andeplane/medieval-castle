@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-11-05: combined build on main checked (after #27–#30)
+
+Main at 39996d7, with interior light and visibility (#27), furniture on interior materials (#28), the portcullis and windlass (#29) and furniture kept off the windlass (#30).
+- `npm test` passes: 646 tests in 62 files. `npm run build` passes.
+- `scripts/walktest.mjs` passed 19/19 in the real page: lowered portcullis, E, passage, courtyard, bridge, revetment and the course. `scripts/doortest.mjs` passed 25/25: the test doors, the castle gate from outside, inside and the windlass. Physics tick median 0.34 ms. 316 draw calls in the door-test castle frame.
+- Bookmark captures: spawn, gate, courtyard, ward, course. They are headless WebGL2 and were not checked on WebGPU.
+- Still open:
+  - The exterior is about 600 draw calls and 4.8M triangles, over budget.
+  - The windlass has no collider.
+  - The passage stone just inside the gate arch is overexposed.
+  - The courtyard has no paving, and the well has a bare crossbar.
+  - The great hall is only a small room.
+  - The torch has no bracket.
+
 ## 2026-11-05: main gate is a portcullis with a working windlass (branch `gate-portcullis`)
 
 Anders, on the live gate (`castle-plan/feedback/gate-door-bad-1531.png`): "why would we have a door like that. why is it not just the fence … that goes up/down (please add the rope and rotating stuff on the inside so it is 'real')". And on doors: "Either no wooden door, or the entire wood thing is a door."
