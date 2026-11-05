@@ -8,11 +8,12 @@ export default defineConfig({
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
-      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts'],
+      include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/render/texgen.ts'],
       exclude: ['src/loading/entry.ts', 'src/props/preview.ts'],
       thresholds: {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         'src/props/**': { lines: 99, functions: 100, branches: 95, statements: 99 },
+        'src/render/texgen.ts': { lines: 95, functions: 95, branches: 85, statements: 95 },
       },
     },
   },

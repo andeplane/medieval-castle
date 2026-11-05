@@ -1,5 +1,32 @@
 # Progress
 
+## 2026-11-05: stone close up (branch `stone-closeup`)
+
+Anders: "this does NOT look good close up" (`castle-plan/feedback/2026-11-05-stone-closeup-bad.png`). The problems were flat, plastic slabs; a staircased dark outline round every stone; uniform speckle; a closed crack loop; and mortar drawn as a line.
+
+Done
+- Joints from a signed distance (`src/render/texgen.ts` `masonry`, `stoneDistance`). Each stone is its cell inset by half a joint, with slightly tilted edges, rounded or knocked-off corners, smooth edge noise and chipped arrises. data.a stores the distance to the outline (±4 cm rubble, ±2.5 cm ashlar, ±1.5 cm dressed). The shader (`jointMask`) sharpens it with `fwidth`, so edges are smooth at any magnification. When a pixel covers several texels, it fades to the mipmapped mortar coverage in data.g. Course warp is low-frequency only, so joints no longer wobble.
+- Mortar: a lighter, sandy lime bed, painted in the shader from the SDF. The albedo texture carries the stone colour on under the joints, so mips never mix mortar into stones. Rubble joints are deep-raked; ashlar and dressed joints are nearly flush (`mortarLevel`). Joints are darkened only by baked AO (albedo.a), GTAO and the parallax self-shadow. The cavity darkening of mortar now applies only beyond ~15 m.
+- Per-stone rock: five lithologies (granite, limestone, sandstone, whin, greywacke). The kind is encoded in the stone id byte, `lith * 51 + rand`. Inside a stone: mottling, bedding (sandstone, greywacke), darker weathered patches, iron staining, quartz veins (straight, crossing the stone) and short open hairline cracks from an edge. There are no loops and no uniform pits. Rubble faces are split facets with a little pillowing. Arrises are rounded: 1.6 cm rubble, 1.2 cm ashlar, 0.8 cm dressed. Pinning stones are rarer and larger.
+- Detail layer (`stoneDetail`, 1024² RGBA, repeats every 0.8 m, 0.78 mm texels): crystal grain (Voronoi crystals), mineral flecks in clusters, two scales of weathering pits ranked so one threshold sets the density, and claw-tool striations. The shader rotates and shifts it per stone, with rotated gradients so mips stay right across stone boundaries. It builds a detail normal from three taps, weighted per lithology and per stone, and blends it with the base normal (UDN). The layer fades out between 3.5 and 9 m. Mortar uses the same taps as sand grain and grit.
+- Albedo and roughness: grey overall with warm and cool stones mixed (R ≥ B in every lithology). Roughness varies per stone, pale flecks are a little glossier, and the damp base is smoother. Crustose lichen spots appear where it is damp: pale grey-green, a few orange.
+- Parallax: up to 1.8× more layers below 6 m, and 5-step binary refinement instead of linear, so there is no slicing or swimming at 0.5–2 m. Rubble depth went from 7.5 to 6 cm.
+- Bookmarks `closeup-rubble` (1.2 m, SW tower), `closeup-ashlar` (1.5 m, S wing), `closeup-shade` (north face), `closeup-corner` (SW tower quoins, 3 m). Their targets sit 9 m out because `go()` runs OrbitControls' minDistance 8.
+- Tests: `tests/texgen.test.ts` covers SDF sign and continuity at the outline, mortar set-back, AO, per-stone and in-stone variation, no blue, veins, cracks, iron and pins, id/lith round trip, and the detail texture (determinism, content, tileable Voronoi). texgen.ts is in the coverage include at ~100 % lines. All generators take size, rng and noise as parameters.
+
+Numbers
+- Texel density unchanged: 512 texels/m base (2048 px per 4 m tile), plus the detail layer at 1280 texels/m. Raising the base resolution was not needed, because the SDF carries edges and the detail layer carries grain.
+- GPU memory for stone: rubble and ashlar 3 × 2048² RGBA8 with mips ≈ 67 MB each, dressed ≈ 17 MB, detail +5.6 MB. That is ≈ 156 MB, of which only the 5.6 MB detail texture is new.
+- Generation (single thread, node, same machine back to back): rubble ~9 s, ashlar ~8–9 s, dressed ~2 s, detail ~2–3 s, against old rubble ~10 s, ashlar ~7.5 s, dressed ~1.7 s. The worker pool runs these in parallel, so wall time stays at the slowest job. The container was heavily loaded (load average 15–30) while this was measured, so treat these numbers as rough.
+- Shader: per stone pixel, 3 detail taps + 1 lichen tap, 5 binary-refinement height taps, and up to 1.8× march steps below 6 m. Triangles and draw calls are unchanged (castle 113,962 triangles).
+
+Known issues / next
+- Rubble at 1 m still reads a little "soap-bar": faces are smooth between the facets and the arris is uniform. A real split face needs sharper conchoidal ridges. The geometric-stone branch (stones-3d) will take over at that range.
+- Upper rubble walls in sun at 3–8 m show strong dark undersides from the deep raked joints. This is plausible, but heavier than the reference photos.
+- Sunlit ashlar in `gate` measures sRGB ≈ 115, against the STYLE target of 90–100 (it was ≈ 107 before this branch).
+- Bright mineral flecks can still read as salt at 0.5 m on granite stones.
+- WebGPU not run here (headless WebGL2/SwiftShader only).
+
 ## 2026-11-05: procedural prop kit (furniture, not yet placed in the castle)
 
 Sourcing decision (Anders, 2026-11-05): code + free CC0 only; no store packs (their licences forbid shipping raw files from a public repo); Meshy (already paid for) may be used later for a few organic hero props.

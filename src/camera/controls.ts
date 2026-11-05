@@ -21,6 +21,12 @@ export const VIEWS: View[] = [
   { name: 'courtyard', label: 'Courtyard', mode: 'walk', pos: [-11, 0, 4], target: [12, 22, -8] },
   { name: 'towertop', label: 'From the great tower', mode: 'fly', pos: [-24, 56, -16], target: [80, 20, 160] },
   { name: 'top', label: 'Top down', mode: 'orbit', pos: [0.1, 260, 0.1], target: [0, 0, 0] },
+  // close-up material checks (texture at 1–3 m): old rubble in sun, new ashlar, north face in shade, a quoin corner.
+  // Targets sit 9 m out along the view ray because go() runs OrbitControls.update(), which enforces minDistance 8.
+  { name: 'closeup-rubble', label: 'Rubble 1 m', mode: 'fly', pos: [-17.04, 7.0, 22.6], target: [-25.29, 5.58, 19.29] },
+  { name: 'closeup-ashlar', label: 'Ashlar 1.5 m', mode: 'fly', pos: [-7.71, 6.8, 19.37], target: [-14.14, 5.45, 13.21] },
+  { name: 'closeup-shade', label: 'Shade 2 m', mode: 'fly', pos: [-5.65, 7.0, -22.68], target: [-0.13, 5.85, -15.67] },
+  { name: 'closeup-corner', label: 'Quoin 3 m', mode: 'fly', pos: [-25.16, 8.0, 24.51], target: [-19.66, 6.81, 17.49] },
 ];
 
 export class CameraRig {
