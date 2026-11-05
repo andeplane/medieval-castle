@@ -38,27 +38,26 @@ const ctx = visContext(plan, groups);
 const shown = (r: ReturnType<typeof visibleSet>) => groups.filter((_, i) => r.visible[i]).map((g) => g.key);
 
 describe('visibleSet', () => {
-  test('zone and door adjacency', () => {
-    expect(ctx.zoneAdj.get('N')).toEqual(new Set(['great', 'E']));
+  test('door and stair adjacency', () => {
     expect(ctx.doorAdj.get(0)).toEqual(new Set([6, 7]));
   });
-  test('inside a room: own floor, the floors above and below, adjacent zones at that height, door neighbours, stairs', () => {
+  test('inside a room: its group, door and stair neighbours, stairs within 12 m', () => {
     const r = visibleSet(ctx, [10, 4.7, 4]);
     expect(r).toMatchObject({ room: 0, inside: true, underground: false });
-    expect(shown(r)).toEqual(['N:0', 'N:1', 'E:0', 'great:0', 'tunnel:-1', 'stairs:s', 'doors']);
+    expect(shown(r)).toEqual(['N:0', 'great:0', 'tunnel:-1', 'stairs:s', 'doors']);
     const top = visibleSet(ctx, [10, 19.7, 4]);
-    expect(shown(top)).toEqual(['N:2', 'N:3', 'E:3', 'stairs:s', 'doors']);
+    expect(shown(top)).toEqual(['N:3', 'doors']);  // the floor below and the E wing stay hidden
   });
   test('deep inside: no open way out within reach; doorway slack', () => {
     expect(visibleSet(ctx, [10, 19.7, 4]).deep).toBe(true);
     expect(visibleSet(ctx, [-75, 4.7, -75]).deep).toBe(false);          // next to its open door
     expect(visibleSet(ctx, [20.2, 4.7, 4]).room).toBeGreaterThanOrEqual(0); // in the wall between N and E
   });
-  test('outside: only groups within 60 m whose windows face the camera', () => {
+  test('outside: only groups within 40 m whose windows face the camera', () => {
     const south = visibleSet(ctx, [10, 4, 30]);
     expect(south.inside).toBe(false);
-    expect(shown(south)).toEqual(['N:0', 'stairs:s', 'doors']);
-    expect(shown(visibleSet(ctx, [2, 0, 60]))).toEqual(['N:0', 'tunnel:-1', 'doors']); // facing its grille
+    expect(shown(south)).toEqual(['N:0', 'doors']);
+    expect(shown(visibleSet(ctx, [2, 0, 60]))).toEqual(['tunnel:-1', 'doors']); // facing its grille; N:0's window is 51 m away
     const north = visibleSet(ctx, [10, 20, -30]);
     expect(shown(north)).toEqual(['N:3', 'doors']);
     expect(shown(visibleSet(ctx, [500, 4, 500]))).toEqual([]);
@@ -74,7 +73,8 @@ describe('visibleSet', () => {
     expect(roomShown(ctx, r, 0)).toBe(true);
     expect(roomShown(ctx, r, 6)).toBe(true);    // door neighbour
     expect(roomShown(ctx, r, 3)).toBe(false);
-    expect(roomShown(ctx, r, 1)).toBe(true);    // via its group
+    expect(roomShown(ctx, r, 1)).toBe(false);   // the floor above
+    expect(roomShown(ctx, visibleSet(ctx, [10, 4, 30]), 0)).toBe(true); // from outside, via its shown group
     expect(roomShown(ctx, r, -1)).toBe(true);   // outside, not deep
     expect(roomShown(ctx, visibleSet(ctx, [10, 19.7, 4]), -1)).toBe(false);
   });
@@ -103,12 +103,12 @@ describe('createVisibility', () => {
     expect(outsider.visible).toBe(true);
     vis.update();
     expect(vis.roomId).toBe('N0');
-    expect(vis.isRoomVisible('N1')).toBe(true);
+    expect(vis.isRoomVisible('T0')).toBe(true);
     expect(vis.isRoomVisible('N3')).toBe(false);
     expect(vis.isRoomVisible(null)).toBe(false);   // deep inside: the outdoors is not in view
     expect(ig.find((g) => g.key === 'N:3')!.object.visible).toBe(false);
     expect(npc.visible).toBe(false);
-    npcRoom = 'N1'; vis.update();
+    npcRoom = 'T0'; vis.update();
     expect(npc.visible).toBe(true);
     off(); npcRoom = 'N3'; vis.update();
     expect(npc.visible).toBe(true);                       // no longer managed

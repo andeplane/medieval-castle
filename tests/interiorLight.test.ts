@@ -51,6 +51,13 @@ describe('interior materials', () => {
     const v1 = IM.old.version;
     IM.setDynamicLights([torch]);                      // same pool: no recompile
     expect(IM.old.version).toBe(v1);
+    // underground: no sun, only the fire pool
+    const UM = makeInteriorMaterials(mats(), null, light);
+    expect(UM.old.name).toBe('interior-under-old');
+    const un = UM.old.lightsNode as unknown as { getLights(): THREE.Light[] };
+    expect(un.getLights()).toEqual([]);
+    UM.setDynamicLights([torch]);
+    expect(un.getLights()).toEqual([torch]);
   });
   test('sunStateOf reads direction and irradiance', () => {
     const l = new THREE.DirectionalLight(0xffffff, 2); l.position.set(0, 10, 0);

@@ -56,13 +56,16 @@ export function createInteriorLight(maxRooms = 1024): InteriorLight {
 /**
  * Interior clones of the stone, timber, iron and glass materials. Same surface look; lit by the
  * shadowed sun plus the interior irradiance instead of the outdoor hemisphere and sky IBL.
+ * `sun: null` gives the underground set: no direct sun at all (cellars and tunnels get daylight only
+ * through their openings, via the irradiance, and firelight via setDynamicLights).
  */
-export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardNodeMaterial>, sun: THREE.Light, light: InteriorLight): InteriorMaterialSet {
-  const sunOnly = lights([sun]);
+export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardNodeMaterial>, sun: THREE.Light | null, light: InteriorLight): InteriorMaterialSet {
+  const base = sun ? [sun] : [];
+  const sunOnly = lights(base);
   const irr = interiorIrradiance(light);
   const mk = (src: THREE.MeshStandardNodeMaterial, name: string) => {
     const m = src.clone() as THREE.MeshStandardNodeMaterial;
-    m.name = `interior-${name}`;
+    m.name = sun ? `interior-${name}` : `interior-under-${name}`;
     m.lightsNode = sunOnly;
     (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new IrradianceNode(irr);
     return m;
@@ -83,7 +86,7 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
     value: (extra: THREE.Light[]) => {
       if (extra.length === current.length && extra.every((l, i) => l === current[i])) return;
       current = [...extra];
-      sunOnly.setLights([sun, ...current]);
+      sunOnly.setLights([...base, ...current]);
       for (const m of Object.values(set)) m.needsUpdate = true;
     },
   });

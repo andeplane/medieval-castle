@@ -96,7 +96,10 @@ export function groupIndexOfRooms(groups: InteriorGroup[]) {
   return (id: SpaceId) => m.get(id) ?? -1;
 }
 
-/** The exterior glass: a clone of the leaded glass with the shown/culled switch. */
+/**
+ * The exterior glass: a clone of the see-through leaded glass (render/materials.ts) whose quarries
+ * turn into an opaque dark pane while the room behind is culled (or there is no room to see).
+ */
 export function makeWindowGlass(src: THREE.MeshStandardNodeMaterial, flags: WindowFlags) {
   const m = src.clone() as THREE.MeshStandardNodeMaterial;
   m.name = 'window-glass';
@@ -107,11 +110,8 @@ export function makeWindowGlass(src: THREE.MeshStandardNodeMaterial, flags: Wind
   const t = uv().mul(1 / 0.16), d = vec2(t.x.add(t.y), t.x.sub(t.y)), q = fract(d);
   const line = min(min(q.x, float(1).sub(q.x)), min(q.y, float(1).sub(q.y)));
   const lead = float(1).sub(smoothstep(0.03, 0.07, line));
-  const clear = shown.mul(float(1).sub(lead)); // 1 on the see-through glass of a shown room
-  m.colorNode = mix((src.colorNode ?? vec3(0.03)) as unknown as ReturnType<typeof vec3>, vec3(0.16, 0.18, 0.17), clear);
-  m.opacityNode = mix(float(1), float(0.14), clear);
-  m.metalnessNode = mix((src.metalnessNode ?? float(0.15)) as unknown as ReturnType<typeof float>, float(0), clear);
-  m.roughnessNode = mix((src.roughnessNode ?? float(0.1)) as unknown as ReturnType<typeof float>, float(1), clear);
+  // shown: the source's own opacity (thin glass); culled: opaque
+  m.opacityNode = mix(float(1), (src.opacityNode ?? float(1)) as unknown as ReturnType<typeof float>, shown);
   // culled rooms with firelight: a warm glow in the quarries at night
   m.emissiveNode = vec3(1.0, 0.55, 0.22).mul(fire.mul(float(1).sub(shown)).mul(flags.night).mul(float(1).sub(lead)).mul(0.9));
   return m;

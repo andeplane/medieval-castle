@@ -1,10 +1,11 @@
 // Room/cell visibility for the interior (game-performance-optimization: cells and portals beat generic
 // occlusion indoors). Each frame: find the camera's room, then show
-//   inside:  its group, the floors above and below in its zone, groups of adjacent zones at about the
-//            same height, rooms joined to it by a door, nearby stairs;
-//   outside: groups within 60 m that have a window or door facing the camera.
-// Underground (camera below the terrain) the water, far terrain and trees are hidden; deep inside a
-// room with no open way out within 40 m the trees are hidden too (glass glows, it is not see-through).
+//   inside:  its group, the groups of rooms joined to it by a door or stair, stairs within 12 m;
+//   outside: groups within 40 m that have a window or door facing the camera (the windows of the
+//            others show the dark fallback pane, render/windowGlass.ts).
+// Underground (camera below the terrain) everything outdoors is hidden: terrain, water, vegetation,
+// the castle exterior, its stones and the gate; deep inside a room with no open way out within 40 m
+// the vegetation is hidden too.
 // No three.js at runtime here, so the decision is unit-tested (tests/interior.test.ts).
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import type { Aperture } from '../render/interiorMath';
@@ -13,30 +14,27 @@ import { roomAt } from '../render/interiorMath';
 export interface GroupInfo { key: string; zone: string; floor: number; min: V3; max: V3; rooms: number[]; apertures: { p: V3; n: V3; open: boolean }[] }
 
 export interface VisOpts { far: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number }
-const DEF: VisOpts = { far: 60, stairs: 30, deepClear: 40 };
+const DEF: VisOpts = { far: 40, stairs: 12, deepClear: 40 };
 
 const boxDist = (g: GroupInfo, p: V3) => Math.hypot(
   Math.max(g.min[0] - p[0], 0, p[0] - g.max[0]), Math.max(g.min[1] - p[1], 0, p[1] - g.max[1]), Math.max(g.min[2] - p[2], 0, p[2] - g.max[2]));
-const touch = (a: GroupInfo, b: GroupInfo, e: number) => a.min[0] - e <= b.max[0] && b.min[0] - e <= a.max[0] && a.min[1] - e <= b.max[1] && b.min[1] - e <= a.max[1] && a.min[2] - e <= b.max[2] && b.min[2] - e <= a.max[2];
 
-export interface VisContext { plan: InteriorPlan; groups: GroupInfo[]; zoneAdj: Map<string, Set<string>>; doorAdj: Map<number, Set<number>> }
+export interface VisContext { plan: InteriorPlan; groups: GroupInfo[]; doorAdj: Map<number, Set<number>> }
 
 export function visContext(plan: InteriorPlan, groups: GroupInfo[]): VisContext {
   const index = new Map(plan.rooms.map((r, i) => [r.id, i]));
-  const zoneAdj = new Map<string, Set<string>>(), doorAdj = new Map<number, Set<number>>();
+  const doorAdj = new Map<number, Set<number>>();
   const link = <K>(m: Map<K, Set<K>>, a: K, b: K) => { if (a === b) return; (m.get(a) ?? m.set(a, new Set()).get(a)!).add(b); (m.get(b) ?? m.set(b, new Set()).get(b)!).add(a); };
   for (const d of plan.doors) {
     const a = index.get(d.spaces[0]), b = index.get(d.spaces[1]);
     if (a === undefined || b === undefined) continue;
-    link(doorAdj, a, b); link(zoneAdj, plan.rooms[a].zone, plan.rooms[b].zone);
+    link(doorAdj, a, b);
   }
   for (const s of plan.stairs) for (let i = 0; i + 1 < s.spaces.length; i++) {
     const a = index.get(s.spaces[i]), b = index.get(s.spaces[i + 1]);
     if (a !== undefined && b !== undefined) link(doorAdj, a, b);
   }
-  const cells = groups.filter((g) => g.floor >= -1 && !g.key.startsWith('stairs:') && g.key !== 'doors');
-  for (const a of cells) for (const b of cells) if (a.zone !== b.zone && touch(a, b, 0.6)) link(zoneAdj, a.zone, b.zone);
-  return { plan, groups, zoneAdj, doorAdj };
+  return { plan, groups, doorAdj };
 }
 
 export interface VisResult { room: number; inside: boolean; deep: boolean; underground: boolean; visible: boolean[] }
@@ -48,13 +46,11 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
   const underground = o.ground ? cam[1] < o.ground(cam[0], cam[2]) - 1 : false;
   const visible = groups.map(() => false);
   if (room >= 0) {
-    const R = plan.rooms[room], adj = ctx.zoneAdj.get(R.zone), doors = ctx.doorAdj.get(room);
+    const doors = ctx.doorAdj.get(room);
     groups.forEach((g, i) => {
       if (g.key === 'doors') { visible[i] = true; return; }
       if (g.key.startsWith('stairs:')) { visible[i] = boxDist(g, cam) < o.stairs; return; }
       if (g.rooms.includes(room) || boxDist(g, cam) < 0.3) { visible[i] = true; return; }
-      if (g.zone === R.zone && Math.abs(g.floor - R.floor) <= 1) { visible[i] = true; return; }
-      if (adj?.has(g.zone) && g.min[1] < R.y1 + 5 && g.max[1] > R.y0 - 5) { visible[i] = true; return; }
       if (doors && g.rooms.some((r) => doors.has(r))) visible[i] = true;
     });
   } else {
@@ -78,8 +74,8 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
   return { room, inside: room >= 0, deep: deep || underground, underground, visible };
 }
 
-export const HIDE_UNDERGROUND = ['water', 'stream-water', 'terrain-far', 'terrain-stream', 'trees', 'ground-cover', 'rocks', 'far-forest'];
-export const HIDE_DEEP = ['trees', 'ground-cover', 'far-forest'];
+export const HIDE_UNDERGROUND = ['water', 'terrain', 'vegetation', 'castle', 'stones', 'doors', 'trees', 'ground-cover', 'rocks', 'far-forest'];
+export const HIDE_DEEP = ['vegetation', 'trees', 'ground-cover', 'far-forest'];
 
 interface Obj { visible: boolean; name: string }
 interface SceneLike { getObjectByName(n: string): Obj | undefined }

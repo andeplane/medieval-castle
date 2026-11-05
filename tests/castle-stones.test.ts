@@ -4,9 +4,9 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import { buildCastle } from '../src/castle/castle';
 import type { MatKey } from '../src/castle/builder';
-import { buildBridge } from '../src/castle/bridge';
-import { buildRevetment } from '../src/castle/revetment';
-import { islandOutline, moatOuter } from '../src/castle/layout';
+import { bridgePlan, buildBridge } from '../src/castle/bridge';
+import { revetmentPlan, buildRevetment } from '../src/castle/revetment';
+import { islandOutline, moatOuter, gatehouseFrame } from '../src/castle/layout';
 import { pointInPoly } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
 import { StoneSet } from '../src/castle/stones/set';
@@ -16,8 +16,11 @@ import { GROUND } from '../src/castle/spec';
 function build(seed: number) {
   const { builder } = buildCastle(mulberry32(seed));
   const island = islandOutline();
-  const bridge = buildBridge(builder, island, moatOuter(island), pointInPoly, mulberry32(3));
-  buildRevetment(builder, island, () => GROUND, (x, z) => Math.hypot(x - bridge.start[0], z - bridge.start[1]) < 3.2, mulberry32(4));
+  const ground = () => GROUND;
+  const bridge = bridgePlan({ island, moatOuter: moatOuter(island), gate: gatehouseFrame(), groundAt: ground, rng: mulberry32(3) });
+  buildBridge(builder, bridge, mulberry32(5));
+  const rev = revetmentPlan({ island, groundAt: ground, rng: mulberry32(4), exclude: (x, z) => pointInPoly(bridge.footprint, x, z) });
+  buildRevetment(builder, rev, mulberry32(6));
   return builder;
 }
 
