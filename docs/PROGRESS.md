@@ -45,7 +45,7 @@ Other tests
 Cost (headless WebGL2, a fresh page per build, the `courtyard` bookmark, all passes)
 - main 615 draw calls and 5,458,002 triangles; this branch 616 and 5,482,627.
 - Castle 128,177 → 127,527 triangles: the gate arch, the stair-tower arch and the buried slits are gone.
-- Door leaves 304,088 → 316,172: leaves are 10 cm larger, and the 2 cm size bins give more leaf classes.
+- Door leaves 304,088 → 316,172: leaves are 10 cm wider and 5 cm taller, and their sizes bin by 2 cm instead of 4.
 - Interior unchanged at 239,714.
 
 Assumptions (visible, for Anders to veto)
