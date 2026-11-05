@@ -44,6 +44,7 @@ describe('createHud', () => {
     expect(prompt.classList.contains('is-on')).toBe(true);
     expect(hud.root.classList.contains('has-target')).toBe(true);
     expect(prompt.querySelector('kbd')?.textContent).toBe('E');
+    expect(q('#crosshair').hidden).toBe(false); // shown with a target even while the mouse is free
     expect(prompt.querySelector('span')?.textContent).toBe('Open door');
     hud.setPrompt('Open door'); // no change
     hud.promptView.show('Raise portcullis');
@@ -53,6 +54,7 @@ describe('createHud', () => {
     hud.promptView.dispose();
     expect(prompt.classList.contains('is-on')).toBe(false);
     expect(hud.root.classList.contains('has-target')).toBe(false);
+    expect(q('#crosshair').hidden).toBe(true);
     expect(prompt.querySelector('span')?.textContent).toBe('Pick up'); // keeps the text while it fades
   });
 

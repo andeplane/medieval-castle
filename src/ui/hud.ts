@@ -106,7 +106,7 @@ export function createHud(d: HudDeps, o: HudOptions = {}): Hud {
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', 'false');
   toggle.hidden = true;
-  toggle.innerHTML = '<kbd>`</kbd><span>Tools</span>';
+  toggle.innerHTML = '<kbd class="glyph">`</kbd><span>Tools</span>';
 
   let items: readonly HelpItem[] = [];
   let locked = false, toolsOpen = false, cardSeen = false, panel: ToolsPanel | null = null;
@@ -116,7 +116,8 @@ export function createHud(d: HudDeps, o: HudOptions = {}): Hud {
 
   const sync = () => {
     root.classList.toggle('is-locked', locked);
-    xhair.hidden = !locked;
+    // the dot shows while the mouse is captured, and whenever something usable is under it
+    xhair.hidden = !locked && !shownPrompt;
     help.hidden = locked || items.length === 0;
     toggle.hidden = !panel || toolsOpen || locked;
     toggle.setAttribute('aria-expanded', String(toolsOpen));
@@ -165,6 +166,7 @@ export function createHud(d: HudDeps, o: HudOptions = {}): Hud {
     root.classList.toggle('has-target', !!text);
     prompt.classList.toggle('is-on', !!text);
     if (text) { promptKey.textContent = key; promptText.textContent = text; }
+    sync();
   };
 
   const hud: Hud = {
