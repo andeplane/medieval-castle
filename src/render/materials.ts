@@ -437,19 +437,19 @@ function paving(cob: GpuSet, fl: GpuSet, plan: PavingPlan, macro: THREE.Texture,
   const value = mix(float(0.8), float(1.12), rnd).mul(select(rnd2.greaterThan(0.94), float(0.75), select(rnd2.lessThan(0.04), float(1.2), float(1))));
   const hue = mix(vec3(0.98, 1.0, 1.0), vec3(1.07, 1.0, 0.91), smoothstep(0.2, 0.9, hash(rnd.mul(71.9).add(1.7))));
   const drift = float(0.88).add(mac.g.mul(0.24));
-  let stoneCol = alb.rgb.mul(color(new THREE.Color(0.84, 0.82, 0.79))).mul(value).mul(hue).mul(drift)
+  let stoneCol = alb.rgb.mul(color(new THREE.Color(0.88, 0.84, 0.77))).mul(value).mul(hue).mul(drift)
     .mul(fleck.mul(byLith(lith, LITH_DETAIL.fleck).mul(kDet)).add(1))
     .mul(grainC.mul(kDet.mul(0.5)).add(1))
     .mul(float(1).sub(pit0.mul(kDet.mul(0.4))));
   stoneCol = mix(stoneCol, stoneCol.mul(vec3(0.66, 0.7, 0.6)), damp.mul(0.6));
-  stoneCol = stoneCol.mul(float(1).add(wear.mul(0.08)));
+  stoneCol = stoneCol.mul(float(1).add(wear.mul(0.03)));
   // the joints: earth and grit, dry and sandy on the path, dark and mossy along the walls
-  const earth = mix(vec3(0.135, 0.12, 0.1), vec3(0.165, 0.15, 0.125), wear).mul(grainC.mul(kDet.mul(0.8)).add(1)).mul(float(0.85).add(mac.a.mul(0.3)));
-  const wet = mix(earth.mul(0.45), vec3(0.05, 0.065, 0.03), moss.mul(0.7));
+  const earth = mix(vec3(0.19, 0.165, 0.135), vec3(0.23, 0.205, 0.17), wear).mul(grainC.mul(kDet.mul(0.8)).add(1)).mul(float(0.85).add(mac.a.mul(0.3)));
+  const wet = mix(earth.mul(0.55), vec3(0.08, 0.09, 0.05), moss.mul(0.6));
   const jointCol = mix(earth, wet, damp.max(moss.mul(0.8)));
   let col = mix(jointCol, stoneCol, stoneMask);
   col = col.mul(float(1).sub(smoothstep(0.45, 0.95, dep).mul(0.25).mul(stoneMask)));
-  col = col.mul(float(1).sub(crev.mul(0.45)));
+  col = col.mul(float(1).sub(crev.mul(0.3)));
   // a little moss creeping onto the stones' edges where it is damp
   col = mix(col, vec3(0.07, 0.085, 0.035), moss.mul(smoothstep(0.004, -0.004, sdf.sub(0.006))).mul(0.5));
   m.colorNode = col;

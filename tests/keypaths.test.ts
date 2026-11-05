@@ -126,6 +126,8 @@ describe('key paths', { timeout: 120_000 }, () => {
     expect(w.reached, JSON.stringify(w)).toBe(w.of);
     expect(pointInPoly(courtyard(), w.feet[0], w.feet[2])).toBe(true);
     expect(w.feet[1]).toBeCloseTo(PAVE_Y, 1); // standing on the paving, not the earth under it
+    expect(play.player.surfaceTag).toBe('castle-pave'); // the last footsteps were on the cobbles…
+    expect(play.player.surface).toBe('stone'); // …and sounded like stone
     expect(shut.minY).toBeGreaterThan(1.5); // down the bridge-head steps to the lawn, never into the moat
   });
 

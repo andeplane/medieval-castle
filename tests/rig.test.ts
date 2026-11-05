@@ -77,6 +77,19 @@ describe('CameraRig', () => {
     expect(cam.near).toBe(TUNING.near); // small near plane while walking: the frustum stays inside the capsule
   });
 
+  it('a fly bookmark after a walk one looks at its own target, below the fly clamp if it asks', () => {
+    rig.player = player;
+    rig.go(VIEWS.find((x) => x.name === 'gate')!);
+    const v = VIEWS.find((x) => x.name === 'court-close')!;
+    rig.go(v);
+    rig.update(1 / 60);
+    expect(rig.mode).toBe('fly');
+    expect(cam.position.y).toBeCloseTo(v.pos[1], 5); // 0.5 m over the cobbles, not lifted to the 1 m fly floor
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const want = new THREE.Vector3(...v.target).sub(cam.position).normalize();
+    expect(dir.dot(want)).toBeGreaterThan(0.99);
+  });
+
   it('entering walk mode drops you under the camera on the island, else at the spawn', () => {
     rig.player = player;
     rig.walkable = () => true;

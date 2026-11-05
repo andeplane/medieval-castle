@@ -432,12 +432,12 @@ export interface CobbleOpts {
   depth: number;                    // metres spanned by height 0..1 (normal strength follows it)
 }
 /** Cobbles set in earth: about 14 cm across, a little oval, tightly packed with 1–2 cm joints. */
-export const COBBLES: CobbleOpts = { size: 2048, tile: 4, cell: 0.14, joint: 0.016, round: 0.22, bright: 0.26, dome: 0.32, bedLevel: 0.2, sdfRange: 0.03, depth: 0.045 / 0.89 };
+export const COBBLES: CobbleOpts = { size: 2048, tile: 4, cell: 0.14, joint: 0.014, round: 0.3, bright: 0.26, dome: 0.34, bedLevel: 0.28, sdfRange: 0.03, depth: 0.045 / 0.89 };
 /** Sandstone and limestone flags for the path from the gate: tile = path width, courses run along the path. */
 export const FLAGS: MasonryOpts = {
-  name: 'flags', size: 1024, tile: 2, course: [0.5, 0.78], stone: [0.55, 1.1], joint: 0.016, jointVar: 0.35, tilt: 0.025,
+  name: 'flags', size: 1024, tile: 2, course: [0.58, 0.9], stone: [0.65, 1.25], joint: 0.016, jointVar: 0.35, tilt: 0.025,
   corner: [0.01, 0.035], chamfer: 0.3, bevel: 0.014, warp: 0.003, edge: 0.004, chip: 0.012, split: 0,
-  liths: [1.2, 3, 2.6, 0.2, 1.4], bright: 0.2, face: 0.05, facets: 0.06, dome: 0.03, pinning: 0, mortarLevel: 0.3, cracks: 0.22, veins: 0.05, iron: 0.2,
+  liths: [2, 1.6, 1.8, 0.6, 2.2], bright: 0.2, face: 0.05, facets: 0.06, dome: 0.03, pinning: 0, mortarLevel: 0.3, cracks: 0.22, veins: 0.05, iron: 0.2,
   depth: 0.03 / 0.89, sdfRange: 0.03,
 };
 
@@ -457,7 +457,7 @@ export function cobbles(o: CobbleOpts = COBBLES, r: Rng = mulberry32(hashSeed('c
   const pickLith = (t: number) => { for (let i = 0; i < COBBLE_LITHS.length; i++) { t -= COBBLE_LITHS[i] / wsum; if (t <= 0) return i; } return COBBLE_LITHS.length - 1; };
   const cells = Array.from({ length: n * n }, () => {
     const lith = pickLith(r()), b = 1 - o.bright / 2 + r() * o.bright, base = LITH_COL[lith];
-    const a = cp * (0.6 + 0.15 * r()), ang = r() * Math.PI;
+    const a = cp * (0.64 + 0.16 * r()), ang = r() * Math.PI;
     return {
       x: 0.15 + 0.7 * r(), y: 0.15 + 0.7 * r(), a, b: a * (0.8 + 0.2 * r()), c: Math.cos(ang), s: Math.sin(ang),
       lith, id: encodeId(lith, r()), col: [base[0] * b, base[1] * b, base[2] * b] as RGB, bulge: 0.6 + 0.4 * r(), crown: 0.6 + 0.12 * r(),
@@ -465,7 +465,7 @@ export function cobbles(o: CobbleOpts = COBBLES, r: Rng = mulberry32(hashSeed('c
     };
   });
   const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4), centre = new Uint8Array(N * N);
-  const sdfPx = o.sdfRange * px, bevPx = 0.012 * px, edgePx = 0.004 * px, k = o.round * cp, fFace = Math.round(o.tile * 16), fMott = Math.round(o.tile * 6);
+  const sdfPx = o.sdfRange * px, bevPx = 0.02 * px, edgePx = 0.004 * px, k = o.round * cp, fFace = Math.round(o.tile * 16), fMott = Math.round(o.tile * 6);
   // cobble centres in px for a (n + 4)² block of cells (wrapped copies at the borders), so a pixel's
   // neighbourhood is read without modulo or allocation
   const M = n + 4, PX = new Float64Array(M * M), PY = new Float64Array(M * M), CI = new Int32Array(M * M);
@@ -504,14 +504,16 @@ export function cobbles(o: CobbleOpts = COBBLES, r: Rng = mulberry32(hashSeed('c
       if (d > 0) {
         // rounded arris, then a domed crown, tipped a little (cobbles are never set dead level)
         const xb = clamp01(d / bevPx), prof = 1 - (1 - xb) ** 3;
-        const dome = clamp01(1 - 0.9 * (ex * ex + ey * ey)); // a smooth, rounded crown over the ellipse, no ridges
-        const top = st.crown + o.dome * (dome - 1) * st.bulge + 0.05 * g + (st.tx * lx + st.ty * ly) / cp * 0.08;
-        const foot = o.bedLevel + 0.18;
+        // a rounded crown: a paraboloid over the ellipse, eased down towards the outline (river-worn, never flat-topped)
+        const ease = 1 - (1 - clamp01(d / (0.45 * Math.min(st.a, st.b)))) ** 2;
+        const dome = 0.7 * clamp01(1 - 0.9 * (ex * ex + ey * ey)) + 0.3 * ease;
+        const foot = o.bedLevel + 0.06;
+        const top = Math.max(foot + 0.1, st.crown + o.dome * (dome - 1) * st.bulge + 0.05 * g + (st.tx * lx + st.ty * ly) / cp * 0.08);
         h = foot + (top - foot) * prof;
         ao = 0.84 + 0.16 * prof * (0.6 + 0.4 * dome);
       } else {
         // the earth and grit bed between the stones: darkest and deepest mid-joint
-        h = o.bedLevel + 0.12 * Math.exp(d / (1.2 * st.jh)) + 0.04 * noise.fbm(u, v, fFace * 2, 2);
+        h = o.bedLevel + 0.06 * Math.exp(d / (1.2 * st.jh)) + 0.03 * noise.fbm(u, v, fFace * 2, 2); // meets the stone's foot at the outline
         ao = 0.62 + 0.3 * (1 - Math.exp(d / (1.5 * st.jh)));
       }
       h = Math.min(0.94, Math.max(0.07, h));
