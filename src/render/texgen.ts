@@ -168,7 +168,7 @@ export function layCourses(o: MasonryOpts, r: Rng) {
     let x = off;
     while (x < off + N - 1) {
       let L = (o.stone[0] + r() * (o.stone[1] - o.stone[0])) * px;
-      if (x + L > off + N - o.stone[0] * px * 0.6) L = off + N - x;
+      if (x + L > off + N - o.stone[0] * px) L = off + N - x; // no stone shorter than stone[0] (the 3D stones drop slivers)
       const sp = r() < o.split ? 0.35 + r() * 0.3 : 0;
       slots.push({ x0: x, x1: x + L, parts: sp ? [mkStone(L, hs[c], 0, sp), mkStone(L, hs[c], sp, 1)] : [mkStone(L, hs[c], 0, 1)] });
       x += L;
@@ -176,6 +176,32 @@ export function layCourses(o: MasonryOpts, r: Rng) {
     courses.push({ off, slots });
   }
   return { hs, cy, courses, px, jw };
+}
+
+export interface LayoutStone { x0: number; x1: number; split: number; id: number; col: RGB; bulge: number; tilt: number }
+export interface MasonryLayout { N: number; px: number; hs: number[]; cy: number[]; courses: { off: number; stones: LayoutStone[] }[] }
+
+/** The course/stone layout of a masonry tile in texture pixels, shared with the 3D stones (src/castle/stones)
+ *  so geometric stones sit exactly on the texture's stones. A split slot is one cell with `split` set. */
+export function masonryLayout(o: MasonryOpts, r: Rng = mulberry32(hashSeed(o.name))): MasonryLayout {
+  const L = layCourses(o, r);
+  return {
+    N: o.size, px: L.px, hs: L.hs, cy: L.cy,
+    courses: L.courses.map((c) => ({
+      off: c.off,
+      stones: c.slots.map((sl) => {
+        const st = sl.parts[0];
+        return { x0: sl.x0, x1: sl.x1, split: sl.parts.length > 1 ? st.y1 : 0, id: st.id, col: st.col, bulge: st.bulge, tilt: st.tilt };
+      }),
+    })),
+  };
+}
+
+/** Joint warp of masonry(): texture pixel (u, v) samples the layout at pixel + warp * px * (wx, wy).
+ *  Low frequency only (courses undulate; joints do not wobble). */
+export function masonryWarp(o: MasonryOpts, noise = new TileNoise(hashSeed(o.name + 'n'))) {
+  const fT = Math.max(2, Math.round(o.tile * 5));
+  return (u: number, v: number): [number, number] => [noise.fbm(u, v, fT, 2), noise.fbm(u + 0.37, v + 0.71, fT, 2)];
 }
 
 /**
@@ -187,17 +213,17 @@ export function layCourses(o: MasonryOpts, r: Rng) {
  *   A = signed distance to the outline, 0.5 + d / (2 * sdfRange), positive inside the stone.
  */
 export function masonry(o: MasonryOpts, r: Rng = mulberry32(hashSeed(o.name)), noise = new TileNoise(hashSeed(o.name + 'n'))): TexSet {
-  const N = o.size, { cy, hs, courses, px } = layCourses(o, r);
+  const N = o.size, { cy, hs, courses, px } = layCourses(o, r), warpAt = masonryWarp(o, noise);
   const height = new Float32Array(N * N), albedo = new Uint8Array(N * N * 4), data = new Uint8Array(N * N * 4), centre = new Uint8Array(N * N);
   const wp = o.warp * px, bevPx = Math.max(1, o.bevel * px), edgePx = o.edge * px, chipPx = o.chip * px, sdfPx = o.sdfRange * px;
-  const fT = Math.max(2, Math.round(o.tile * 5)), fFace = Math.max(4, Math.round(o.tile * 16)), fMott = Math.max(4, Math.round(o.tile * 6));
+  const fFace = Math.max(4, Math.round(o.tile * 16)), fMott = Math.max(4, Math.round(o.tile * 6));
   const fPin = Math.max(4, Math.round(o.tile * 14));
   for (let y = 0; y < N; y++) {
     const v = y / N;
     for (let x = 0; x < N; x++) {
       const u = x / N;
       // courses undulate gently (low frequency only: no wobbly joints)
-      const wx = x + wp * noise.fbm(u, v, fT, 2), wy = y + wp * noise.fbm(u + 0.37, v + 0.71, fT, 2);
+      const [wu, wv] = warpAt(u, v), wx = x + wp * wu, wy = y + wp * wv;
       const yy = ((wy % N) + N) % N;
       let c = 0; while (c < hs.length - 1 && cy[c + 1] <= yy) c++;
       const course = courses[c];

@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { mulberry32 } from '../src/core/rng';
 import {
-  masonry, layCourses, stoneDistance, stoneDetail, voronoi, encodeId, lithOf, TileNoise,
+  masonry, layCourses, masonryLayout, masonryWarp, stoneDistance, stoneDetail, voronoi, encodeId, lithOf, TileNoise,
   RUBBLE, ASHLAR, DRESSED, LITHS, LITH_COL, LITH_DETAIL, DETAIL_TILE, rubbleSet, ashlarSet, dressedSet,
   slate, planks, macroNoise, waterNormals, groundLayers, STONE_GREYS, PIN_COL, type MasonryOpts, type TexSet,
 } from '../src/render/texgen';
@@ -29,6 +29,25 @@ describe('masonry layout', () => {
   it('splits some rubble slots into two stacked stones', () => {
     const L = layCourses({ ...small(RUBBLE), split: 1 }, mulberry32(4));
     expect(L.courses.every((c) => c.slots.every((s) => s.parts.length === 2))).toBe(true);
+  });
+});
+
+describe('layout shared with the 3D stones', () => {
+  it('exposes one cell per slot, split fraction for stacked stones, nothing shorter than the minimum stone', () => {
+    const o = small(RUBBLE, 512), L = masonryLayout(o, mulberry32(21)), C = layCourses(o, mulberry32(21));
+    expect(L.courses.length).toBe(C.courses.length);
+    let splits = 0;
+    L.courses.forEach((c, i) => c.stones.forEach((st, j) => {
+      const sl = C.courses[i].slots[j];
+      expect(st.x0).toBe(sl.x0); expect(st.x1 - st.x0).toBeGreaterThanOrEqual(o.stone[0] * L.px - 1e-6);
+      if (sl.parts.length > 1) { splits++; expect(st.split).toBeCloseTo(sl.parts[0].y1, 9); } else expect(st.split).toBe(0);
+    }));
+    expect(splits).toBeGreaterThan(0);
+  });
+  it('the warp field is the one the texture uses, small and smooth', () => {
+    const w = masonryWarp(RUBBLE), [a, b] = w(0.3, 0.6), [c, d] = w(0.3001, 0.6);
+    expect(Math.abs(a)).toBeLessThan(1); expect(Math.abs(b)).toBeLessThan(1);
+    expect(Math.abs(a - c) + Math.abs(b - d)).toBeLessThan(0.01);
   });
 });
 
