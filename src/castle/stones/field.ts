@@ -5,6 +5,10 @@
 // buttresses, turrets, corners, revetment) are sorted to the end of each chunk and stay, as lo slabs,
 // out to lod.sil through a draw range. Beyond that the flat textured wall, which shows the very same
 // stones, is all there is. Chunks facing away from the camera are hidden.
+// Plain (non-silhouette) stones are only built within lod.plain. By default that is 0: on a flat wall the
+// GPU does the depth (parallax occlusion, SDF joints, detail normals in materials.ts), and real geometry
+// is kept for the silhouettes, where parallax cannot change the outline (Anders, 2026-11-05: "smart
+// tricks to add depth on GPU rather than high detailed vertices"). `?stones=all` restores every stone.
 // Inputs are parameters (the stone set, materials, LOD distances, camera position, clock), so tests
 // drive it with plain fakes.
 import * as THREE from 'three/webgpu';
@@ -12,21 +16,23 @@ import { type Stone, type StoneMat, type V3, F_SIL } from './layout';
 import type { StoneSet } from './set';
 import { GeoBuf, writeStone } from './mesh';
 
-export interface LodParams { hi: number; mid: number; lo: number; sil: number; hyst: number; cell: number; minChunk: number; ashlar: number }
-export const LOD: LodParams = { hi: 8, mid: 24, lo: 40, sil: 80, hyst: 3, cell: 12, minChunk: 150, ashlar: 1.25 };
+export interface LodParams { hi: number; mid: number; lo: number; sil: number; plain: number; hyst: number; cell: number; minChunk: number; ashlar: number }
+export const LOD: LodParams = { hi: 8, mid: 24, lo: 40, sil: 80, plain: 0, hyst: 3, cell: 12, minChunk: 150, ashlar: 1.25 };
 
 export type Level = 0 | 1 | 2 | 3; // off, lo, mid, hi
 export interface LodState { level: Level; silOnly: boolean }
 export interface Point3 { readonly x: number; readonly y: number; readonly z: number }
 
-/** The level a chunk wants at distance d, with hysteresis around its current level. When it is too
- *  far for any level but holds silhouette stones, those stay as lo slabs out to lod.sil. */
+/** The level a chunk wants at distance d, with hysteresis around its current level. Plain stones are
+ *  drawn only within lod.plain; otherwise a chunk with silhouette stones draws just those, at the level
+ *  for d, or as lo slabs out to lod.sil. */
 export function pickLevel(d: number, cur: LodState, hasSil: boolean, lod: LodParams = LOD): LodState {
   const h = lod.hyst;
   const band = (r: number, lv: Level) => d < r + (cur.level >= lv ? h : -h);
   const level: Level = band(lod.hi, 3) ? 3 : band(lod.mid, 2) ? 2 : band(lod.lo, 1) ? 1 : 0;
-  if (!level && hasSil && d < lod.sil + (cur.level ? h : -h)) return { level: 1, silOnly: true };
-  return { level, silOnly: false };
+  if (level && d < lod.plain + (cur.level && !cur.silOnly ? h : -h)) return { level, silOnly: false };
+  if (hasSil && (level || d < lod.sil + (cur.level ? h : -h))) return { level: level || 1, silOnly: true };
+  return { level: 0, silOnly: false };
 }
 
 /** A chunk whose stones all face away from the camera (only for single-facing chunks, not right next to it). */
