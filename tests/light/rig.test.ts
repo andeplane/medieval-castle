@@ -19,6 +19,17 @@ describe('toSource', () => {
     expect(toSource({ ...candle(0), intensity: 100 }).range).toBe(PROFILES.candle.range * 2); // capped
     expect(toSource({ ...candle(0), intensity: 0.01 }).range).toBe(PROFILES.candle.range * 0.5); // floored
   });
+  it('colours fire as the adapted eye sees it: warm, with some blue, unless adaptation is off', () => {
+    const raw = toSource(torch(0), 0).colour, seen = toSource(torch(0)).colour;
+    expect(raw[2]).toBe(0); // the camera's 1800 K: no blue at all, stone renders sepia
+    expect(seen[0]).toBe(1); expect(seen[1]).toBeGreaterThan(raw[1]); expect(seen[2]).toBeGreaterThan(0.08);
+    expect(seen[1]).toBeLessThan(0.6); // still clearly warm
+    const f = fakeFactory();
+    const rig = new LightRig(f, { shadows: 0, lights: 1, adapt: 0 });
+    rig.setEmitters([torch(0)]); rig.add(torch(1));
+    rig.update(0, 1, [0, 1.8, 0]);
+    expect(f.lights[0].colour[2]).toBe(0);
+  });
 });
 
 describe('LightRig', () => {

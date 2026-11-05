@@ -1,7 +1,7 @@
 // Firelight review page (lights.html): a vaulted cellar and a torch-lit tunnel dressed with the prop
 // kit, lit only by fire through the shared light system. Same window.__game contract as the castle
 // page, so `URL=http://localhost:5173/lights.html npm run shots` captures every bookmark.
-// URL flags: ?webgl, ?shot (add ?ui to keep the tools), ?view=<name>, ?t=<seconds> (freeze time), ?exposure, ?bloom, ?fill, ?haze,
+// URL flags: ?webgl, ?shot (add ?ui to keep the tools), ?view=<name>, ?t=<seconds> (freeze time), ?exposure, ?bloom, ?fill, ?haze, ?adapt,
 // ?gi=0 (no bounce bake), ?shadows=N, ?lights=N, ?still (no flicker), ?seed=N.
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, emissive, texture, uv, vec3, vec4, float, mix, clamp, smoothstep, luminance, renderOutput, screenUV, length, normalView, builtinAOContext } from 'three/tsl';
@@ -18,7 +18,7 @@ import { lightStage, type Surf } from './stage';
 import { LightRig } from './rig';
 import { linkFlames, flameBrightness } from './flames';
 import { threeLightFactory, makeFlameSprites } from './three';
-import { WARM_INTERIOR, lookFromParams, whiteBalance } from './look';
+import { WARM_INTERIOR, lookFromParams } from './look';
 import { createHud, browserHudDeps } from '../ui/hud';
 import { showBootError } from '../ui/error';
 
@@ -92,7 +92,7 @@ async function main() {
   // the shared light system: emitters → a fixed pool of flickering point lights, flames → sprites
   const motion = params.has('still') || matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1;
   const factory = threeLightFactory(scene, { shadowMapSize: 512 });
-  const rig = new LightRig(factory, { shadows: Number(params.get('shadows') ?? 2), lights: Number(params.get('lights') ?? 10), motion });
+  const rig = new LightRig(factory, { shadows: Number(params.get('shadows') ?? 2), lights: Number(params.get('lights') ?? 10), motion, adapt: look.grade.adapt });
   rig.setEmitters(emitters);
   const flames = linkFlames(mesh.flames, emitters);
   const sprites = makeFlameSprites(flames);
@@ -133,7 +133,7 @@ async function main() {
   const hdr = scenePass.getTextureNode();
   const glow = bloom(hdr, look.bloom.strength, look.bloom.radius, look.bloom.threshold);
   pipeline.outputColorTransform = false;
-  const c = renderOutput(hdr.add(glow).mul(vec3(...whiteBalance(1800, look.grade.adapt)))).rgb, l = luminance(c), g = look.grade;
+  const c = renderOutput(hdr.add(glow)).rgb, l = luminance(c), g = look.grade;
   let graded = mix(vec3(l), c, g.saturation);
   graded = graded.sub(0.5).mul(g.contrast).add(0.5);
   graded = graded.mul(mix(vec3(...g.shadowTint), vec3(...g.warm), smoothstep(0.08, 0.6, l)));

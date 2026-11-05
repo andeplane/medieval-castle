@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { WARM_INTERIOR, lookFromParams, whiteBalance } from '../../src/light/look';
+import { WARM_INTERIOR, lookFromParams } from '../../src/light/look';
+import { DEFAULT_RIG } from '../../src/light/rig';
 
 describe('interior look', () => {
   it('overrides from URL parameters and ignores junk', () => {
@@ -10,11 +11,8 @@ describe('interior look', () => {
     expect(l.bloom.radius).toBe(WARM_INTERIOR.bloom.radius);
     expect(lookFromParams(WARM_INTERIOR, () => null)).toEqual(WARM_INTERIOR);
   });
-  it('white balance keeps luminance and cools firelight a little', () => {
-    const w = whiteBalance(1800, 0.2);
-    expect(0.2126 * w[0] + 0.7152 * w[1] + 0.0722 * w[2]).toBeCloseTo(1);
-    expect(w[2]).toBeGreaterThan(w[1]); expect(w[1]).toBeGreaterThan(w[0]);
-    expect(whiteBalance(1800, 0)).toEqual([1, 1, 1].map(() => expect.closeTo(1, 6)));
-    for (const c of whiteBalance(1000, 1)) expect(Number.isFinite(c)).toBe(true);
+  it('the rig takes the look\'s adaptation to firelight', () => {
+    expect(DEFAULT_RIG.adapt).toBe(WARM_INTERIOR.grade.adapt);
+    expect(WARM_INTERIOR.grade.adapt).toBeGreaterThan(0.3); expect(WARM_INTERIOR.grade.adapt).toBeLessThan(0.8);
   });
 });

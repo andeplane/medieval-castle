@@ -19,3 +19,15 @@ export function kelvinToLinear(kelvin: number): [number, number, number] {
   const m = Math.max(r, g, b);
   return [r / m, g / m, b / m];
 }
+
+/**
+ * The colour temperature fire seems to have once the eye has partly adapted to it. Firelight is
+ * 1600–2000 K, which a daylight-balanced camera records as deep orange with no blue at all, so grey
+ * stone under it renders as one flat sepia. Eyes adapt (colour constancy): the stone still reads as
+ * grey, lit warm. Chromatic adaptation runs close to linearly in mired (10⁶ / K) towards daylight
+ * white; `adapt` 0 = no adaptation, 1 = fully adapted (fire looks like `white`).
+ */
+export function seenKelvin(kelvin: number, adapt: number, white = 6500): number {
+  const a = clamp01(adapt);
+  return 1e6 / ((1e6 / kelvin) * (1 - a) + (1e6 / white) * a);
+}
