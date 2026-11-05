@@ -7,6 +7,7 @@ const jobs: Record<string, () => Record<string, unknown>> = {
   dressed: () => ({ ...T.dressedSet() }),
   slate: () => ({ ...T.slate() }),
   planks: () => ({ ...T.planks() }),
+  detail: () => ({ data: T.stoneDetail() }),
   macro: () => ({ data: T.macroNoise() }),
   ground: () => ({ ...T.groundLayers() }),
   water: () => ({ data: T.waterNormals() }),
