@@ -55,6 +55,11 @@ export function stairTowerCentre(): V2 {
   const inner = courtyard(), c = inner[STAIR_TOWER.corner], m = centroid(inner);
   return lerp2(c, m, 0.16);
 }
+/** The courtyard stair tower's octagon. */
+export function stairTowerPoly(): V2[] {
+  const c = stairTowerCentre(), n = STAIR_TOWER.sides, R = STAIR_TOWER.r;
+  return Array.from({ length: n }, (_, i) => [c[0] + Math.cos((i / n) * Math.PI * 2 + 0.2) * R, c[1] + Math.sin((i / n) * Math.PI * 2 + 0.2) * R] as V2);
+}
 
 /** 20 rooms per floor: each wing split along its length, widths jittered so no two rooms match. */
 export function rooms(seed = hashSeed('rooms')) {

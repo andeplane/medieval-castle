@@ -129,6 +129,31 @@ describe('key paths', { timeout: 120_000 }, () => {
     expect(shut.minY).toBeGreaterThan(1.5); // down the bridge-head steps to the lawn, never into the moat
   });
 
+  it('courtyard → SE tower stair → the windlass room over the gate → the winch lowers and raises the portcullis', () => {
+    const p = path('courtyard', 'gate2');
+    expect(p.nodes).toContain('room:gate2');
+    const c = G.nodes.get('room:courtyard')!.pos;
+    start(c[0], c[1], c[2]);
+    const r = room('gate2'), g = plan.doors.find((d) => d.id === 'gate-main')!;
+    // then up to the drum: stand 1.9 m behind the groove line (portcullis.ts GROOVE_IN), beside the near rope
+    const k = g.wall / 2 - 0.5, at: V3 = [g.centre[0] + g.normal[0] * (k + 1.9) + g.along[0] * 0.9, r.y0, g.centre[2] + g.normal[1] * (k + 1.9) + g.along[1] * 0.9];
+    const w = follow([...route(p.nodes), at]);
+    expect(w.reached, JSON.stringify(w)).toBe(w.of);
+    expect(pointInPoly(r.poly, w.feet[0], w.feet[2])).toBe(true);
+    expect(w.feet[1]).toBeCloseTo(r.y0, 1);
+    // E on the windlass from where the player stands: down (fast, on the brake), then up again (slow)
+    const tickUntil = (done: () => boolean, max: number) => { let t = 0; for (; t < max && !done(); t += 1 / 60) play.physics.tick(); return t; };
+    expect(doors.isOpen('gate-main')).toBe(true); // key path 1 left it raised
+    expect(doors.request('gate-main', false, { pos: play.playerCentre() })).toBe(true);
+    const down = tickUntil(() => doors.state()['gate-main'] === 0, 10);
+    expect(down).toBeLessThan(2.5);
+    expect(doors.isPassable('gate-main')).toBe(false);
+    expect(doors.request('gate-main', true, { pos: play.playerCentre() })).toBe(true);
+    const up = tickUntil(() => doors.isOpen('gate-main'), 15);
+    expect(up).toBeGreaterThan(down * 2);
+    expect(doors.isOpen('gate-main')).toBe(true);
+  });
+
   it('courtyard → ground-floor rooms → the SW tower stair up one floor', () => {
     const p = path('courtyard', 'sw-1', false, false);
     expect(p.nodes).toContain('room:W0-2');

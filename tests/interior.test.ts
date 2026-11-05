@@ -12,7 +12,7 @@ import { buildCastle } from '../src/castle/castle';
 import { Builder, type MatKey } from '../src/castle/builder';
 import { gatehouseFrame, islandOutline } from '../src/castle/layout';
 import { GATEHOUSE } from '../src/castle/spec';
-import { pointInPoly, type V2 } from '../src/core/math2d';
+import { pointInPoly, add, scale, sub, norm, type V2 } from '../src/core/math2d';
 import { WORLD_SEED } from '../src/core/rng';
 
 const clone = (P: PlanX): PlanX => structuredClone(P);
@@ -231,8 +231,8 @@ describe('navigation graph', () => {
 });
 
 describe('interior shell', () => {
-  let ext: Builder, sh: ShellResult;
-  beforeAll(() => { ext = buildCastle().builder; sh = buildShell(P, ext); }, 60_000);
+  let ext: Builder, sh: ShellResult, openings: ReturnType<typeof buildCastle>['openings'];
+  beforeAll(() => { const c = buildCastle(); ext = c.builder; openings = c.openings; sh = buildShell(P, ext); }, 60_000);
 
   it('records exterior walls and curved openings for the embrasures', () => {
     expect(ext.walls.length).toBeGreaterThan(100);
@@ -245,6 +245,16 @@ describe('interior shell', () => {
     expect(sh.droppedHoles).toEqual([]);
     expect(sh.windows).toBeGreaterThan(120);
     expect(sh.carve.length).toBeGreaterThan(P.rooms.length);
+  });
+
+  it('builds an embrasure only behind a window the exterior placed (clear of other buildings: openings.test.ts)', () => {
+    const placed = openings.filter((o) => o.at).map((o) => {
+      const d = norm(sub(o.face.b, o.face.a));
+      return { p: add(o.face.a, scale(d, o.at!.s)), out: o.face.out, y: o.at!.y };
+    });
+    const blind = sh.embrasures.filter((e) => !placed.some((o) => Math.hypot(o.p[0] - e.mid[0], o.p[1] - e.mid[1]) < 0.05 && o.out[0] * e.dir[0] + o.out[1] * e.dir[1] > 0.999 && Math.abs(o.y - e.yb) < 0.05));
+    expect(sh.embrasures.length).toBe(sh.windows);
+    expect(blind.map((e) => `${e.room} at ${e.mid.map((v) => v.toFixed(1))} y ${e.yb.toFixed(1)}`)).toEqual([]);
   });
 
   it('groups geometry by zone and floor, stairs on their own', () => {

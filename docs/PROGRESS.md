@@ -41,6 +41,24 @@ Known issues
 - The rivet heads are small (2.2 cm) and read as dots from a few metres away.
 - In `castle-gate-walked-in.png` there is a thin bright diagonal line on the left wall near the doorway's inner end. I don't know yet whether it comes from the shell or from the groove change.
 
+
+## 2026-11-05: window placement (no more openings cut by a wall junction)
+
+Anders: "how the fuck do you place a window cut off like that. one does not build like that" (arched windows half inside the gatehouse and towers, voussoirs through the next wall; slits at tower corners).
+
+Done
+- One rule in `src/castle/openings.ts` (pure): an opening with its dressing (jambs, sill, voussoirs, hood) lies wholly on one wall face, 0.8 m from the face's ends and from any other building in front of it or against it (wings, towers, gatehouse, east turret, courtyard stair tower; open air 1.5 m out), and 0.15 m from the plinth, string courses, floor lines and the corbel table / parapet. If it does not fit it moves up or down within its storey, then slides along the face up to 1.5 m; otherwise it is left out. Wings (outer and courtyard faces), square towers, the gatehouse front and the east turret use it; round-tower openings keep their angle and are left out where a wing or band would clip them.
+- Default seed: 338 openings planned, 39 moved (16 along the face, 25 up or down), 85 left out. 61 of those were buried inside a neighbouring building (tower faces inside wings, windows behind the turret and gatehouse); 24 were visible: windows right against the gatehouse, east turret and courtyard stair tower, the S wing's top-floor row (its lintels ran into the corbel table), the square towers' ground-floor loops (half in the battered plinth) and one NE-tower slit under the E roof.
+- The interior shell's embrasures follow automatically (they come from the exterior openings). `ShellResult.embrasures` lists them; on main 7 embrasures looked at another building within 1 m, now none.
+- Cone roofs and the pyramid roofs (east turret, stair tower) get a soffit under the eave, so the sky no longer shows through the overhang as a white seam.
+- Tests: `tests/openings.test.ts` (default seed + 4 seeds: every placed opening inside its face with clearance, clear of every other building, no overlaps) and an interior test that every embrasure sits behind a placed opening.
+
+- Review items: 8 (N courtyard window behind the stair tower) is one of the drops; 7 (towerroom "blind" niche): both great-2 embrasures open onto real windows (`niche-north`, `niche-south` captures), the niche only looks blind from the bookmark's oblique angle; 11 (cone seam) is the soffit.
+
+Numbers (default seed): exterior bins before carving 116k → 98k triangles (before the soffits), window lights 300 → 222, embrasures 141 → 135. After merging main: `__game.state()` castleTriangles 128,135, interior 239,714 triangles; gate 1,448 draw calls / 7.27 M triangles, courtyard 1,390 / 6.49 M, ward 1,476 / 7.22 M (still over budget, review item 5). Captures: `castle-plan/windows/`.
+
+Next
+- The S wing top floor now has courtyard windows only; give it dormers or lower its corbel table if Anders wants windows there.
 ## 2026-11-05: physics player (branch `player-physics`)
 
 Done

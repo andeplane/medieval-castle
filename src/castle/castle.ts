@@ -5,7 +5,8 @@ import { rngFor, range, type Rng } from '../core/rng';
 import { type V2, add, scale, sub, norm, lerp2, len } from '../core/math2d';
 import { Builder, offsetPoly, pointedArch, roundArch, rect, at, wallFrame, type MatKey, type Opening, type Frame } from './builder';
 import { GROUND, floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, type TowerSpec } from './spec';
-import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, courtyard, type WingQuad } from './layout';
+import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, stairTowerPoly, courtyard, type WingQuad } from './layout';
+import { OPEN_W, OPEN_H, dressed, boxOf, fitOpening, masses, type Box, type Dressed, type Face, type Mass } from './openings';
 
 const G0 = GROUND - 1.6; // walls start below the ground so the terrain never shows a gap
 const BATTER_TOP = GROUND + 2.6;
@@ -13,23 +14,42 @@ type V3 = [number, number, number];
 
 export interface WindowLight { p: V3; n: V3; w: number; h: number }
 
+/** Every window, slit and loop the generator planned: where it was planned and where it went (null: left out). */
+export interface PlacedOpening { face: Face; kind: string; d: Dressed; s: number; y: number; at: { s: number; y: number } | null }
+interface Ctx { others: Mass[]; log: PlacedOpening[] }
+
 export function buildCastle(r: Rng = rngFor('castle')) {
   const B = new Builder();
   const lights: WindowLight[] = [];
+  const ctx: Ctx = { others: masses(), log: [] };
   B.stoneFloor = GROUND - 0.5; // walls run 1.6 m into the ground; no stones where nobody can see them
-  for (const w of wingQuads()) wing(B, r, w, lights);
-  for (const t of TOWERS) t.kind === 'square' ? squareTower(B, r, t, lights) : roundTower(B, r, t, lights);
-  gatehouse(B, r, lights);
-  eastTurret(B, r, lights);
+  for (const w of wingQuads()) wing(B, r, w, lights, ctx);
+  for (const t of TOWERS) t.kind === 'square' ? squareTower(B, r, t, lights, ctx) : roundTower(B, r, t, lights, ctx);
+  gatehouse(B, r, lights, ctx);
+  eastTurret(B, r, lights, ctx);
   stairTower(B, r);
   courtyardDressing(B, r);
   B.stoneFloor = -0.35;
-  return { builder: B, lights };
+  return { builder: B, lights, openings: ctx.log };
 }
 
 // ---------------------------------------------------------------- helpers
 
 const dir2 = (f: Frame): V2 => [f.r[0], f.r[2]];
+
+/** Fit an opening planned at (s, y) on a face (openings.ts); logs it and marks its box taken. */
+function place(ctx: Ctx, face: Face, taken: Box[], kind: string, s: number, y: number, d = dressed(kind), maxShift?: number) {
+  const p = fitOpening(face, ctx.others, taken, d, s, y, maxShift);
+  ctx.log.push({ face, kind, d, s, y, at: p });
+  if (p) taken.push(boxOf(d, p.s, p.y));
+  return p;
+}
+/** Strips of a face to keep openings off: plinth top, string courses (0.26 m), floors, parapet. */
+function bands(plinthTop: number, courses: number[], floors: number[], parapet: number): [number, number][] {
+  return [[G0, plinthTop], ...courses.map((y) => [y, y + 0.26] as [number, number]), ...floors.map((y) => [y, y] as [number, number]), [parapet, parapet + 4]];
+}
+const floorLines = (f0: number, f1: number) => Array.from({ length: f1 - f0 }, (_, i) => floorBase(f0 + i));
+const PARAPET_DROP = 1.5; // bottom of the corbel table below the wall top
 
 /** Faces made inside fn are silhouette elements: their real stones are kept further from the camera. */
 function sil(B: Builder, fn: () => void) {
@@ -69,8 +89,6 @@ function windowOpenings(kind: 'slit' | 'loop' | 'lancet' | 'twin' | 'rect' | 'ro
     case 'small': return [g(rect(s, y, 0.62, 0.85), 0.45)];
   }
 }
-const OPEN_W: Record<string, number> = { slit: 0.16, loop: 0.62, lancet: 1.0, twin: 1.54, rect: 1.28, round: 0.78, small: 0.62 };
-const OPEN_H: Record<string, number> = { slit: 1.5, loop: 1.7, lancet: 3.15, twin: 3.05, rect: 1.75, round: 1.64, small: 0.85 };
 
 function windowDressing(B: Builder, r: Rng, f: Frame, kind: string, s: number, y: number, phase: 'old' | 'new', lights: WindowLight[]) {
   const w = OPEN_W[kind], h = OPEN_H[kind];
@@ -228,7 +246,7 @@ function quoins(B: Builder, r: Rng, corner: V2, d1: V2, d2: V2, y0: number, y1: 
 
 // ---------------------------------------------------------------- wings
 
-function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
+function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[], ctx: Ctx) {
   const mat: MatKey = w.phase;
   const [a, b, ib, ia] = w.quad;
   const L = w.length;
@@ -244,6 +262,9 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
   const outerOpen: Opening[] = [], courtOpen: Opening[] = [];
   const outerF = wallFrame(a, b, w.out);
   const plans: { f: Frame; kind: string; s: number; y: number }[] = [];
+  const wb = bands(BATTER_TOP + 0.2, w.phase === 'new' ? [floorBase(1) - 0.2, floorBase(4) - 0.15] : [floorBase(1) - 0.2], floorLines(1, 7), w.top - PARAPET_DROP);
+  const outerFace: Face = { owner: w.id, a, b, out: w.out, bands: wb };
+  const outerTaken: Box[] = buttress.map((s) => ({ s0: s - 1.0, s1: s + 1.0, y0: G0, y1: w.top })); // widest buttress foot
   const kindFor = (fl: number, old: boolean) => fl === 0 ? (old ? 'slit' : 'loop') : fl === 1 ? (old ? 'lancet' : 'twin') : fl === 6 ? 'small' : old ? 'round' : 'rect';
   bays.forEach((s0, bi) => {
     for (let fl = 0; fl < FLOOR_HEIGHTS.length; fl++) {
@@ -252,26 +273,26 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[]) {
       if (r() < (old ? 0.16 : 0.08)) continue; // irregular: not every bay has a window
       const kind = kindFor(fl, old);
       const jit = old ? (r() - 0.5) * 0.9 : (r() - 0.5) * 0.25;
-      const s = s0 + jit;
       const yb = floorBase(fl) + (fl === 0 ? 2.9 : fl === 1 ? 1.4 : 1.0) + (old ? (r() - 0.5) * 0.35 : 0);
-      if (r() < 0.06 && fl > 1) { // blocked-up window: frame survives, filled with newer stone
-        plans.push({ f: outerF, kind, s, y: yb });
-        const ww = OPEN_W[kind], hh = OPEN_H[kind];
-        boxOn(B, old ? 'new' : 'old', outerF, s, yb + hh / 2 - 0.1, 0.015, ww, hh - 0.2, 0.03);
-        continue;
-      }
-      outerOpen.push(...windowOpenings(kind as never, s, yb));
-      plans.push({ f: outerF, kind, s, y: yb });
+      const blocked = r() < 0.06 && fl > 1; // blocked-up window: frame survives, filled with newer stone
+      const p = place(ctx, outerFace, outerTaken, kind, s0 + jit, yb);
+      if (!p) continue;
+      const { s, y } = p;
+      plans.push({ f: outerF, kind, s, y });
+      if (blocked) boxOn(B, old ? 'new' : 'old', outerF, s, y + OPEN_H[kind] / 2 - 0.1, 0.015, OPEN_W[kind], OPEN_H[kind] - 0.2, 0.03);
+      else outerOpen.push(...windowOpenings(kind as never, s, y));
     }
   });
   // courtyard side: more regular, larger windows (sheltered)
   const cL = Math.hypot(ia[0] - ib[0], ia[1] - ib[1]);
   const courtF = wallFrame(ib, ia, [-w.out[0], -w.out[1]]);
+  const courtBands = [...wb.slice(0, -1), [w.top, w.top + 4] as [number, number]]; // plain parapet on the wall head
+  const courtFace: Face = { owner: w.id, a: ib, b: ia, out: [-w.out[0], -w.out[1]], bands: courtBands }, courtTaken: Box[] = [];
   { const n = Math.max(1, Math.floor((cL - 4) / 3.6)); for (let i = 0; i < n; i++) for (let fl = 1; fl < 7; fl++) {
     if (r() < 0.1) continue;
-    const s = 2 + ((i + 0.5) * (cL - 4)) / n + (r() - 0.5) * 0.3, kind = fl === 1 ? 'twin' : fl === 6 ? 'small' : 'rect';
-    const yb = floorBase(fl) + (fl === 1 ? 1.4 : 1.0);
-    courtOpen.push(...windowOpenings(kind as never, s, yb)); plans.push({ f: courtF, kind, s, y: yb });
+    const s0 = 2 + ((i + 0.5) * (cL - 4)) / n + (r() - 0.5) * 0.3, kind = fl === 1 ? 'twin' : fl === 6 ? 'small' : 'rect';
+    const p = place(ctx, courtFace, courtTaken, kind, s0, floorBase(fl) + (fl === 1 ? 1.4 : 1.0));
+    if (p) { courtOpen.push(...windowOpenings(kind as never, p.s, p.y)); plans.push({ f: courtF, kind, s: p.s, y: p.y }); }
   } }
 
   B.wall(mat, a, b, w.out, G0, w.top, outerOpen);
@@ -396,23 +417,24 @@ function towerFloors(top: number) {
   return ys;
 }
 
-function squareTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'square' }>, lights: WindowLight[]) {
+function squareTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'square' }>, lights: WindowLight[], ctx: Ctx) {
   const mat: MatKey = t.phase;
   const poly = squareTowerPoly(t); // corners in order; may be CW or CCW — fix to the wing winding
   const p = signedOrder(poly);
   const floors = towerFloors(t.top);
+  const tb = bands(BATTER_TOP + 1.2, [floorBase(2) - 0.2, floorBase(7) - 0.2], floors.slice(1), t.top - PARAPET_DROP);
   for (let i = 0; i < 4; i++) {
     const a = p[i], b = p[(i + 1) % 4], L = len(sub(b, a)), d = norm(sub(b, a)), out: V2 = [d[1], -d[0]];
-    const f = wallFrame(a, b, out);
+    const f = wallFrame(a, b, out), face: Face = { owner: t.id, a, b, out, bands: tb }, taken: Box[] = [];
     const ops: Opening[] = [], plans: { kind: string; s: number; y: number }[] = [];
     floors.forEach((y, fl) => {
       const kind = fl === 0 ? 'loop' : fl === 1 ? 'lancet' : fl >= floors.length - 1 ? 'small' : fl % 3 === 0 ? 'lancet' : 'round';
       const count = L > 11 && fl > 0 && fl % 2 === 0 ? 2 : 1;
       for (let c = 0; c < count; c++) {
         if (r() < 0.12) continue;
-        const s = count === 1 ? L / 2 + (r() - 0.5) * 1.2 : L * (c === 0 ? 0.3 : 0.7) + (r() - 0.5) * 0.5;
-        const yb = y + (fl === 0 ? 2.9 : 1.2);
-        ops.push(...windowOpenings(kind as never, s, yb)); plans.push({ kind, s, y: yb });
+        const s0 = count === 1 ? L / 2 + (r() - 0.5) * 1.2 : L * (c === 0 ? 0.3 : 0.7) + (r() - 0.5) * 0.5;
+        const q = place(ctx, face, taken, kind, s0, y + (fl === 0 ? 2.9 : 1.2));
+        if (q) { ops.push(...windowOpenings(kind as never, q.s, q.y)); plans.push({ kind, ...q }); }
       }
     });
     B.wall(mat, a, b, out, G0, t.top, ops);
@@ -460,7 +482,7 @@ function signedOrder(poly: V2[]): V2[] {
   return s < 0 ? [...poly].reverse() : poly;
 }
 
-function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>, lights: WindowLight[]) {
+function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>, lights: WindowLight[], ctx: Ctx) {
   const mat: MatKey = t.phase;
   const [cx, cz] = towerCentre(t);
   const R = t.r, seg = 48;
@@ -468,13 +490,21 @@ function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>
   B.cyl('trim', cx, cz, R + 0.12, R + 0.12, BATTER_TOP + 1.3, BATTER_TOP + 1.56, seg);
   B.cyl(mat, cx, cz, R, R, BATTER_TOP + 1.4, t.top - 0.3, seg, { top: 'lead' });
   for (const y of [floorBase(2) - 0.2, floorBase(5) - 0.2]) B.cyl('trim', cx, cz, R + 0.13, R + 0.13, y, y + 0.26, seg, { top: null });
-  // openings: a stair spiral of slits plus windows on the outward side
+  // openings: a stair spiral of slits plus windows on the outward side; each stays at its angle
+  // (the face is the tangent strip there) and is left out where a wing or the batter would clip it
+  const rb = bands(BATTER_TOP + 1.56, [floorBase(2) - 0.2, floorBase(5) - 0.2], [], t.top - PARAPET_DROP);
+  const drum = (a: number, y: number, w: number, h: number, glass: boolean) => {
+    const n: V2 = [Math.cos(a), Math.sin(a)], tan: V2 = [-n[1], n[0]], o: V2 = [cx + n[0] * R, cz + n[1] * R];
+    const d: Dressed = { hw: w / 2 + 0.3, below: 0.25, above: h + 0.25 }, half = d.hw + 0.81; // trim surround and sill
+    const q = place(ctx, { owner: t.id, a: add(o, scale(tan, -half)), b: add(o, scale(tan, half)), out: n, bands: rb }, [], glass ? 'window' : 'slit', half, y, d, 0);
+    if (q) curvedOpening(B, cx, cz, R, a, q.y, w, h, glass, lights);
+  };
   const outward = Math.atan2(cz, cx);
   let a = outward - 1.2;
-  for (let y = GROUND + 4; y < t.top - 4; y += 2.6) { curvedOpening(B, cx, cz, R, a, y, 0.13, 1.25, false, lights); a += 0.75; }
+  for (let y = GROUND + 4; y < t.top - 4; y += 2.6) { drum(a, y, 0.13, 1.25, false); a += 0.75; }
   towerFloors(t.top).forEach((y, fl) => {
     if (fl < 2) return;
-    for (const off of [-0.5, 0.55]) { if (r() < 0.3) continue; curvedOpening(B, cx, cz, R, outward + off + (r() - 0.5) * 0.15, y + 1.2, 0.62, fl % 2 ? 1.5 : 1.15, true, lights); }
+    for (const off of [-0.5, 0.55]) { if (r() < 0.3) continue; drum(outward + off + (r() - 0.5) * 0.15, y + 1.2, 0.62, fl % 2 ? 1.5 : 1.15, true); }
   });
   roundParapet(B, r, cx, cz, R, t.top, mat);
   if (t.cone > 0) {
@@ -496,7 +526,7 @@ function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>
 
 // ---------------------------------------------------------------- gatehouse, turret, stair tower
 
-function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
+function gatehouse(B: Builder, r: Rng, lights: WindowLight[], ctx: Ctx) {
   const g = gatehouseFrame();
   const hw = GATEHOUSE.width / 2, P = GATEHOUSE.project, top = GATEHOUSE.top;
   const at2 = (s: number, d: number): V2 => add(add(g.base, scale(g.dir, s)), scale(g.out, d));
@@ -507,14 +537,17 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   const f = wallFrame(fa, fb, g.out);
   const gateW = 3.8, gateY = GROUND - 0.1, archH = 4.0;
   const gate = pointedArch(hw, gateY, gateW, archH, 1.6, 8);
-  B.wall('new', fa, fb, g.out, G0, top, [
-    { pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }, // portcullis and its groove: interior/portcullis.ts, shell.ts
-    ...windowOpenings('twin', hw, floorBase(2) + 1.2), ...windowOpenings('rect', hw, floorBase(4) + 1.0), ...windowOpenings('small', hw, floorBase(6) + 1.1),
-    ...windowOpenings('slit', hw - 3.3, GROUND + 5.2), ...windowOpenings('slit', hw + 3.3, GROUND + 5.2),
-  ]);
-  windowDressing(B, r, f, 'twin', hw, floorBase(2) + 1.2, 'new', lights);
-  windowDressing(B, r, f, 'rect', hw, floorBase(4) + 1.0, 'new', lights);
-  windowDressing(B, r, f, 'small', hw, floorBase(6) + 1.1, 'new', lights);
+  // gate arch with its voussoirs, heraldic panel and bretèche are taken; floors 0–1 are the vaulted passage
+  const face: Face = { owner: 'gate', a: fa, b: fb, out: g.out, bands: bands(BATTER_TOP, [floorBase(1) + 1.6], floorLines(2, 7), top - PARAPET_DROP) };
+  const taken: Box[] = [{ s0: hw - gateW / 2 - 0.8, s1: hw + gateW / 2 + 0.8, y0: G0, y1: gateY + archH + 0.8 }, { s0: hw - 0.8, s1: hw + 0.8, y0: gateY + archH + 1.9, y1: gateY + archH + 3.9 }, { s0: hw - 1.45, s1: hw + 1.45, y0: floorBase(2) - 2.6, y1: floorBase(2) - 1.0 }];
+  const ops: Opening[] = [{ pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }]; // portcullis and its groove: interior/portcullis.ts, shell.ts
+  const plans: { kind: string; s: number; y: number }[] = [];
+  for (const [kind, s0, y0] of [['twin', hw, floorBase(2) + 1.2], ['rect', hw, floorBase(4) + 1.0], ['small', hw, floorBase(6) + 1.1], ['slit', hw - 3.3, GROUND + 5.2], ['slit', hw + 3.3, GROUND + 5.2]] as [string, number, number][]) {
+    const q = place(ctx, face, taken, kind, s0, y0);
+    if (q) { ops.push(...windowOpenings(kind as never, q.s, q.y)); if (kind !== 'slit') plans.push({ kind, ...q }); }
+  }
+  B.wall('new', fa, fb, g.out, G0, top, ops);
+  for (const q of plans) windowDressing(B, r, f, q.kind, q.s, q.y, 'new', lights);
   // side faces
   for (const [a, b] of [[p[1], p[2]], [p[3], p[0]]] as [V2, V2][]) { const d = norm(sub(b, a)); B.wall('new', a, b, [d[1], -d[0]], G0, top); }
   B.cap('lead', p, top - 0.3, true);
@@ -575,16 +608,21 @@ function gatehouseBatter(B: Builder, g: ReturnType<typeof gatehouseFrame>, p: V2
   }
 }
 
-function eastTurret(B: Builder, r: Rng, lights: WindowLight[]) {
+function eastTurret(B: Builder, r: Rng, lights: WindowLight[], ctx: Ctx) {
   const e = eastTurretFrame();
   const hw = EAST_TURRET.w / 2, P = EAST_TURRET.project, top = EAST_TURRET.top;
   const at2 = (s: number, d: number): V2 => add(add(e.base, scale(e.dir, s)), scale(e.out, d));
   const p = signedOrder([at2(-hw, -0.5), at2(hw, -0.5), at2(hw, P), at2(-hw, P)]);
   const fa = at2(-hw, P), fb = at2(hw, P), f = wallFrame(fa, fb, e.out);
-  const ops: Opening[] = [], plans: { kind: string; y: number }[] = [];
-  for (let fl = 1; fl < 7; fl++) { const kind = fl === 3 ? 'lancet' : fl === 1 ? 'slit' : 'small'; const y = floorBase(fl) + 1.2; ops.push(...windowOpenings(kind as never, hw, y)); plans.push({ kind, y }); }
+  const ops: Opening[] = [], plans: { kind: string; s: number; y: number }[] = [];
+  const face: Face = { owner: 'eturret', a: fa, b: fb, out: e.out, bands: bands(BATTER_TOP, [], floorLines(1, 7), top - 3.6) }, taken: Box[] = [];
+  for (let fl = 1; fl < 7; fl++) {
+    const kind = fl === 3 ? 'lancet' : fl === 1 ? 'slit' : 'small';
+    const q = place(ctx, face, taken, kind, hw, floorBase(fl) + 1.2);
+    if (q) { ops.push(...windowOpenings(kind as never, q.s, q.y)); plans.push({ kind, ...q }); }
+  }
   B.wall('new', fa, fb, e.out, G0, top, ops);
-  for (const q of plans) windowDressing(B, r, f, q.kind, hw, q.y, 'new', lights);
+  for (const q of plans) windowDressing(B, r, f, q.kind, q.s, q.y, 'new', lights);
   for (const [a, b] of [[p[1], p[2]], [p[3], p[0]]] as [V2, V2][]) { const d = norm(sub(b, a)); B.wall('new', a, b, [d[1], -d[0]], G0, top); }
   B.loft('new', offsetPoly(p, 0.9), G0, p, BATTER_TOP);
   // corbelled-out top storey with a pyramid roof
@@ -596,14 +634,14 @@ function eastTurret(B: Builder, r: Rng, lights: WindowLight[]) {
   const v = (pp: V2, yy: number): V3 => [pp[0], yy, pp[1]];
   const eave = offsetPoly(q, 0.3);
   for (let i = 0; i < 4; i++) B.roofPlane('slate', [v(eave[i], top + 0.6), v(eave[(i + 1) % 4], top + 0.6), v(cc, top + 6.5)]);
+  B.cap('slate', eave, top + 0.6, false); // soffit under the overhang
   B.cyl('iron', cc[0], cc[1], 0.05, 0.03, top + 6.3, top + 7.8, 6, { top: null });
 }
 
 function stairTower(B: Builder, r: Rng) {
   const c = stairTowerCentre();
-  const n = STAIR_TOWER.sides, R = STAIR_TOWER.r, top = STAIR_TOWER.top;
-  const poly: V2[] = Array.from({ length: n }, (_, i) => [c[0] + Math.cos((i / n) * Math.PI * 2 + 0.2) * R, c[1] + Math.sin((i / n) * Math.PI * 2 + 0.2) * R]);
-  const p = signedOrder(poly);
+  const n = STAIR_TOWER.sides, top = STAIR_TOWER.top;
+  const p = signedOrder(stairTowerPoly());
   for (let i = 0; i < n; i++) {
     const a = p[i], b = p[(i + 1) % n], d = norm(sub(b, a)), out: V2 = [d[1], -d[0]], L = len(sub(b, a));
     const ops: Opening[] = [];
@@ -617,6 +655,7 @@ function stairTower(B: Builder, r: Rng) {
   const v = (pp: V2, yy: number): V3 => [pp[0], yy, pp[1]];
   const eave = offsetPoly(op, 0.25);
   for (let i = 0; i < n; i++) B.roofPlane('slate', [v(eave[i], top + 1.0), v(eave[(i + 1) % n], top + 1.0), v(c, top + 9.5)]);
+  B.cap('slate', eave, top + 1.0, false); // soffit under the overhang
   B.cyl('iron', c[0], c[1], 0.05, 0.03, top + 9.3, top + 11, 6, { top: null });
   void r;
 }
