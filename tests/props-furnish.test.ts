@@ -20,6 +20,9 @@ describe('furnish', () => {
     expect(f.props).toBe(2);
     expect(f.triangles).toBe(placed[0].prop.mesh.triangles + placed[1].prop.mesh.triangles);
     expect(f.emitters.get('N:1')).toHaveLength(1);
+    const [fl] = f.flames.get('N:1')!, [em] = f.emitters.get('N:1')!;
+    expect(fl.kind).toBe('torch');
+    expect(Math.hypot(fl.base[0] - em.position[0], fl.base[1] - em.position[1], fl.base[2] - em.position[2])).toBeLessThan(0.45); // linkFlames reach
     expect(f.collision.get('N:1')!.getAttribute('position').count).toBe(36);
   });
   it('uses the real dressing by default', () => {
