@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-11-05: frame rate fixes (AO pre-pass at half size, dynamic resolution)
+
+- Per-pass GPU timestamps on the M4 (WebGPU, retina 2×): the GTAO normal pre-pass redrew the whole scene at full size for AO that is computed at half size. It cost ~7 ms of the 20 ms door-gate frame (`?ao=0`: 20 → 12.8 ms, 45 → 70 fps). It now renders at half size (`pre.setResolutionScale(0.5)`).
+- **Dynamic resolution** (`src/render/resolution.ts`): every quarter second the render pixel ratio is checked against the GPU time per frame. It steps 0.25 down (at most once a second) while a frame costs more than 15 ms, and back up (at most every 3 s) when the bigger frame would still fit in 12 ms. It ranges from 1 to the screen's ratio (capped at 2). `?scale=` fixes the ratio, `?dynres=0` turns it off. Without GPU timestamps it only steps down, on frames slower than 57 fps. The stats overlay shows the current ratio under "size".
+- GPU time on Apple GPUs: their passes overlap, and each pass's timestamps span most of the frame, so the sum of passes read 5–8× too high (150 ms for a 22 ms frame). The overlay now takes the longest pass per frame on Apple and the sum elsewhere (`gpuFrameTimes`). It also reads one resolve per frame batch; before, a resolve could count several frames.
+
 ## 2026-11-05: frame-rate measurement (stats overlay + benchmark)
 
 Anders: "please measure fps and have stats on rendering so you can improve. now it is quite bad on m4 mac".

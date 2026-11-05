@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FrameStats, summarize, percentile, pixelRatio } from '../src/render/perf';
+import { FrameStats, summarize, percentile, pixelRatio, gpuFrameTimes } from '../src/render/perf';
 import { runBench, benchTable, BENCH_STEPS, type BenchDeps } from '../src/debug/bench';
 import type { FrameSummary } from '../src/render/perf';
 
@@ -34,6 +34,15 @@ describe('frame stats', () => {
     expect(pixelRatio(2, '')).toBe(2);
     expect(pixelRatio(2, 'x')).toBe(2);
     expect(pixelRatio(2.5, null, 1.5)).toBe(1.5);
+  });
+});
+
+describe('GPU time per frame', () => {
+  const e: [string, number][] = [['r:1:4:f10', 3], ['r:2:5:f10', 4], ['r:1:4:f9', 2], ['r:2:5:f9', 1], ['bogus', 9], ['r:3:6:f10', 0]];
+  it('sums passes on GPUs that run them in turn, takes the longest where they overlap, in frame order', () => {
+    expect(gpuFrameTimes(e, false)).toEqual([3, 7]);
+    expect(gpuFrameTimes(e, true)).toEqual([2, 4]);
+    expect(gpuFrameTimes([], true)).toEqual([]);
   });
 });
 

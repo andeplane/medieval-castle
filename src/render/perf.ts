@@ -63,3 +63,20 @@ export function pixelRatio(devicePixelRatio: number, param: string | null, max =
   if (param !== null && param !== '' && p > 0) return Math.min(p, 4);
   return Math.min(devicePixelRatio || 1, max);
 }
+
+/**
+ * GPU time per frame from three's timestamp pool (uids `r:<context>:<n>:f<frame>` → pass duration in
+ * ms). Most GPUs run passes one after another, so a frame costs the sum of its passes. Apple's tiled
+ * GPUs overlap them and each pass's timestamps span most of the frame, so there the longest pass is
+ * the closer estimate (it matched the frame rate on an M4 when the sum read 5–8× too high).
+ */
+export function gpuFrameTimes(entries: Iterable<[string, number]>, overlapped: boolean): number[] {
+  const frames = new Map<string, number>();
+  for (const [uid, ms] of entries) {
+    const m = /:f(\d+)$/.exec(uid);
+    if (!m || !(ms > 0)) continue;
+    const prev = frames.get(m[1]) ?? 0;
+    frames.set(m[1], overlapped ? Math.max(prev, ms) : prev + ms);
+  }
+  return [...frames.entries()].sort((a, b) => Number(a[0]) - Number(b[0])).map(([, v]) => v);
+}
