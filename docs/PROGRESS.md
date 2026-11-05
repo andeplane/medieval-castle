@@ -18,9 +18,9 @@ Done
 - Bridge: the new bridge plan's walkable deck (`walkable`, `d`) gives the boundary its corridor (`bridgeInfo`); the island tests use main's own bridge and revetment build (`tests/world.ts islandCastle()`) and a test terrain at the real near-grid resolution (0.9 m cells).
 - Debug: `__game.player` (pos, teleport, look, state, spawn), `__game.input(keys, ms)` (steps physics synchronously, returns cost and a trace), `__game.physics` (stats, raycast), `__game.probes`.
 
-Numbers (headless WebGL2 on a shared 4-core box): physics init 0.76 s on a normal load (Rapier wasm 0.16 s, colliders 0.41 s for 145k triangles: castle 114k, terrain 31k), 1.8–2.3 s with `?test=walk` under load ~30. Physics tick (player + world step) median 0.25–0.39 ms, mean 0.35–0.86 ms. Rendering cost is unchanged; colliders draw nothing.
+Numbers (headless WebGL2 on a shared 4-core box, load ~22): physics init 4.8 s with the interior (Rapier wasm 0.16 s, collider build 3.1 s for 423k triangles: castle 148k, interior 239k, terrain 32k, rocks 6k; it was 0.8 s for 152k without the interior). Physics tick (player + world step) median 0.31 ms, mean 0.51 ms. Captures at 1600×900: gate 2068 draw calls / 9.2M triangles, courtyard 1576, hall 992 (the whole page; colliders draw nothing).
 
-Walk test: all checks pass (closed gate leaves stop you on the sill, open gate lets you in, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
+Walk test (`scripts/walktest.mjs`, 18/18 after the HUD merge): closed gate leaves stop you on the sill, open gate lets you through the passage into the courtyard, east wall, revetment at 6 edges, bridge to the break, every course lane, the tunnel under the ground).
 
 Known issues / next
 - Key paths are steered with the nav graph's room centroids and door points; they are not a navmesh and walk only the three paths above. Untested by walking: other stairs, upper floors beyond sw-1, wall walks.
