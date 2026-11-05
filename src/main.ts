@@ -8,7 +8,7 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { buildBridge } from './castle/bridge';
 import { buildRevetment } from './castle/revetment';
-import { buildTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
+import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt } from './world/terrain';
 import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildTrees } from './world/trees';
@@ -22,6 +22,7 @@ const say = (s: string) => { loading.textContent = s; return new Promise((r) => 
 if (params.has('shot')) document.body.classList.add('shot');
 
 async function main() {
+  const terrainReady = prepareTerrain(); // mountain erosion in a worker, alongside the textures
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
   await renderer.init();
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -43,6 +44,7 @@ async function main() {
   const t0 = performance.now();
   const M = await makeMaterials();
   const tTex = performance.now() - t0;
+  await terrainReady;
 
   await say('RAISING THE WALLS…');
   const { builder, lights } = buildCastle();
@@ -53,7 +55,8 @@ async function main() {
 
   await say('SHAPING THE LAND…');
   const sky = makeSky(renderer, scene);
-  scene.add(buildTerrain(M.terrain));
+  const terrain = buildTerrain(M.terrain);
+  scene.add(terrain);
   const water = makeWater(sky.sunDir);
   scene.add(water);
 
@@ -116,7 +119,7 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours,
     renderNow: async () => { pipeline.render(); },
     stats: () => ({
-      castleTriangles: castle.userData.triangles, trees: trees?.userData, windows: lights.length,
+      castleTriangles: castle.userData.triangles, terrain: terrain.userData, trees: trees?.userData, windows: lights.length,
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
     }),
   });
