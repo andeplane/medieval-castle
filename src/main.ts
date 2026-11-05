@@ -20,7 +20,9 @@ import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
 import { installHooks } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
-import { buildDoors, gateDoorSpecs, gatePortcullisSpec, inDoorway } from './castle/interior/doors';
+import { buildDoors, inDoorway } from './castle/interior/doors';
+import { portcullisInPlan } from './castle/interior/portcullis';
+import { planInterior } from './castle/interior/plan';
 import { createInteraction } from './game/interact';
 import { DoorAudio } from './game/doorAudio';
 import type { LoadingScreen } from './loading/tunnel';
@@ -86,10 +88,13 @@ async function main() {
   const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
   scene.add(stones.group);
   stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
-  // the main gate: two leaves with a wicket, and the portcullis (until the shell emits all DoorSpecs)
+  // the main gate: no leaves, the portcullis closes it; its windlass stands in the room above
   const audio = new DoorAudio(camera);
-  const gateSpecs = test ? [] : gateDoorSpecs();
-  const doors = buildDoors(gateSpecs, M, undefined, { portcullis: test ? [] : [gatePortcullisSpec()], sound: audio, initial: params.has('doors') ? Number(params.get('doors')) : undefined });
+  const plan = test ? null : interior?.plan ?? planInterior();
+  const gateDoor = plan?.doors.find((d) => d.id === 'gate-main');
+  const gateSpecs = gateDoor ? [gateDoor] : [];
+  const port = gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [];
+  const doors = buildDoors([], M, undefined, { portcullis: port, sound: audio, initial: params.has('doors') ? Number(params.get('doors')) : undefined });
   scene.add(doors.object);
 
   await say('SHAPING THE LAND…');
@@ -135,7 +140,7 @@ async function main() {
   void output;
 
   const rig = new CameraRig(camera, renderer.domElement);
-  // walk mode may step into the gate passage when the leaves and portcullis let you
+  // walk mode may step into the gate doorway when the portcullis lets you
   const feet = new THREE.Vector3();
   rig.canWalk = (x, z) => {
     feet.set(x, camera.position.y - 0.8, z);

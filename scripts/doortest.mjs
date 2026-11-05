@@ -33,8 +33,8 @@ const ok = (cond, msg) => { assert.ok(cond, msg); checks++; console.log('  ✓',
   const page = await open('test=doors');
   console.log('test scene ready in', ((Date.now() - t0) / 1000).toFixed(1), 's');
   let s = await state(page);
-  ok(Object.keys(s).length >= 8, `doors present: ${Object.keys(s).join(', ')}`);
-  ok(Object.entries(s).every(([k, v]) => (k.includes('portcullis') ? v === 1 : v === 0)), 'all leaves start closed, portcullis up');
+  ok(Object.keys(s).length === 7, `doors present: ${Object.keys(s).join(', ')}`);
+  ok(Object.entries(s).every(([k, v]) => (k === 't-gate' ? v === 1 : v === 0)), 'all leaves start closed, the gate portcullis up');
 
   // setOpen with animation
   await ev(page, () => window.__game.doors.setOpen('t-round', true));
@@ -62,38 +62,83 @@ const ok = (cond, msg) => { assert.ok(cond, msg); checks++; console.log('  ✓',
   ok(s['t-round'] === 0, 'closed again');
   ok((await ev(page, () => window.__game.state())).sounds.some((x) => x.name === 'thud'), 'a thud was logged when it shut');
 
-  // the gate, its wicket and the portcullis
-  await ev(page, () => window.__game.doors.setOpen('t-portcullis', false));
-  s = await tick(page, 5);
-  ok(s['t-portcullis'] === 0, 'portcullis lowered');
-  await ev(page, () => { window.__game.doors.setOpen('t-gate', true); window.__game.doors.setOpen('t-gate:wicket', true); });
-  s = await tick(page, 8);
-  ok(s['t-gate'] === 1 && s['t-gate:wicket'] === 1, 'gate and wicket open');
+  // the gate: no leaves, only the portcullis
+  await ev(page, () => window.__game.doors.setOpen('t-gate', false));
+  s = await tick(page, 3);
+  ok(s['t-gate'] === 0, 'test gate portcullis lowered');
   await ev(page, () => window.__game.setCamera('door-gate'));
   await ev(page, () => window.__game.step(1));
-  await page.screenshot({ path: `${OUT}/test-gate-open.png`, timeout: 300_000 });
+  await page.screenshot({ path: `${OUT}/test-gate-lowered.png`, timeout: 300_000 });
   await page.close();
 }
 
-// ---------------------------------------------------------------- the castle gate
+// ---------------------------------------------------------------- the castle gate, walked as the player
 if (process.env.MAIN !== '0') {
   const t0 = Date.now();
   const page = await open('');
   console.log('castle ready in', ((Date.now() - t0) / 1000).toFixed(1), 's');
+  const shot = async (name) => { await ev(page, () => window.__game.step(1)); await page.screenshot({ path: `${OUT}/${name}.png`, timeout: 600_000 }); console.log('  shot', name); };
+  const game = () => ev(page, () => window.__game.state());
+  // signed distance of the camera through the gate wall (outside < 0), and where the groove is
+  const through = () => ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const c = window.__game.state().camera; return (c.x - d.centre[0]) * d.normal[0] + (c.z - d.centre[2]) * d.normal[1]; });
+  const groove = 2.6 / 2 - 0.5; // portcullis.ts GROOVE_IN: 0.5 m from the inner face of the 2.6 m gate wall
   let s = await state(page);
-  ok(s['main-gate'] === 0 && s['main-portcullis'] === 1, 'castle gate closed, portcullis raised');
-  await ev(page, () => window.__game.doors.setOpen('main-gate', true));
-  s = await tick(page, 8);
-  ok(s['main-gate'] === 1, 'castle gate opens');
-  await ev(page, () => window.__game.setCamera('gate'));
-  await ev(page, () => window.__game.step(1));
-  await page.screenshot({ path: `${OUT}/castle-gate-open.png`, timeout: 300_000 });
-  await ev(page, () => window.__game.doors.setOpen('main-portcullis', false));
-  s = await tick(page, 6);
-  ok(s['main-portcullis'] === 0, 'castle portcullis drops');
-  await ev(page, () => window.__game.step(1));
-  await page.screenshot({ path: `${OUT}/castle-gate-portcullis.png`, timeout: 300_000 });
-  console.log(JSON.stringify(await ev(page, () => window.__game.state())));
+  ok(s['gate-main'] === 1 && Object.keys(s).length === 1, `castle gate: one portcullis, no leaves, starts raised (${JSON.stringify(s)})`);
+  await ev(page, () => window.__game.setCamera('door-gate'));
+  await shot('castle-gate-raised');
+  // lowered: walk up to it with W and get stopped by the grille
+  await ev(page, () => window.__game.doors.setOpen('gate-main', false, true));
+  await shot('castle-gate-lowered');
+  // walk straight at it along the gate axis from 7 m out (the walker slides along whatever stops it)
+  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre; window.__game.lookFrom([c[0] - n[0] * 7, 0, c[2] - n[1] * 7], [c[0] + n[0] * 4, c[1] + 1.9, c[2] + n[1] * 4], 'walk'); });
+  await ev(page, () => window.__game.walk(4));
+  let t = await through();
+  ok(t < groove - 0.25 && t > groove - 0.7, `walked up to the lowered grille and stopped (${t.toFixed(2)} m, groove at ${groove})`);
+  await tick(page, 0.05);
+  let g = await game();
+  ok(g.target?.id === 'gate-main' && g.target.label === 'Raise portcullis', `crosshair on the grille: ${JSON.stringify(g.target)}`);
+  ok(await ev(page, () => window.__game.use()), 'E (use) on the grille');
+  s = await tick(page, 2);
+  ok(s['gate-main'] > 0.05 && s['gate-main'] < 0.8, `rising slowly after 2 s (${s['gate-main']})`);
+  ok(await ev(page, () => window.__game.walk(1)).then(async () => (await through()) < groove), 'still blocked while it is low');
+  s = await tick(page, 10);
+  ok(s['gate-main'] === 1, 'fully raised');
+  g = await game();
+  ok(g.sounds.some((x) => x.name === 'clank'), 'ratchet clanks were heard');
+  await ev(page, () => window.__game.walk(3));
+  t = await through();
+  ok(t > groove + 0.3, `walked under it into the gate (${t.toFixed(2)} m)`);
+  await shot('castle-gate-walked-in');
+  // from the inside: turn round, look up at it and lower it
+  await ev(page, () => { const d = window.__game.interior.plan.doors.find((x) => x.id === 'gate-main'); const n = d.normal, c = d.centre, k = 2.0; window.__game.lookFrom([c[0] + n[0] * k, 0, c[2] + n[1] * k], [c[0] - n[0] * 1, c[1] + 5.0, c[2] - n[1] * 1], 'walk'); }); // looking up at the raised grid
+  await tick(page, 0.05);
+  g = await game();
+  ok(g.target?.id === 'gate-main' && g.target.label === 'Lower portcullis', `from inside, crosshair on the grille: ${JSON.stringify(g.target)}`);
+  await ev(page, () => window.__game.use());
+  s = await tick(page, 3);
+  ok(s['gate-main'] === 0, 'dropped and seated from the inside');
+  g = await game();
+  ok(g.sounds.some((x) => x.name === 'thud'), 'thud when the spikes seat');
+  await shot('castle-gate-inside-lowered');
+  // the windlass in the room above
+  const winch = await ev(page, () => {
+    const P = window.__game.interior.plan, d = P.doors.find((x) => x.id === 'gate-main'), n = d.normal, a = d.along, c = d.centre;
+    const r = P.rooms.filter((x) => x.zone === 'gate' && x.y0 > c[1] + 8).sort((x, y) => x.y0 - y.y0)[0];
+    const k = 2.6 / 2 - 0.5, gx = c[0] + n[0] * k, gz = c[2] + n[1] * k;
+    return { room: r.id, y: r.y0, pos: [gx + n[0] * 1.9 + a[0] * 0.9, r.y0 + 1.6, gz + n[1] * 1.9 + a[1] * 0.9], look: [gx + n[0] * 0.25, r.y0 + 0.9, gz + n[1] * 0.25] };
+  });
+  await ev(page, (w) => window.__game.lookFrom(w.pos, w.look, 'fly'), winch);
+  await tick(page, 0.05);
+  g = await game();
+  ok(g.target?.id === 'gate-main:winch' && g.target.label === 'Raise portcullis', `winch in ${winch.room}: crosshair on it: ${JSON.stringify(g.target)}`);
+  await shot('castle-winch-lowered');
+  await ev(page, () => window.__game.use());
+  s = await tick(page, 12);
+  ok(s['gate-main'] === 1, 'raised from the winch');
+  await shot('castle-winch-raised');
+  await ev(page, () => window.__game.setCamera('gatepass'));
+  await shot('castle-passage-raised');
+  console.log(JSON.stringify({ doors: (await game()).doors, doorTriangles: (await game()).doorTriangles, drawCalls: (await game()).drawCalls }));
   await page.close();
 }
 await browser.close();

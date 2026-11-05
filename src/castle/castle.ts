@@ -508,7 +508,7 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   const gateW = 3.8, gateY = GROUND - 0.1, archH = 4.0;
   const gate = pointedArch(hw, gateY, gateW, archH, 1.6, 8);
   B.wall('new', fa, fb, g.out, G0, top, [
-    { pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }, // leaves + portcullis: interior/doors.ts
+    { pts: gate, depth: 5.2, fill: 'void', reveal: 'trim' }, // portcullis and its groove: interior/portcullis.ts, shell.ts
     ...windowOpenings('twin', hw, floorBase(2) + 1.2), ...windowOpenings('rect', hw, floorBase(4) + 1.0), ...windowOpenings('small', hw, floorBase(6) + 1.1),
     ...windowOpenings('slit', hw - 3.3, GROUND + 5.2), ...windowOpenings('slit', hw + 3.3, GROUND + 5.2),
   ]);
@@ -518,15 +518,13 @@ function gatehouse(B: Builder, r: Rng, lights: WindowLight[]) {
   // side faces
   for (const [a, b] of [[p[1], p[2]], [p[3], p[0]]] as [V2, V2][]) { const d = norm(sub(b, a)); B.wall('new', a, b, [d[1], -d[0]], G0, top); }
   B.cap('lead', p, top - 0.3, true);
-  // gate voussoirs and hood, portcullis
+  // gate voussoirs and hood
   const head = pointedArch(hw, gateY, gateW + 0.05, archH, 1.62, 10).slice(2, -1);
   for (let i = 0; i < head.length - 1; i++) {
     const a = head[i], b = head[i + 1], m = lerp2(a, b, 0.5), d = norm(sub(b, a)), nrm: V2 = [-d[1], d[0]];
     const c = add(m, scale(nrm, -0.32));
     voussoir(B, at(f, c[0], c[1], 0.05), [f.r[0] * d[0], d[1], f.r[2] * d[0]], f.n, len(sub(b, a)) - 0.025, 0.66, 0.1);
   }
-  // portcullis grooves in the reveals (the grid itself moves: interior/doors.ts)
-  for (const sg of [-1, 1]) boxOn(B, 'void', f, hw + sg * (gateW / 2 - 0.02), gateY + archH / 2, -0.7, 0.05, archH, 0.12);
   // heraldic panel and bretèche (box machicolation) over the gate
   boxOn(B, 'trim', f, hw, gateY + archH + 2.9, 0.05, 1.5, 1.9, 0.1);
   for (const s of [hw - 1.2, hw, hw + 1.2]) for (let k = 0; k < 3; k++) boxOn(B, 'trim', f, s, floorBase(2) - 2.4 + k * 0.38, 0.2 * (k + 1), 0.4, 0.37, 0.4 * (k + 1));

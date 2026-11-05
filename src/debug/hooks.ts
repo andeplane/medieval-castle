@@ -45,6 +45,13 @@ export function installHooks(d: HookDeps) {
     },
     setTime: (h: number) => d.setTime(h),
     step: async (n = 1) => { for (let i = 0; i < n; i++) { d.rig.update(1 / 60); d.tick?.(1 / 60); await d.renderNow(); } },
+    /** Hold a key (KeyboardEvent.code) for `seconds` of game time through the player's own controls, no rendering. */
+    walk: (seconds: number, code = 'KeyW') => {
+      dispatchEvent(new KeyboardEvent('keydown', { code }));
+      for (let t = 0; t < seconds; t += 1 / 60) { d.rig.update(1 / 60); d.tick?.(1 / 60); }
+      dispatchEvent(new KeyboardEvent('keyup', { code }));
+      return hooks.state().camera;
+    },
     /** Use what the crosshair is on; returns whether anything was used. */
     use: () => d.use?.() ?? false,
     /** Doors: state() = openness 0..1 per id; setOpen(id, open, instant); tick(seconds) advances without rendering. */

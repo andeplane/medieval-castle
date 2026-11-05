@@ -1,6 +1,6 @@
 // ?test=doors: a stone wall with one opening of every head and kind (round, pointed, segmental and
-// flat plank doors, a postern, the gate with its wicket and a portcullis, an iron grille), each cut
-// with a real rebate. For captures (?doors=0|0.5|1 sets the starting openness) and scripts/doortest.mjs.
+// flat plank doors, a postern, a gate closed by its portcullis, an iron grille), each cut with a real
+// rebate. For captures (?doors=0|0.5|1 sets the starting openness) and scripts/doortest.mjs.
 import * as THREE from 'three/webgpu';
 import { pass, mrt, normalView, builtinAOContext, screenUV } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
@@ -11,8 +11,9 @@ import { CameraRig, VIEWS, type View } from '../camera/controls';
 import { installHooks } from '../debug/hooks';
 import { castleCentre } from '../castle/layout';
 import { GROUND } from '../castle/spec';
-import { buildDoors, inDoorway, type PortcullisSpec } from '../castle/interior/doors';
-import { openingOutline, headRise } from '../castle/interior/doorGeom';
+import { buildDoors, inDoorway } from '../castle/interior/doors';
+import { portcullisFor } from '../castle/interior/portcullis';
+import { openingOutline } from '../castle/interior/doorGeom';
 import type { DoorSpec } from '../castle/interior/types';
 import { createInteraction } from '../game/interact';
 import { DoorAudio } from '../game/doorAudio';
@@ -20,14 +21,14 @@ import type { V2 } from '../core/math2d';
 import type { LoadingScreen } from '../loading/tunnel';
 
 const T = 1.4, WALL_H = 8.2, LAP = 0.06;
-type Def = Pick<DoorSpec, 'id' | 'kind' | 'head' | 'width' | 'height' | 'hinge' | 'swingInto' | 'rebate'>;
+type Def = Pick<DoorSpec, 'id' | 'kind' | 'head' | 'width' | 'height' | 'hinge' | 'swingInto' | 'rebate'> & { leaf?: boolean };
 const DEFS: Def[] = [
   { id: 't-round', kind: 'plank', head: 'round', width: 1.1, height: 2.0, hinge: 'left', swingInto: 1, rebate: 0.16 },
   { id: 't-pointed', kind: 'plank', head: 'pointed', width: 1.2, height: 2.05, hinge: 'right', swingInto: 0, rebate: 0.16 },
   { id: 't-segmental', kind: 'plank', head: 'segmental', width: 1.3, height: 2.1, hinge: 'left', swingInto: 1, rebate: 0.18 },
   { id: 't-flat', kind: 'plank', head: 'flat', width: 0.95, height: 2.0, hinge: 'right', swingInto: 1, rebate: 0.15 },
   { id: 't-postern', kind: 'postern', head: 'round', width: 0.85, height: 1.55, hinge: 'left', swingInto: 0, rebate: 0.2 },
-  { id: 't-gate', kind: 'gate', head: 'pointed', width: 3.4, height: 3.2, hinge: 'left', swingInto: 1, rebate: 0.45 },
+  { id: 't-gate', kind: 'gate', head: 'pointed', width: 3.4, height: 3.2, hinge: 'left', swingInto: 1, rebate: 0.45, leaf: false },
   { id: 't-grille', kind: 'grille', head: 'round', width: 1.2, height: 2.1, hinge: 'right', swingInto: 1, rebate: 0.12 },
 ];
 
@@ -37,7 +38,7 @@ export function doorTestSpecs(): { doors: DoorSpec[]; x0: number; x1: number; z:
   let x = c[0] - total / 2;
   const doors = DEFS.map((d) => {
     const cx = x + d.width / 2; x += d.width + gap;
-    return { ...d, spaces: ['north', 'south'], centre: [cx, GROUND, c[1]], along: [1, 0], normal: [0, 1], wall: T, leaf: true } as DoorSpec;
+    return { leaf: true, ...d, spaces: ['north', 'south'], centre: [cx, GROUND, c[1]], along: [1, 0], normal: [0, 1], wall: T } as DoorSpec;
   });
   return { doors, x0: c[0] - total / 2 - 3, x1: c[0] + total / 2 + 3, z: c[1] };
 }
@@ -88,14 +89,12 @@ export async function runDoorTest(screen: LoadingScreen) {
   const wall = B.build({ old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass });
   scene.add(wall);
 
-  const gate = specs.find((d) => d.kind === 'gate')!;
-  const port: PortcullisSpec = {
-    id: 't-portcullis', centre: [gate.centre[0], GROUND, z - T / 2 + 0.3], along: [1, 0], door: gate.id, width: gate.width - 0.06, height: gate.height + headRise('pointed', gate.width) + 0.3, lift: 2.5,
-    raised: params.get('port') !== 'down', reach: { w: gate.width, h: gate.height + headRise('pointed', gate.width) },
-  };
+  // the gate has no leaves: a portcullis (no windlass here, there is no room above)
+  const port = portcullisFor(specs.find((d) => d.kind === 'gate')!, null);
   const audio = new DoorAudio(camera);
   const init = params.get('doors');
   const doors = buildDoors(specs, M, undefined, { ajar: 0, initial: init === null ? undefined : Number(init), portcullis: [port], sound: audio });
+  if (params.get('port') === 'down') doors.setOpen(port.id, false, true);
   scene.add(doors.object);
 
   const sky = makeSky(renderer, scene);
