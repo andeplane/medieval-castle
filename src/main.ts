@@ -174,9 +174,9 @@ async function main() {
   // DoorSpecs. Every leaf is a kinematic box in the physics world, posed each fixed tick; the player and
   // any NPC motors stop a swinging leaf.
   const audio = new DoorAudio(camera);
-  const gateSpecs = test ? [] : gateDoorSpecs();
+  const gateSpecs = test === 'stairs' ? [] : gateDoorSpecs(); // the stair scene has no castle
   const doors = buildDoors(gateSpecs, M, physics, {
-    portcullis: test ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
+    portcullis: test === 'stairs' ? [] : [gatePortcullisSpec()], sound: audio, characters: play.characters,
     initial: params.has('doors') ? Number(params.get('doors')) : undefined,
   });
   scene.add(doors.object);
