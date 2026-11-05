@@ -367,7 +367,10 @@ async function main() {
   };
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
   rig.go(start);
-  if (params.has('play')) rig.setMode('walk');
+  // play starts walking at the spawn outside the gate; a ?view= bookmark, ?shot captures and the
+  // test scenes keep their review camera (O orbits, F flies)
+  const review = params.has('view') || params.has('shot') || !!test;
+  if (!review || params.has('play')) { rig.setMode('walk'); rig.toSpawn(); }
 
   const ui = wireGameHud(hud, {
     rig, views: VIEWS, search: location.search, time: { get: () => sky.hours, set: setTime },
