@@ -20,5 +20,9 @@ Read `docs/BRIEF.md` (what we are building), `docs/STYLE.md` (look + review) and
 - NPC-ready: navigating NPCs will be added later. Character movement is a reusable motor over `PhysicsApi` (the player is just one user of it); the interior plan exposes a room/door/stair navigation graph; doors can be opened by any agent; nothing assumes there is only one character.
 - Coverage thresholds live per folder in `vitest.config.ts`; add new tested modules to its `include`. Example of DI with type-safe fakes: `src/loading/` + `tests/loading/fakes.ts`.
 
+## CI / CD
+- Pull requests run `.github/workflows/ci.yml` (coverage + build); every merge to `main` deploys to GitHub Pages (`pages.yml`) so Anders can play the latest build.
+- Keep each pipeline under ~1-2 minutes: one OS, one Node version, no browser/OS matrix, no headless captures in CI.
+
 ## Definition of done
 Build, tests and coverage pass, fresh captures from at least three bookmarks, `docs/PROGRESS.md` updated.
