@@ -205,7 +205,8 @@ describe('stone set', () => {
 });
 
 describe('LOD', () => {
-  const L: LodParams = { ...LOD, hi: 2, mid: 5, lo: 8, sil: 12, hyst: 0.5, cell: 4, minChunk: 30 };
+  // every stone near the camera (`?stones=all`); the default LOD keeps only silhouette stones
+  const L: LodParams = { ...LOD, hi: 2, mid: 5, lo: 8, sil: 12, plain: Infinity, hyst: 0.5, cell: 4, minChunk: 30 };
   it('pickLevel bands with hysteresis and a silhouette-only band', () => {
     const off = { level: 0 as const, silOnly: false };
     expect(pickLevel(1, off, false, L)).toEqual({ level: 3, silOnly: false });
@@ -216,7 +217,15 @@ describe('LOD', () => {
     expect(pickLevel(10, off, true, L)).toEqual({ level: 1, silOnly: true });
     expect(pickLevel(12.2, { level: 1, silOnly: true }, true, L)).toEqual({ level: 1, silOnly: true });
     expect(pickLevel(12.2, off, true, L).level).toBe(0);
-    expect(pickLevel(1, off, false).level).toBe(3); // default distances
+    expect(pickLevel(1, off, true)).toEqual({ level: 3, silOnly: true }); // default: silhouettes only, depth from parallax
+    expect(pickLevel(1, off, false).level).toBe(0);
+  });
+  it('builds plain stones only within lod.plain', () => {
+    const off = { level: 0 as const, silOnly: false }, P = { ...L, plain: 3 };
+    expect(pickLevel(1, off, true, P)).toEqual({ level: 3, silOnly: false });
+    expect(pickLevel(3.2, { level: 2, silOnly: false }, true, P)).toEqual({ level: 2, silOnly: false }); // hysteresis
+    expect(pickLevel(3.2, off, true, P)).toEqual({ level: 2, silOnly: true });
+    expect(pickLevel(4, off, false, P)).toEqual({ level: 0, silOnly: false });
   });
   it('facing and distance helpers', () => {
     expect(facingAway({ x: 0, y: 0, z: -10 }, [0, 0, 0], [0, 0, 1], 10)).toBe(true);

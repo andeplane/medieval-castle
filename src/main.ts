@@ -8,7 +8,7 @@ import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
-import { StoneField } from './castle/stones/field';
+import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
@@ -113,7 +113,9 @@ async function main() {
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
   const layoutMs = Math.round(performance.now() - tStones);
-  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }); // real stones near the camera
+  // real stones on silhouettes (parapets, corners, buttresses); flat walls get their depth from parallax.
+  // ?stones=all: every stone near the camera, as before (A/B)
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }, params.get('stones') === 'all' ? { ...LOD, plain: Infinity } : LOD);
   scene.add(stones.group);
   stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
   let course: { info: CourseInfo; object: THREE.Object3D } | null = null;
