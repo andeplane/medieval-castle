@@ -15,19 +15,31 @@ Done
   - The geometry: 8 cm square bars, flush half-lapped crossings with a rivet head on each face, a spike per upright, and a heavy top rail with two lifting eyes. Also the sill sockets, a slot in the arch head and a slot in the room floor.
 - **Windlass** in the lowest room over the raised grid (plan room `gate2`, floor 13.6 m): a horizontal oak drum (r 0.23 m, 3 m long) on two timber A-frames with sole plates and runners, a six-spoke capstan head at each end, an iron ratchet wheel (16 teeth = one per tooth of lift) with its pawl, and two hemp ropes running down into a floor slot. It rotates with the lift. Everything goes into the existing two door BatchedMeshes, so there are no new draw calls.
 - **Use:** E on the grille from outside or inside, or on the windlass, raises or lowers it (the `gate-main` and `gate-main:winch` interactables). NPCs can call `request('gate-main', …)` from the grille or the drum; `isPassable('gate-main')` is true once the spike tips are above 2 m.
-- `__game.walk(seconds, key)` holds a key through the player's own controls (rig.update + canWalk + door blocking) without rendering, for scripted walks.
+- Merged with #17 (physics player): `main.ts`, the island test and key path 1 build the gate from `portcullisInPlan`; `gateDoorSpecs` and `gatePortcullisSpec` are gone. In walk mode the grille is a Rapier kinematic box while it is low.
 
-Checked
-- `scripts/doortest.mjs` ran 25 checks in the real game (headless WebGL2), and every one passed. The castle part walks it as the player:
-  1. Starting with the portcullis lowered, walk straight at the gate with W: stopped 0.36 m short of the groove.
-  2. Look at the grille and press use (E): it rises slowly, still blocks while low, and is fully up after about 7 s, with clanks logged.
-  3. Walk on with W: through the groove to the end of the walkable doorway (+2.2 m).
-  4. Turn round inside, look up at the raised grid and use it: it drops and seats with a thud.
-  5. In the room above, aim at the windlass and use it: raised.
-- Not walked: the gate passage beyond the doorway or the climb to the windlass room. Walking there needs #17's colliders; `canWalk` on main only covers the doorway. The windlass interaction was checked with a fly camera placed in the room.
-- Unit tests: `tests/portcullis.test.ts` (19). Placement from the real plan, including every vertex of the frames, drum and spokes, at any angle, lies inside room `gate2`. The state machine, the winch pose, geometry, both-side and winch aiming, the collider appearing and disappearing, holding over an NPC, rope shortening in the batch matrices, and NPC requests. `tests/doors.test.ts` is updated for whole leaves.
+Checked (after merging #17 and #26)
+- The real page (headless WebGL2), as the player with the player's own controls:
+  - `scripts/walktest.mjs`: 19/19. From the spawn, the lowered portcullis stops you 1.72 m into the gatehouse (the groove is at 2.1 m). `__game.use()` raises it, and you walk the passage (10.5 m in) into the courtyard.
+  - `scripts/doortest.mjs`: 25/25.
+    1. Walking straight at the lowered gate, you are stopped 0.38 m short of the groove.
+    2. With the crosshair on the grille ("Raise portcullis"), E raises it: 0.35 of the way after 2 s, still blocking while low, clanks heard, fully up after about 7 s.
+    3. Walk in 9 m.
+    4. Turn round, look up and use it: it drops and seats with a thud.
+    5. Stand in `gate2` with the crosshair on the windlass: E raises it.
+- Key paths (`tests/keypaths.test.ts`):
+  1. Bridge end → stopped by the lowered portcullis → a request from where you stand raises it (more than 3 s) → on through the passage to the courtyard.
+  2. **New path:** courtyard → gate-1 → S0-1 → S0-0 → se-0 → up the SE tower stair → se-2 → S2-0 → S2-1 → `gate2`, to the drum. There the winch lowers the portcullis (under 2.5 s) and raises it again (more than twice as long).
+- Unit tests: `tests/portcullis.test.ts` (19).
+  - Placement from the real plan, including every vertex of the frames, drum and spokes staying inside room `gate2` at any angle.
+  - The state machine, the winch pose and the geometry.
+  - Aiming from both sides and at the winch, the collider appearing and disappearing, holding over an NPC, rope shortening in the batch matrices, and NPC requests.
+  - `tests/doors.test.ts` is updated for whole leaves. 598 tests in all.
 
-Numbers: gate, windlass and ropes are 8.1k triangles (`doorTriangles`) and 0 extra draw calls (two door batches). Coverage on doors / doorGeom / doorParts / doorBatch / portcullis: 100 % lines, except doorParts statements at 98.9 %.
+Numbers:
+- Gate, windlass and ropes: about 8.1k triangles and 0 extra draw calls (two door batches). `doorTriangles` is now 304k with all 241 interior leaves.
+- Coverage on doors, doorGeom, doorParts, doorBatch and portcullis: 100 % lines, except doorParts statements at 98.9 %.
+
+Captures (`castle-plan/interior/doors/`): castle-gate-lowered, castle-gate-raised, castle-gate-walked-in, castle-gate-inside-lowered, castle-passage-raised, castle-winch-lowered, castle-winch-raised, castle-winch-room.
 
 Assumptions (for Anders to veto)
 - The portcullis starts raised.
@@ -39,7 +51,7 @@ Assumptions (for Anders to veto)
 Known issues
 - With `?furniture=1` the furnishing pass does not know about the windlass, and could place furniture in `gate2` on top of it. `dress.ts` `keepOutFor` would need the windlass footprint.
 - The rivet heads are small (2.2 cm) and read as dots from a few metres away.
-- In `castle-gate-walked-in.png` there is a thin bright diagonal line on the left wall near the doorway's inner end. I don't know yet whether it comes from the shell or from the groove change.
+- The windlass has no collider: the player walks through the drum and frames.
 
 
 ## 2026-11-05: window placement (no more openings cut by a wall junction)
