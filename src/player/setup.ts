@@ -23,6 +23,8 @@ export interface PlayDeps {
   castle: THREE.Object3D; terrain: THREE.Object3D; input: InputSource; view: CameraView; footsteps: Footsteps; clock: Clock;
   bridge?: { start: V2; dir: V2; width: number; breakAt: number } | null;   // null in ?test=stairs
   interior?: InteriorCollision | null;
+  /** Furniture collision boxes as triangle soups (props block the player), when furniture is on. */
+  furniture?: THREE.BufferGeometry[];
   extra?: { object: THREE.Object3D; holes: V2[][] } | null;   // e.g. the ?test=walk course
 }
 
@@ -72,6 +74,7 @@ export async function setupPlay(d: PlayDeps) {
   const castleTris = physics.addObject(d.castle);
   let interiorTris = 0;
   for (const g of d.interior?.collision ?? []) { physics.addStaticMesh(g, 'interior'); interiorTris += (g.index ? g.index.count : g.getAttribute('position').count) / 3; }
+  for (const g of d.furniture ?? []) physics.addStaticMesh(g, 'furniture');
   if (d.extra) physics.addObject(d.extra.object, undefined, () => 'course');
 
   // terrain: an open trimesh over the island and the near moat. Holes under the buildings (their own

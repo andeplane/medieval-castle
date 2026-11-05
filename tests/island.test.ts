@@ -52,6 +52,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     play = await setupPlay({
       castle, terrain: terrainObject(), bridge, input, view, footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
       interior: { collision: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 0, -200)], terrainHoles: [] },
+      furniture: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 5, -200)],
       extra: { object: cb.build(mats()), holes: course.holes },
     });
     play.player.setActive(true);
@@ -62,6 +63,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(t.castleTris).toBeGreaterThan(50_000);
     expect(t.terrainTris).toBeGreaterThan(10_000);
     expect(t.interiorTris).toBe(12);
+    expect(play.physics.raycast([-200, 9, -200], [0, -1, 0], 5)?.tag).toBe('furniture');
     expect(t.rockTris).toBe(12); // the near rock only
     expect(play.physics.raycast([ROCK[0], 60, ROCK[1]], [0, -1, 0], 80)?.tag).toBe('rock');
     expect(play.physics.stats().characters).toBe(1);

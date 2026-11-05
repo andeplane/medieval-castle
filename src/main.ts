@@ -95,6 +95,15 @@ async function main() {
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
+  // furniture (src/props): off until Anders approves it in the castle; ?furniture=1 turns it on
+  let furniture: import('./props/furnish').Furniture | null = null;
+  if (interior && params.get('furniture') === '1') {
+    await say('FURNISHING THE ROOMS…');
+    const [{ furnish }, { makePropMaterials }, T] = await Promise.all([import('./props/furnish'), import('./props/render'), import('./props/textures')]);
+    const pm = makePropMaterials({ wood: T.woodTex(), iron: T.ironTex(), cloth: T.clothTex(), straw: T.strawTex(), ceramic: T.ceramicTex() });
+    furniture = furnish(interior.plan, pm);
+    for (const g of interior.groups) { const o = furniture.objects.get(g.key); if (o) g.object.add(o); }
+  }
   const tStones = performance.now();
   const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
   const layoutMs = Math.round(performance.now() - tStones);
@@ -158,7 +167,7 @@ async function main() {
   const scripted = new ScriptedInput();
   const footsteps = new Footsteps(browserAudio(window));
   const play = await setupPlay({
-    castle, terrain, bridge, interior: interior ? { collision: interior.collision } : null, input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
+    castle, terrain, bridge, interior: interior ? { collision: interior.collision } : null, furniture: furniture ? [...furniture.collision.values()] : [], input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
     extra: course ? { object: course.object, holes: course.info.holes } : null,
   });
   const { physics, player } = play;
@@ -282,6 +291,7 @@ async function main() {
     doors,
     stats: () => ({
       interior: interior ? { triangles: interior.triangles, groups: interior.groups.length, meshes: interior.groups.reduce((s, g) => s + g.object.children.length, 0), rooms: interior.plan.rooms.length, doors: interior.plan.doors.length, stairs: interior.plan.stairs.length, ...interior.stats } : null,
+      furniture: furniture ? { props: furniture.props, triangles: furniture.triangles, groups: furniture.objects.size, emitters: [...furniture.emitters.values()].reduce((s, e) => s + e.length, 0) } : null,
       castleTriangles: castle.userData.triangles, stones: { ...stones.stats(), layoutMs }, terrain: terrain.userData, vegetation: veg?.stats(), windows: lights.length,
       doorTriangles: doors.triangles, doors: { ...doors.state(), ...locked.state() }, target: interaction.target(), sounds: audio.log.slice(-6),
       drawCalls: info.render.drawCalls, frameTriangles: info.render.triangles, textureMs: Math.round(tTex),
@@ -290,6 +300,7 @@ async function main() {
   }, window as unknown as HookWindow, systemClock);
 
   (window as unknown as { __game: Record<string, unknown> }).__game.interior = interior ? { plan: interior.plan, groups: interior.groups, collision: interior.collision } : null;
+  (window as unknown as { __game: Record<string, unknown> }).__game.furniture = furniture ? { dressing: furniture.dressing, emitters: furniture.emitters, flames: furniture.flames, collision: furniture.collision } : null;
 
   if (params.has('shot')) {
     // captures render on demand through __game.step(), so a slow software renderer is not flooded
