@@ -17,7 +17,7 @@ import { makeSky } from './world/sky';
 import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint, type Mode } from './camera/controls';
-import { outerPoly, gatehouseFrame } from './castle/layout';
+import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
 import { GATEHOUSE } from './castle/spec';
 import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
@@ -286,7 +286,7 @@ async function main() {
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     renderNow: async () => { info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
-    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint(), gateDoors: gateSpecs },
+    probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
     doors,
     stats: () => ({

@@ -52,6 +52,16 @@ check('closed gate leaves stop you on the sill', into(r) > 0.5 && into(r) < 4.2 
 await page.evaluate(() => window.__game.doors.setOpen('main-gate', true, true));
 r = await run(['KeyW'], 3000);
 check('open gate: walk in to the end of the passage', into(r) > 4.5 && Math.abs(r.y - sill) < 0.1, `into the gatehouse ${into(r).toFixed(2)} m`);
+// 1b. on through the gate passage (the shell's colliders) and out of its courtyard arch
+const gc = await page.evaluate(() => window.__game.interior?.plan.doors.find((d) => d.id === 'gate-court') ?? null);
+if (gc) {
+  for (const t of [[gc.centre[0], gc.centre[2]], [gc.centre[0] + gc.normal[0] * 5, gc.centre[2] + gc.normal[1] * 5]]) {
+    const s = await page.evaluate(() => window.__game.player.state());
+    await page.evaluate((y) => window.__game.player.look(y), face([s.x, s.z], t));
+    r = await run(['KeyW'], (Math.hypot(t[0] - s.x, t[1] - s.z) / 3 + 1) * 1000);
+  }
+  check('through the passage into the courtyard', pip(P.court, r.x, r.z) && Math.abs(r.y - 2.6) < 0.3, `at ${r.x.toFixed(1)}, ${r.y.toFixed(2)}, ${r.z.toFixed(1)}`);
+}
 
 // 2. walls elsewhere: run at the east wing
 await tele(44, null, 27, face([44, 27], [20, -6]));
