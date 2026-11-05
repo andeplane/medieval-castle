@@ -2,6 +2,26 @@
 
 ## 2026-11-05: frame rate fixes (AO pre-pass at half size, dynamic resolution)
 
+Measured after deploy (`?bench`, Anders' M4, Chrome WebGPU, 1200×897 CSS px, devicePixelRatio 2, 120 Hz; fps / p95 frame ms):
+
+| view | before (main at #33) | AO at half size, fixed 2× (`?scale=2`) | default (dynamic resolution) |
+|---|---|---|---|
+| hero / aerial | 120 | 120 | 120 |
+| gate | 82 / 23.6 | 95 / 19.5 | 94 / 19.7 |
+| door-gate | 43 / 45.2 | 53 / 36.1 | 66 / 29.1 |
+| courtyard | 57 / 33.6 | 70 / 27.1 | 83 / 22.7 |
+| ward | 83 / 22.8 | 96 / 19.6 | 95 / 19.5 |
+| closeup-ashlar | 37 / 53.5 | 45 / 42.9 | 71 / 26.9 |
+| gatepass | 87 / 22.0 | 107 / 17.6 | 114 / 14.9 |
+| walk-gate (spawn → gate, walking) | – (the step did not move then) | 57 / 40.8 | 71 / 26.6 |
+| run-courtyard | 39 / 34.0 | 67 / 29.6 | 65 / 30.0 |
+
+- GPU time with the new per-frame reading: door-gate 16 ms at a fixed 2×, 12.8 ms with dynamic resolution. It matches the frame rate now.
+- Still open:
+  - p95 frames stay at 20–30 ms near the castle: there are occasional hitches above the GPU time. The cause is not found yet; the stone chunk builds while moving are a suspect.
+  - Door leaves are ~1,600 draw calls on WebGPU (a BatchedMesh draws once per instance). This does not limit the M4 but would weigh on weaker CPUs.
+- A run with the game also open in a second tab dropped the resolution to 1× everywhere, as designed. Close other tabs with the game before benchmarking.
+
 - Per-pass GPU timestamps on the M4 (WebGPU, retina 2×): the GTAO normal pre-pass redrew the whole scene at full size for AO that is computed at half size. It cost ~7 ms of the 20 ms door-gate frame (`?ao=0`: 20 → 12.8 ms, 45 → 70 fps). It now renders at half size (`pre.setResolutionScale(0.5)`).
 - **Dynamic resolution** (`src/render/resolution.ts`): every quarter second the render pixel ratio is checked against the GPU time per frame. It steps 0.25 down (at most once a second) while a frame costs more than 15 ms, and back up (at most every 3 s) when the bigger frame would still fit in 12 ms. It ranges from 1 to the screen's ratio (capped at 2). `?scale=` fixes the ratio, `?dynres=0` turns it off. Without GPU timestamps it only steps down, on frames slower than 57 fps. The stats overlay shows the current ratio under "size".
 - GPU time on Apple GPUs: their passes overlap, and each pass's timestamps span most of the frame, so the sum of passes read 5–8× too high (150 ms for a 22 ms frame). The overlay now takes the longest pass per frame on Apple and the sum elsewhere (`gpuFrameTimes`). It also reads one resolve per frame batch; before, a resolve could count several frames.
