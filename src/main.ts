@@ -301,14 +301,13 @@ async function main() {
   const doorSets = playDoors([], interior?.plan.doors ?? []);
   const port = gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [];
   // a batch has one material: leaves take their floor's interior material (as the furniture does; cellars
-  // and tunnels have no sun), the portcullis keeps the outdoor iron and gets the windlass room's wood
+  // and tunnels have no sun), and so does the portcullis, for its windlass room
   const under = (d: { centre: number[] }) => d.centre[1] < GROUND - 1;
   const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
   const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined };
   const doors = joinDoors([
-    buildDoors(doorSets.active.filter((d) => !under(d)), inMats(IM), physics, doorOpts),
+    buildDoors(doorSets.active.filter((d) => !under(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
     buildDoors(doorSets.active.filter(under), inMats(IMu), physics, doorOpts),
-    buildDoors([], { wood: IM.adopt(M.wood), iron: M.iron }, physics, { ...doorOpts, portcullis: port }),
   ]);
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs

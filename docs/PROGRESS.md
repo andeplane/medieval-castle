@@ -16,8 +16,17 @@ Done
 - **Windlass** in the lowest room over the raised grid (plan room `gate2`, floor 13.6 m): a horizontal oak drum (r 0.23 m, 3 m long) on two timber A-frames with sole plates and runners, a six-spoke capstan head at each end, an iron ratchet wheel (16 teeth = one per tooth of lift) with its pawl, and two hemp ropes running down into a floor slot. It rotates with the lift. Everything goes into the existing two door BatchedMeshes, so there are no new draw calls.
 - **Use:** E on the grille from outside or inside, or on the windlass, raises or lowers it (the `gate-main` and `gate-main:winch` interactables). NPCs can call `request('gate-main', …)` from the grille or the drum; `isPassable('gate-main')` is true once the spike tips are above 2 m.
 - Merged with #17 (physics player): `main.ts`, the island test and key path 1 build the gate from `portcullisInPlan`; `gateDoorSpecs` and `gatePortcullisSpec` are gone. In walk mode the grille is a Rapier kinematic box while it is low.
+- Cell visibility (#27): `setVisible` covers the portcullis.
+  - `gate-main` shows the grille, following the gate's spaces.
+  - `gate-main:winch` shows the drum, ropes and coils, following `WinchSpec.room`.
+  - The fixtures stay while either of them is shown.
+  - `main.ts` registers both next to the leaf doors.
+- **Door leaves no longer render white indoors** (the furniture thread found them in the undercroft). The cause was the outdoor wood and iron under the +2.5 stop interior exposure. Now:
+  - Leaves take their floor's interior material: `IM.adopt` above ground, `IMu.adopt` in cellars and tunnels, as the furniture does. The portcullis and windlass use `IM` too.
+  - A batch has one material, so `main.ts` joins two door systems (`joinDoors`: above ground with the portcullis, and underground). The locked grille uses `IMu`.
+  - Door geometries carry `interiorRoom = -1`. Leaves are not room-tagged (a batch geometry is shared by many rooms), so they take the ambient floor, the sun and the fires, not row 0's daylight.
 
-Checked (after merging #17 and #26)
+Checked (after merging #17, #26, #27 and #28)
 - The real page (headless WebGL2), as the player with the player's own controls:
   - `scripts/walktest.mjs`: 19/19. From the spawn, the lowered portcullis stops you 1.72 m into the gatehouse (the groove is at 2.1 m). `__game.use()` raises it, and you walk the passage (10.5 m in) into the courtyard.
   - `scripts/doortest.mjs`: 25/25.
@@ -33,13 +42,20 @@ Checked (after merging #17 and #26)
   - Placement from the real plan, including every vertex of the frames, drum and spokes staying inside room `gate2` at any angle.
   - The state machine, the winch pose and the geometry.
   - Aiming from both sides and at the winch, the collider appearing and disappearing, holding over an NPC, rope shortening in the batch matrices, and NPC requests.
-  - `tests/doors.test.ts` is updated for whole leaves. 598 tests in all.
+  - `tests/doors.test.ts` is updated for whole leaves.
+  - New tests for cell visibility per part, for `joinDoors`, and for the untagged room attribute. 646 tests in all.
+- Interior door look (headless WebGL2, `?shot` exposure):
+  - A cellar leaf beside the torch (`N-cellarstair>N-c1`) and the undercroft leaf (`N0-0>N0-1`) read as dark oak in line with the walls.
+  - The windlass timber reads as timber, where before this change it was bleached.
 
 Numbers:
-- Gate, windlass and ropes: about 8.1k triangles and 0 extra draw calls (two door batches). `doorTriangles` is now 304k with all 241 interior leaves.
+- Gate, windlass and ropes: about 8.1k triangles, in the above-ground door batches.
+- `doorTriangles` is 304k with all 241 interior leaves.
+- Doors are 4 batches (wood and iron × above ground and underground), plus 2 for the locked grille.
+- The gatepass frame is 322 draw calls.
 - Coverage on doors, doorGeom, doorParts, doorBatch and portcullis: 100 % lines, except doorParts statements at 98.9 %.
 
-Captures (`castle-plan/interior/doors/`): castle-gate-lowered, castle-gate-raised, castle-gate-walked-in, castle-gate-inside-lowered, castle-passage-raised, castle-winch-lowered, castle-winch-raised, castle-winch-room.
+Captures (`castle-plan/interior/doors/`): castle-gate-lowered, castle-gate-raised, castle-gate-walked-in, castle-gate-inside-lowered, castle-passage-raised, castle-winch-lowered, castle-winch-raised, castle-winch-room, cellar-door-interior-material, undercroft-door-interior-material.
 
 Assumptions (for Anders to veto)
 - The portcullis starts raised.
@@ -52,6 +68,7 @@ Known issues
 - With `?furniture=1` the furnishing pass does not know about the windlass, and could place furniture in `gate2` on top of it. `dress.ts` `keepOutFor` would need the windlass footprint.
 - The rivet heads are small (2.2 cm) and read as dots from a few metres away.
 - The windlass has no collider: the player walks through the drum and frames.
+- Leaves and the windlass get no room daylight; they need per-instance room tags, which BatchedMesh does not have. In rooms lit mostly through windows they can read darker than the walls, and the windlass timber is dark in shade.
 
 ## 2026-11-05: interior light, eye adaptation, cell visibility, see-through windows (branch `interior-light`)
 
