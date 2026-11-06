@@ -84,7 +84,8 @@ export function archOutline(cx: number, y0: number, w: number, h: number, head: 
       const R = (w * w / 4 + rise * rise) / w;
       const right = t <= 0.5, tt = right ? t * 2 : (1 - t) * 2;
       const ccx = right ? cx + w / 2 - R : cx - w / 2 + R;
-      const aEnd = Math.atan2(rise, Math.abs(cx - ccx));
+      // the apex is on the centre line: R - w/2 < 0 (rise < w/2, e.g. 0.42 w) puts it past the top of the arc
+      const aEnd = Math.atan2(rise, R - w / 2);
       const a = aEnd * tt;
       x = right ? ccx + Math.cos(a) * R : ccx - Math.cos(a) * R; y = y0 + h + Math.sin(a) * R;
     }

@@ -15,6 +15,25 @@ export interface ResolutionOptions {
   headroom: number;
   /** ms after a change before the next step down, and before a step up */
   downAfterMs: number; upAfterMs: number;
+  /** ratio to begin at (default max); the governor climbs from it to max when the GPU has headroom */
+  start?: number;
+}
+
+/** The brief's performance target: 60 fps at 1440p. */
+export const PIXEL_BUDGET = 2560 * 1440;
+
+/**
+ * Where dynamic resolution starts: the highest ratio, on the governor's step grid, at which a
+ * `width` × `height` CSS-pixel canvas has no more than `budget` device pixels (never below `min`,
+ * never above `max`). A full-screen retina MacBook at 2× is 6–8 M pixels, twice the 1440p target,
+ * and starting there made the first seconds crawl while the governor stepped down a quarter a second.
+ */
+export function startRatio(width: number, height: number, max: number, budget = PIXEL_BUDGET, o: Pick<ResolutionOptions, 'min' | 'step'> = RESOLUTION): number {
+  const px = width * height;
+  if (!(px > 0)) return max;
+  const fit = Math.sqrt(budget / px);
+  if (fit >= max) return max;
+  return Math.min(max, Math.max(o.min, Math.floor(fit / o.step) * o.step));
 }
 
 export const RESOLUTION: Omit<ResolutionOptions, 'max'> = { min: 1, step: 0.25, budgetMs: 15, headroom: 0.8, downAfterMs: 1000, upAfterMs: 3000 };
@@ -26,7 +45,7 @@ export class ResolutionGovernor {
   constructor(o: Partial<ResolutionOptions> & { max: number }) {
     this.o = { ...RESOLUTION, ...o };
     this.o.min = Math.min(this.o.min, this.o.max);
-    this.ratio = this.o.max;
+    this.ratio = Math.min(this.o.max, Math.max(this.o.min, this.o.start ?? this.o.max));
   }
   /**
    * Feed the mean GPU (or frame) time per frame over the last second; returns the ratio to render at.

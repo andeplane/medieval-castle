@@ -57,7 +57,7 @@ import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 import { createStatsOverlay } from './ui/statsOverlay';
 import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
-import { ResolutionGovernor } from './render/resolution';
+import { ResolutionGovernor, startRatio } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 
 const params = new URLSearchParams(location.search);
@@ -74,7 +74,11 @@ async function main() {
   // trackTimestamp: GPU time per frame for the stats overlay and the benchmark (WebGPU timestamp queries)
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl'), trackTimestamp: !params.has('webgl') });
   await renderer.init();
-  renderer.setPixelRatio(pixelRatio(devicePixelRatio, params.get('scale')));
+  // the screen's ratio (≤ 2) is the ceiling; dynamic resolution starts at the 1440p pixel budget and climbs
+  // from there when the GPU has headroom (?scale= fixes the ratio, ?dynres=0 keeps the screen's)
+  const maxRatio = pixelRatio(devicePixelRatio, params.get('scale'));
+  const useDynres = !params.has('scale') && params.get('dynres') !== '0';
+  renderer.setPixelRatio(useDynres ? startRatio(innerWidth, innerHeight, maxRatio) : maxRatio);
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = params.get('tm') === 'agx' ? THREE.AgXToneMapping : params.get('tm') === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NeutralToneMapping;
   renderer.toneMappingExposure = Number(params.get('exposure') ?? 0.72);
@@ -314,9 +318,12 @@ async function main() {
   const outdoor = (d: { spaces: string[] }) => d.spaces.includes('courtyard') || d.spaces.includes('outside');
   const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
   const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined };
+  // cellar and tunnel leaves never see the sun: they cast no sun shadow, as the interior shell does not,
+  // so the near shadow map does not draw them
+  const noSun = <S extends { object: THREE.Object3D }>(s: S): S => { s.object.traverse((o) => { o.castShadow = false; }); return s; };
   const doors = joinDoors([
     buildDoors(doorSets.active.filter((d) => !under(d) && !outdoor(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
-    buildDoors(doorSets.active.filter((d) => under(d) && !outdoor(d)), inMats(IMu), physics, doorOpts),
+    noSun(buildDoors(doorSets.active.filter((d) => under(d) && !outdoor(d)), inMats(IMu), physics, doorOpts)),
     buildDoors(doorSets.active.filter(outdoor), { wood: M.wood, iron: M.iron }, physics, doorOpts),
   ]);
   scene.add(doors.object);
@@ -474,7 +481,7 @@ async function main() {
   }
   let last = performance.now(), frames = 0, acc = 0;
   // the render resolution follows the GPU's load unless ?scale= fixes it (?dynres=0 keeps the screen's)
-  const dynres = params.has('scale') || params.get('dynres') === '0' ? null : new ResolutionGovernor({ max: renderer.getPixelRatio() });
+  const dynres = useDynres ? new ResolutionGovernor({ max: maxRatio, start: renderer.getPixelRatio() }) : null;
   // GPU time from WebGPU timestamp queries only (the WebGL2 timer-query path reads nonsense here)
   const gpuTimed = backendName === 'webgpu' && (renderer.backend as unknown as { trackTimestamp?: boolean }).trackTimestamp === true;
   const gpuPool = () => (renderer.backend as unknown as { timestampQueryPool: { render: { timestamps: Map<string, number> } } }).timestampQueryPool.render;

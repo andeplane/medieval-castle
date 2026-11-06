@@ -14,6 +14,9 @@
 // - a round tower's spiral takes its light through real slits (openings.ts stairSlits): open from outside
 //   into the stairwell, the embrasure behind each clear of every step stone, off the doors and the drum's
 //   other openings, and every such spiral has some.
+// - no reveal triangle spans the wall's mid-plane: the interior light gives each triangle the room nearest
+//   its centre, so a soffit quad from face to face lit its two halves from the two rooms (saw teeth round
+//   the gate-inner head, 2026-11-06).
 import { describe, it, expect, beforeAll } from 'vitest';
 import type { WallRecord, Builder, CurvedRecord } from '../src/castle/builder';
 import * as THREE from 'three/webgpu';
@@ -29,12 +32,11 @@ import { mats, islandCastle } from './world';
 import { planStair, spiralNosingY, type SpiralPlan } from '../src/castle/interior/stairs';
 import type { DoorSpec } from '../src/castle/interior/types';
 import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../src/castle/openings';
-import { TOWERS } from '../src/castle/spec';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
 import { createVisibility, courtView } from '../src/world/visibility';
-import { WINGS } from '../src/castle/spec';
+import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
@@ -259,18 +261,52 @@ function slitFaults(curved: CurvedRecord[], P: PlanX, ext: Tri[], inner: Map<str
         const da = Math.abs(((((e.a - c.a) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * c.R;
         if (da < (e.w + c.w) / 2 + 0.6 && e.y - 0.25 < c.y + c.h + 0.25 && c.y - 0.25 < e.y + e.h + 0.25) bad.push(`${where}: overlaps another opening on its drum`);
       }
+      }
+    }
+    return bad;
+  }
+
+/** Interior triangles (world space) with their face normals. */
+function shellTriangles(groups: InteriorGroup[]): { p: V3[]; n: V3; c?: V3 }[] {
+  const out: { p: V3[]; n: V3; c?: V3 }[] = [];
+  for (const g of groups) g.object.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const a = m.geometry.getAttribute('position').array;
+    for (let i = 0; i + 8 < a.length; i += 9) {
+      const p = [0, 1, 2].map((k) => [a[i + k * 3], a[i + k * 3 + 1], a[i + k * 3 + 2]] as V3);
+      const e1 = [0, 1, 2].map((k) => p[1][k] - p[0][k]), e2 = [0, 1, 2].map((k) => p[2][k] - p[0][k]);
+      const c: V3 = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(...c);
+      if (l > 1e-9) out.push({ p, n: [c[0] / l, c[1] / l, c[2] / l], c: [0, 1, 2].map((k) => (p[0][k] + p[1][k] + p[2][k]) / 3) as V3 });
+    }
+  });
+  return out;
+}
+
+/** Reveal triangles (in a doorway, facing across it) that reach both sides of the wall's mid-plane. */
+function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
+  const bad: string[] = [];
+  for (const d of P.doors) {
+    const hw = d.width / 2 + LIP + 0.02, top = bbox(outlineGrown(P, d, LIP)).y1 + 0.02, R = hw + d.wall;
+    for (const t of tris) {
+      if (t.c && Math.hypot(t.c[0] - d.centre[0], t.c[2] - d.centre[2]) > R + d.wall) continue; // far from this door
+      if (Math.abs(t.n[0] * d.normal[0] + t.n[2] * d.normal[1]) > 0.2) continue; // the faces and the rebate step
+      const loc = t.p.map((q) => { const x = q[0] - d.centre[0], z = q[2] - d.centre[2]; return [x * d.along[0] + z * d.along[1], q[1], x * d.normal[0] + z * d.normal[1]]; });
+      if (loc.some(([u, y, w]) => Math.hypot(u, w) > R || Math.abs(u) > hw || Math.abs(w) > d.wall / 2 + 0.2 || y < d.centre[1] - 0.01 || y > top)) continue;
+      const ws = loc.map((q) => q[2]);
+      if (Math.min(...ws) < -0.01 && Math.max(...ws) > 0.01) { bad.push(`${d.id}: a reveal triangle spans the wall's mid-plane`); break; }
     }
   }
   return bad;
 }
 
 describe('every opening in the castle: one owner, one outline, room to open', () => {
-  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], curved: CurvedRecord[], stairTris: Map<string, Tri[]>;
+  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], curved: CurvedRecord[], stairTris: Map<string, Tri[]>, shell: { p: V3[]; n: V3 }[];
   beforeAll(() => {
     const isl = islandCastle(); // the castle as main.ts lays it, cut by the interior as main.ts does
     B = isl.builder; lights = isl.lights as WindowInput[];
     inner = buildInterior(mats(), B, { heightAt });
-    P = inner.plan;
+    P = inner.plan; shell = shellTriangles(inner.groups);
     walls = B.walls; tris = trianglesOf(B); curved = B.curved;
     stairTris = new Map(inner.groups.filter((g) => g.key.startsWith('stairs:')).map((g) => [g.key.slice(7), groupTris([g])]));
   }, 300_000);
@@ -299,6 +335,14 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   it('holds every invariant', () => {
     expect(openingFaults(walls, P, masses(), tris)).toEqual([]);
   }, 120_000);
+
+  it('lights each half of a reveal from one room', () => {
+    expect(revealFaults(P, shell)).toEqual([]);
+    // a soffit quad of gate-inner as one face-to-face triangle pair, as before 2026-11-06
+    const d = P.doors.find((x) => x.id === 'gate-inner')!, y = d.centre[1] + d.height;
+    const W = (u: number, w: number): V3 => [d.centre[0] + d.along[0] * u + d.normal[0] * w, y, d.centre[2] + d.along[1] * u + d.normal[1] * w];
+    expect(revealFaults(P, [{ p: [W(-0.5, -d.wall / 2), W(0.5, -d.wall / 2), W(0.5, d.wall / 2)], n: [0, -1, 0] }])).toEqual(['gate-inner: a reveal triangle spans the wall\'s mid-plane']);
+  });
 
   it('reports what it is for', () => {
     // a door slid into the stair tower's corner of the north wing, a window over the stair door, a slab left in

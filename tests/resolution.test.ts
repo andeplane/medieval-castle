@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ResolutionGovernor } from '../src/render/resolution';
+import { ResolutionGovernor, startRatio, PIXEL_BUDGET } from '../src/render/resolution';
 
 describe('dynamic resolution', () => {
   it('starts at the top and steps down while over budget, a second apart', () => {
@@ -31,5 +31,29 @@ describe('dynamic resolution', () => {
     expect(g.update(50, 0)).toBe(1);
     const h = new ResolutionGovernor({ max: 2, min: 0.5, step: 0.5 });
     expect(h.update(100, 0)).toBe(1.5);
+  });
+  it('can start below its ceiling and climb to it with headroom', () => {
+    const g = new ResolutionGovernor({ max: 2, start: 1.25 });
+    expect(g.ratio).toBe(1.25);
+    expect(g.update(1, 0)).toBe(1.5);
+    expect(g.update(1, 3000)).toBe(1.75);
+    expect(g.update(1, 6000)).toBe(2);
+    expect(new ResolutionGovernor({ max: 2, start: 0.5 }).ratio).toBe(1); // clamped to min
+    expect(new ResolutionGovernor({ max: 1.5, start: 3 }).ratio).toBe(1.5); // and to max
+  });
+});
+
+describe('start ratio (1440p pixel budget)', () => {
+  it('keeps the screen ratio when the canvas fits the budget', () => {
+    expect(startRatio(1600, 900, 1)).toBe(1);
+    expect(startRatio(1280, 720, 2)).toBe(2); // 3.7 M device pixels at 2×: exactly 1440p
+    expect(startRatio(0, 0, 2)).toBe(2);
+  });
+  it('steps down on the governor grid for big retina canvases', () => {
+    expect(startRatio(1512, 982, 2)).toBe(1.5); // MacBook Pro 14", full screen
+    expect(startRatio(1728, 1117, 2)).toBe(1.25); // MacBook Pro 16"
+    expect(startRatio(2560, 1440, 2)).toBe(1);
+    expect(startRatio(3840, 2160, 2)).toBe(1); // never below min
+    expect(startRatio(1728, 1117, 2, PIXEL_BUDGET * 4)).toBe(2);
   });
 });

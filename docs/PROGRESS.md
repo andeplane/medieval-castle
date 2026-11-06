@@ -28,6 +28,57 @@ Assumption (visible, for Anders to veto): the plainest arrow slit, 0.13 × 1.0 m
 
 Not checked: the square towers' spirals (great, sw) still have no slits. The decorative slits elsewhere on the round drums are still painted only, unless the shell happens to find a tower room behind them. Same for the SE roof turret's slits.
 
+## 2026-11-06: frame cost (branch `claude/project-thread-ns4g2v-perf`)
+
+Anders: "game is INSANELY slow" (Mac, Chrome, WebGPU; the Mac was in Low Power Mode at the time).
+
+How it was measured: headless WebGL2 (SwiftShader), 1600×900, `?shot`, with `backend.draw` wrapped to count draw calls and triangles per pass (render target, shadow camera, and whether the water reflector is rendering), plus `__game.state()`. SwiftShader on a shared, loaded machine (load average 25–30) gives no usable frame times, so only counts are compared.
+
+What dominated: the moat's planar reflection drew the whole scene **twice a frame** at half resolution. `reflector()` defaults to `bounces: true`, which re-renders the mirror for every render that draws the water: the AO normal pre-pass and the main pass, from the same camera. That was ~2.3 M of the 5.6 M triangles and ~170 of the ~720 draw calls in the courtyard. Each of those mirror renders also counted as a new camera for three's shadows, so the near sun shadow map (auto-update) was drawn a second time per frame from the same box.
+
+Changes (no look change intended)
+- `src/world/water.ts`: `reflector({ resolutionScale: 0.5, bounces: false })`: the reflection renders once per frame.
+- `src/render/shadows.ts`: the near shadow map is requested once per frame (`needsUpdate`, guarded by the frame id) instead of `autoUpdate`, so other cameras in the frame (the reflector) do not redraw it; no per-frame vector allocations.
+- `src/main.ts`: cellar and tunnel door leaves cast no sun shadow (the interior shell already does not; no sun reaches them).
+- `src/render/resolution.ts`, `src/main.ts`: dynamic resolution starts at the 1440p pixel budget (`startRatio`, 2560×1440 device pixels, on the 0.25 step grid) and climbs to the screen ratio (≤ 2) when the GPU has headroom. A full-screen 14" MacBook Pro starts at 1.5, a 16" at 1.25, instead of 2 (6–8 M pixels, twice the brief's target), which the governor took several seconds to step down from.
+
+| bookmark | draw calls before → after | triangles before → after | shadow-pass calls |
+|---|---|---|---|
+| courtyard | 724 → 627 | 5,657,020 → 4,152,028 | 44 → 21 |
+| gate | 560 → 453 | 5,592,666 → 4,114,666 | 44 → 21 |
+| hero | 308 → 233 | 4,109,850 → 3,088,902 | 2 → 2 |
+| hall | 414 → 317 | 5,203,292 → 3,868,232 | 44 → 21 |
+
+Frame time: not measured (see above). The triangles saved are full scene passes (≈ 27 %), and the reflection's fragments too.
+
+Captures (`castle-plan/perf/`, `before-*` / `after-*`: hero, gate, courtyard, hall, same order and page): hall is pixel-identical; courtyard differs in 15 non-sky pixels; hero and gate differ only in the drifting clouds and their reflection on the moat (wall-clock animation). The reflection is still there.
+
+Assumption (visible, for Anders to veto): on a big retina screen the game starts at a lower render resolution (1.25–1.5×) and sharpens to 2× after a few seconds only if the GPU reports headroom (WebGPU timestamp queries). Without timestamps it stays at the start ratio. `?dynres=0` keeps the screen's ratio, `?scale=2` fixes it.
+
+Not done, for the visibility/culling owner
+- The reflection still renders the full scene (~1.1 M triangles, ~85 calls) when the moat cannot be seen: in the courtyard, in every room, underground. Skipping it when the camera is inside (`vis.state.inside`) or the water is off screen is the next biggest win.
+- The reflection also draws the interior groups and door leaves; the terrain's near mesh (353k triangles) is drawn in all three passes.
+- Not checked: real WebGPU on an M-series Mac, Low Power Mode, `?bench` numbers.
+
+## 2026-11-06: the `gate-inner` arch's saw teeth (branch `claude/project-thread-ns4g2v-gate-arch`)
+
+The `gatepass` view showed triangular teeth round the head of the arch between the two gate-passage rooms (`castle-plan/gate-inner-teeth/before-gatepass.png`).
+
+Root cause: light, not geometry. The doorway's faces, hole and carve were whole: no gap, no overlap, the hole matches the outline. The reveal (shell.ts `ring`) drew each soffit segment as one quad from face to face, split into two triangles. The interior light tags each triangle with the room nearest its centre (`render/interiorMath.ts tagTriangles`). So one triangle of every quad was lit as gate-0 (sunlit through the gate) and the other as gate-1 (darker). The result was light and dark teeth in turn. Every door had this; it shows most where the two rooms are lit very differently.
+
+Done
+- **Reveals split at the wall's mid-plane** (`shell.ts`): a band that crosses it is drawn as two bands, so each triangle sits on one side and takes that side's room. The UVs run on across the split.
+- **Pointed heads below half the width are symmetric** (`geom.ts archOutline`). A 0.42 w pointed head has its two centres past the centre line. The outline's right arc stopped 0.55 m past the centre line and the left one 1.0 m short of it, so the gate-inner, gate-court and gate-main holes, reveals and carves were lopsided. The arc now ends on the centre line, as the leaves (`headTop`) and the castle's gate voussoirs (`builder.pointedArch`) already do. The head has a ~2.5 cm dip at the apex, the same shape as the voussoirs.
+- Tests: `world.test.ts` checks every door: no reveal triangle reaches both sides of the wall's mid-plane, and an injected face-to-face soffit triangle is reported. On main this lists every door. `interior-geom.test.ts` checks that a low pointed head is symmetric with its apex on the centre line, and covers the gate-inner size.
+
+Captures (`castle-plan/gate-inner-teeth/`): `before-*.png` and `after-*.png` for `gatepass`, `courtyard` and `gate`. The teeth are gone, and the head is symmetric.
+
+Cost (headless WebGL2): the interior grows from 239,714 to 245,082 triangles (+5,368, the split reveal bands). Draw calls are unchanged (gatepass 338, courtyard 732, gate 564). Frame triangles: gatepass 4,992,110 → 4,992,285, courtyard 5,670,568 → 5,675,922, gate 5,598,990 → 5,600,196.
+
+Note for captures: a long-running `vite` dev server served the old transformed modules after the sources changed (the first "after" run matched main to the triangle). Restart the server before capturing, and check `interior.triangles` in `__game.state()`.
+
+Not checked: WebGPU (the captures are headless WebGL2), and the walk-mode view close to the arch. The light seam at the mid-plane of each reveal is now a straight line: it shows where the two rooms' light differs strongly. No other door was looked at in a capture.
+
 ## 2026-11-06: no batter on the wing mitres (branch `claude/project-thread-ns4g2v-plinth`)
 
 Open item from 2026-11-05: "a battered plinth strip still leans out beside the stair tower at the N wing junction".
@@ -132,7 +183,7 @@ Still open
 - Shut leaves and the reveals round them render black from the courtyard (`after-court-*-out.png`; main is the same, `main-court-court_E0-2-out.png`). It is light, not culling: from that pose the room behind is shown (`isRoomVisible` true). The leaf has no room tag, so it gets the ambient floor and the sun, which a reveal over 1 m deep shades. The reveal's outer half is tagged to a room whose door aperture is shut, and the exposure is set for the sunlit courtyard. The fix belongs to the interior light (`src/render/interiorLight.ts`): give a door's outer reveal and the leaf's outer face the outdoor sky light.
 - ~~A battered plinth strip still leans out beside the stair tower at the N wing junction.~~ Fixed 2026-11-06 (no batter on the wing mitres).
 - The SE spiral's light slits were not touched.
-- The `gate-inner` arch (between the two gate-passage rooms) shows triangular teeth round its head in the `gatepass` view. It is the same on main (`castle-plan/doors-fix/main-view-gatepass.png`). Not fixed.
+- The `gate-inner` arch (between the two gate-passage rooms) shows triangular teeth round its head in the `gatepass` view. It is the same on main (`castle-plan/doors-fix/main-view-gatepass.png`). Fixed 2026-11-06 (see above).
 
 ## 2026-11-05: courtyard paving (branch `courtyard-paving`)
 
