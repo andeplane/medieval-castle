@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-11-06: cellar stair top door opened onto a 4.4 m drop (branch `claude/project-thread-ns4g2v-understair`)
+
+Anders: "I entered the door up there, and I am now under stairs I can see through."
+
+Root cause: the only straight flight, `N-cellarstair` (N wing, along the courtyard wall, cellar −1.8 → ground 2.6), is a 1.25 m strip room with its floor at the cellar (y0 = −1.8). plan.ts set the flight's `end` at `sTop = hi − 0.7`, but its top door `N0-3>N-cellarstair` sits at `hi − 0.1`, 0.58 m past the last riser, in the strip's side wall. The flight's top "landing" was 0 m long and nothing else built floor at 2.6 there, so the door opened over the cellar floor 4.4 m below. From that pit the flight was open at its top end (an open flight builds its end face only for a landing longer than 0), so you looked up into it: treads and side faces are one-sided and the underside was never built.
+
+Fix (one owner: the stair, planned by plan.ts)
+- plan.ts: the flight now ends at the strip's far wall (`sb`); `stairOpts` passes `going: STRAIGHT_GOING` (0.26) for straight stairs.
+- stairs.ts `planStraight`: a set `going` keeps the treads at it and gives the rest of the run to flat floor; an open flight puts it all in its top landing (here 1.30 m, covering the door and running to the wall). The landing's far face (from under the floor up to 2.6) closes the flight's top end, so the space under the treads is closed on every side.
+- Cost: the cellar stair 2,224 → 2,356 triangles (+132: the landing's tread rows, its sides and end face); no new draw calls.
+
+Assumption (visible, for Anders to veto): the top landing is the same trim stone as the treads, with a plain stone end face against the strip's end wall. No soffit was added: the flight is now a closed solid (sides, first riser and end face), so its underside cannot be seen or reached.
+
+Tests
+- `tests/world.test.ts` "opens every door onto floor on both sides, never onto a drop": every plan door, 0.35 m past each wall face, three points across the doorway, the first surface under the sill (castle + interior triangles, terrain outdoors) is within 0.3 m. On main: `N0-3>N-cellarstair: no floor on the N-cellarstair side (-4.40 m under the sill)` (the only door that fails).
+- `tests/world.test.ts` "closes the space under every straight flight": rays forward, back, sideways and up from under every tread meet the flight's own outer faces from behind. On main: 225 rays escape.
+- `tests/keypaths.test.ts` "N0-3 → the cellar stair door → its top landing … → down the flight to the N cellar": the player's motor walks through the door, stays at 2.6 (on main it falls), then down to `N-c1`.
+- `tests/stairs.test.ts`: `going` keeps the treads and gives the rest to a closed top landing.
+
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
 Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.
