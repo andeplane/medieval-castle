@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { fromFurniture, torchSpot, wallTorches } from '../src/render/interiorFire';
+import { floorAlong, fromFurniture, torchSpot, wallTorches } from '../src/render/interiorFire';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { LightEmitter } from '../src/light/types';
 import type { V2 } from '../src/core/math2d';
@@ -48,5 +48,19 @@ describe('interior fire sources', () => {
     const t = wallTorches(long, () => 'tunnel:-1');
     expect(t.emitters.map((e) => Math.round(e.position[0]))).toEqual([5, 15, 25]);
     expect(wallTorches(long, () => 'tunnel:-1', 2).emitters).toHaveLength(2);
+  });
+
+  test('each torch has a holder on its wall under the flame; tunnel torches follow the tunnel floor', () => {
+    const plan: InteriorPlan = { rooms: [room('H', 'hall')], doors: [door('H', 5, 0)], stairs: [] };
+    const h = wallTorches(plan, () => 'N:0');
+    expect(h.holders).toEqual([{ room: 'H', wall: [5, 2, 6], n: h.holders[0].n, base: h.flames[0].base }]);
+    expect(h.flames[0].base[2]).toBeCloseTo(6 - 0.22);
+    expect(fromFurniture(new Map(), new Map()).holders).toEqual([]);
+    // a 30 m tunnel whose floor drops 3 m in its middle third: torches 1.55 m over the floor where they hang
+    const path: [number, number, number][] = [[0, 0, 1.5], [10, 0, 1.5], [20, -3, 1.5], [30, -3, 1.5]];
+    const tun = { rooms: [room('L', 'passage', 'tunnel', sq(0, 0, 30, 3))], doors: [], stairs: [], tunnels: [{ id: 'L', room: 'L', path, width: 3, crown: 2.7 }] };
+    expect(wallTorches(tun, () => 'tunnel:-1').holders.map((x) => x.base[1])).toEqual([1.55, -1.5 + 1.55, -3 + 1.55]);
+    expect(floorAlong(path, [-4, 0])).toBe(0);
+    expect(floorAlong(path, [40, 0])).toBe(-3);
   });
 });

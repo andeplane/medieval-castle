@@ -35,7 +35,7 @@ export interface DoorSystem {
   isOpen(id: string): boolean;
   /** A character (0.6 m wide) can get through now: enough gap beside the leaf, or the portcullis up past head height. */
   isPassable(id: string): boolean;
-  /** Would a character capsule (r 0.3) at p overlap a leaf or a lowered portcullis? (simple walkers) */
+  /** Would a character capsule (r 0.3) at p touch a leaf (within LEAF_CLEAR) or a lowered portcullis? (simple walkers) */
   blocksPlayer(p: Vec3Like): boolean;
   /** Triangles in one copy of every part placed (for budgets). */
   triangles: number;
@@ -106,6 +106,11 @@ interface Port {
 export const REACH_NPC = 2.6;   // how close an agent must be to request a door
 export const PASS_WIDTH = 0.62; // clear gap a character (r 0.3) needs
 const R = 0.3;                  // character capsule radius
+// how close a moving leaf may come to a character's axis: the radius, the walking controller's skin (0.02)
+// and 6 cm more. A leaf that reaches into the skin is taken as touching: Rapier's controller nudges the
+// capsule out of it, the leaf then has room for its next step, and so it ratcheted the character round the
+// arc into the corner behind the door and pinned it there against the wall (2026-11-06)
+export const LEAF_CLEAR = R + 0.08;
 const HEMP: V3 = [1.25, 1.05, 0.72];
 
 /** Rotation part of a rigid column-major matrix as a quaternion [x, y, z, w]. */
@@ -332,7 +337,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   for (const u of units) pose(u.leaf);
   for (const p of ports) posePort(p);
 
-  // --- blocking: is a character capsule (r 0.3) inside the leaf's boxes at this angle?
+  // --- blocking: would the leaf's boxes at this angle come within LEAF_CLEAR of a character's axis?
   const blocks = (l: Leaf, angle: number, who: Vec3Like[]) => {
     if (!who.length) return false;
     const m = worldOf(l, angle);
@@ -341,7 +346,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
       if (ly < -0.6 || ly > l.geom.height + 1.9) continue;
       for (const b of l.geom.boxes) {
         const cx = Math.max(b.min[0], Math.min(b.max[0], lx)), cz = Math.max(b.min[2], Math.min(b.max[2], lz));
-        if (Math.hypot(lx - cx, lz - cz) < R + 0.02) return true;
+        if (Math.hypot(lx - cx, lz - cz) < LEAF_CLEAR) return true;
       }
     }
     return false;
