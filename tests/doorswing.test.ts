@@ -131,7 +131,7 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     }
     expect(cases).toBeGreaterThan(leaves.length * 2);
     expect(fails, fails.join('\n')).toEqual([]);
-  });
+  }, 200_000);
 
   it('an NPC in the arc stops the leaf the same way (doors take every character, not only the player)', () => {
     const { d, pl } = leaves.find((l) => l.d.id === 'court>W0-2')!;
@@ -149,5 +149,5 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     npc.teleport([x + pl.eV[0] * 3, npc.feet[1], z + pl.eV[1] * 3]); // …which steps out of the arc
     for (let i = 0; i < 180; i++) play.physics.tick();
     expect(doors.isOpen(d.id)).toBe(true); // and the leaf carries on
-  });
+  }, 200_000);
 });
