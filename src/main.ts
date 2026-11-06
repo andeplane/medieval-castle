@@ -24,6 +24,7 @@ import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
 import { GATEHOUSE, GROUND, WINGS } from './castle/spec';
 import { bridgeInfo } from './physics/boundary';
 import { buildInterior } from './castle/interior';
+import { groupKey } from './castle/interior/shell';
 import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
@@ -121,7 +122,11 @@ async function main() {
   }
   const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
-  const interior = params.get('interior') === '0' || test === 'stairs' ? null : buildInterior(mats, builder, { heightAt });
+  // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
+  // built by the shell into each room's group, their flames and lights fed to the light rig below
+  const iplan = params.get('interior') === '0' || test === 'stairs' ? null : planInterior();
+  const torches = iplan && params.get('furniture') !== '1' ? wallTorches(iplan, (id) => groupKey(iplan.rooms.find((r) => r.id === id)!)) : null;
+  const interior = iplan ? buildInterior(mats, builder, { heightAt, plan: iplan, torches: torches?.holders }) : null;
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
@@ -353,7 +358,8 @@ async function main() {
   // rig lights the nearest ones (whatever is drawn), and the interior materials take its light pool
   const groupOf = new Map<string, string>();
   for (const g of lit.groups) for (const id of g.rooms) groupOf.set(id, g.key);
-  const fire = furniture ? fromFurniture(furniture.emitters, furniture.flames) : wallTorches(lit.plan, (id) => groupOf.get(id));
+  // (?test=room brings its own plan: its torches have no holders)
+  const fire = furniture ? fromFurniture(furniture.emitters, furniture.flames) : torches && lit.plan === iplan ? torches : wallTorches(lit.plan, (id) => groupOf.get(id));
   const fireLights = threeLightFactory(scene);
   // no shadow-casting fire lights: one cube shadow redraws everything near it six times (+700 calls)
   const fireRig = new LightRig(fireLights, { shadows: 0, lights: 8 });

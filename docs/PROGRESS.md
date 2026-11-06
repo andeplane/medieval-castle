@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-11-06: wall torches get a holder (branch `claude/project-thread-ns4g2v-torch`)
+
+Anders: "wtf is this flying flame?" Without `?furniture=1` (the default), `wallTorches` (render/interiorFire.ts) gave the halls, gate rooms, undercrofts and tunnels a flame sprite and a light 0.22 m off the wall, but nothing built a torch, so the flame hung in the air. The moat tunnel's torches were also placed at the tunnel's lowest floor + 2 m, so near its ends they sat under the floor.
+
+Fix (one owner: `wallTorches` places a torch; the shell builds what it places)
+- `wallTorches` returns a `holders` record per flame (room, wall point, inward normal, flame base). main.ts calls it once on the plan before `buildInterior`, passes the holders as `deps.torches`, and feeds the same flames and lights to the light rig. `?furniture=1` builds no holders (the furniture brings its own fixtures).
+- `castle/interior/torch.ts` `buildTorchHolder`: a 4 cm square wooden shaft, 45 cm long, leaning out from 7 cm off the wall to just under the flame base (1 cm gap); an iron wall plate (6 × 18 cm, 1.2 cm thick) on the wall face, a 2 cm arm out to an iron collar round the shaft. The shell builds it into the room's own group (`groupKey`), in that group's 'wood' and 'iron' bins, so it is culled with the room. Assumption (plainest look): square shaft, flat plate, arm and collar; no head wrapping, no sconce cup.
+- Tunnel torches hang 1.55 m over the tunnel's own floor where they are (`floorAlong`), under the vault's springing (1.75 m), so the bracket is on the upright wall.
+- Cost: 38 holders, +1,596 interior triangles (245,432 → 247,028). The groups that had no wood or iron bin get one: N:0, N:1, E:0, S:0, W:0 +iron; gate:0 +wood; N:-1, W:-1, tunnel:-1 +wood +iron (12 meshes over 9 groups, so 1–2 draw calls more while such a group is shown).
+
+Tests
+- `tests/torches.test.ts` (whole castle, the main.ts path): every flame has a holder in its room's group; the shaft top is within 5 cm under the flame base; the plate's centre and corners hit the shell's wall triangles 5 ± 3 cm from a probe 5 cm in front (the real faces, so an opening or a curved vault behind it fails); the wall is behind the flame, the shaft top and its foot at the expected depth; no ceiling within 0.4 m over the flame, no floor within 1 m under the foot; no torch within 0.3 m of a doorway of its room. On main it fails (no holders).
+- `tests/interiorFire.test.ts`: holder record, tunnel torch heights over a sloping floor, `floorAlong` ends.
+
+Not checked: `?test=room` (its own plan; its torches still have no holder); WebGPU; the furniture build.
 ## 2026-11-06: a door opened next to you no longer traps you (branch `claude/project-thread-ns4g2v-doorswing`)
 
 Anders: "sometimes I stand next to a door and open it, it crashes into me and it is hard to move (as if I am inside the door)".
