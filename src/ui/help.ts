@@ -23,12 +23,12 @@ export function looksLikeKey(t: string): boolean {
   return t.split('/').every((p) => NAMED.has(p) || /^[A-Z0-9`]{1,5}$/.test(p));
 }
 
-const ORBIT: HelpItem[] = [{ keys: 'Drag', action: 'orbit' }, { keys: 'Right-drag', action: 'pan' }, { keys: 'Scroll', action: 'zoom' }];
+const ORBIT: HelpItem[] = [{ keys: 'Drag', action: 'orbit' }, { keys: 'Right-drag', action: 'pan' }, { keys: 'Scroll', action: 'zoom' }, { keys: 'P', action: 'walk' }];
 export const HELP: Record<HelpMode, { free: HelpItem[]; locked: HelpItem[] }> = {
   orbit: { free: ORBIT, locked: ORBIT },
   fly: {
-    free: [{ keys: 'Click', action: 'to look around' }, { keys: 'WASD', action: 'fly' }, { keys: 'E/Q', action: 'up / down' }, { keys: 'Shift', action: 'fast' }],
-    locked: [{ keys: 'WASD', action: 'fly' }, { keys: 'E/Q', action: 'up / down' }, { keys: 'Shift', action: 'fast' }, { keys: 'Click', action: 'use' }, { keys: 'Esc', action: 'release the mouse' }],
+    free: [{ keys: 'Click', action: 'to look around' }, { keys: 'WASD', action: 'fly' }, { keys: 'E/Q', action: 'up / down' }, { keys: 'Shift', action: 'fast' }, { keys: 'P', action: 'walk' }],
+    locked: [{ keys: 'WASD', action: 'fly' }, { keys: 'E/Q', action: 'up / down' }, { keys: 'Shift', action: 'fast' }, { keys: 'Click', action: 'use' }, { keys: 'P', action: 'walk' }, { keys: 'Esc', action: 'release the mouse' }],
   },
   walk: {
     free: [{ keys: 'Click', action: 'to look around' }, { keys: 'WASD', action: 'walk' }, { keys: 'Shift', action: 'run' }, { keys: 'Space', action: 'jump' }, { keys: 'C', action: 'crouch' }, { keys: 'E', action: 'use' }],

@@ -96,5 +96,5 @@ describe('stair walk', { timeout: 300_000 }, () => {
     }
     expect(Object.keys(all)).toHaveLength(plan.stairs.length * 2);
     expect(bad, bad.join('\n')).toEqual([]);
-  });
+  }, 200_000);
 });
