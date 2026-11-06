@@ -3,14 +3,19 @@
 import * as THREE from 'three/webgpu';
 import type { Builder, MatKey } from '../builder';
 import type { InteriorGroup } from './types';
-import { planInterior, type PlanX } from './plan';
+import { planInterior, stairOpts, type PlanX } from './plan';
+import { stairCollisionRamp } from './stairs';
 import { buildShell, type ShellDeps } from './shell';
 import { carve } from './carve';
 
 export interface InteriorResult {
   plan: PlanX;
   groups: InteriorGroup[];
-  /** One triangle soup per group (world space, non-indexed): static colliders for the player. */
+  /**
+   * Static colliders for walking characters (world space, non-indexed): one triangle soup per group,
+   * then one invisible ramp per stair flight laid over its nosings, so characters glide up and down
+   * instead of catching on every riser (the steps stay as rendered for the eye).
+   */
   collision: THREE.BufferGeometry[];
   triangles: number;
   stats: { windows: number; windowsSkipped: number; carved: number; carveMs: number };
@@ -55,6 +60,10 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
     cg.setAttribute('position', new THREE.Float32BufferAttribute(all, 3));
     cg.name = `collide:${g.key}`;
     collision.push(cg);
+  }
+  for (const s of plan.stairs) {
+    const ramp = stairCollisionRamp(s, stairOpts(plan, s));
+    if (ramp) { ramp.name = `ramp:${s.id}`; collision.push(ramp); }
   }
   return { plan, groups, collision, triangles, stats: { windows: shell.windows, windowsSkipped: shell.skipped, carved: cut.removed, carveMs: Math.round(carveMs) } };
 }

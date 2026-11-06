@@ -2,7 +2,7 @@
 // a stair through a terrain hole into a tunnel, the boundary ribbon, and two characters that collide.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createPhysics, type Physics } from '../src/physics/world';
-import { CharacterMotor, IDLE, shapeFrom, type MotorIntent, type Footfall } from '../src/character/motor';
+import { CharacterMotor, IDLE, shapeFrom, riseAlong, type MotorIntent, type Footfall } from '../src/character/motor';
 import type { CharacterBody, MoveResult } from '../src/character/types';
 import { TUNING, wishVelocity } from '../src/player/movement';
 import { addBox, fakeClock } from './helpers';
@@ -52,7 +52,9 @@ describe('CharacterMotor on Rapier', () => {
     expect(m.running).toBe(true);
     expect(run(IDLE, 0.5).speed).toBeCloseTo(0, 2);
   });
-  it.each([['0.15', LANE.s15, 0.9, 0], ['0.20', LANE.s20, 1.0, 1], ['0.30', LANE.s30, 0.9, 1]])('climbs %s m stairs (big rises reported as steps for the camera)', (_n, x, top, minSteps) => {
+  // 0.30 m: the KCC rides up over each nosing (no press down while it walks the plain floor), so there is
+  // no single-tick lift for the camera to smooth
+  it.each([['0.15', LANE.s15, 0.9, 0], ['0.20', LANE.s20, 1.0, 1], ['0.30', LANE.s30, 0.9, 0]])('climbs %s m stairs (big rises reported as steps for the camera)', (_n, x, top, minSteps) => {
     at(x);
     let steps = 0;
     run((i) => { if (i > 0 && m.stepDy) steps++; return north(); }, 4);
@@ -179,5 +181,55 @@ describe('CharacterMotor with a fake body', () => {
     expect(mm.crouched).toBe(false);
     expect(body.height).toBe(TUNING.height);
     expect(mm.height).toBe(TUNING.height);
+  });
+});
+
+/** A fake body over a floor rising 0.5 m per metre northward (−z) from z = 0, flat before it; it can probe. */
+class RampBody implements CharacterBody {
+  id = 2; p: [number, number, number] = [0, 0, 0]; moves: [number, number, number][] = []; wall = false;
+  floor(z: number) { return Math.max(0, -z * 0.5); }
+  feet(): [number, number, number] { return [...this.p]; }
+  move(d: [number, number, number]): MoveResult {
+    this.moves.push([...d]);
+    const x = this.p[0] + d[0], z = this.p[2] + d[2], f = this.floor(z);
+    const y = Math.max(f, this.p[1] + d[1]);
+    const old = this.p;
+    this.p = [x, y, z];
+    const hits: MoveResult['hits'] = this.wall ? [{ normal: [1, 0, 0], point: [x - 0.3, y + 0.1, z] }] : [];
+    return { move: [x - old[0], y - old[1], z - old[2]], grounded: y - f < 1e-3, hits };
+  }
+  probe(x: number, z: number) { const n = Math.hypot(0.5, 1); return { y: this.floor(z), normal: (z < 0 ? [0, 1 / n, 0.5 / n] : [0, 1, 0]) as [number, number, number], tag: z < 0 ? 'ramp' : 'flat' }; }
+  teleport(p: [number, number, number]) { this.p = [...p]; }
+  setHeight() {}
+  fits() { return true; }
+  remove() {}
+}
+
+describe('CharacterMotor along a probed floor', () => {
+  it('rises with the floor ahead at full horizontal speed, and presses down only against steep contacts', () => {
+    expect(riseAlong([0, -2], [0, 1, 0])).toBeCloseTo(0);
+    const n = Math.hypot(0.5, 1);
+    expect(riseAlong([0, -2], [0, 1 / n, 0.5 / n])).toBeCloseTo(1); // 2 m/s up a 1:2 slope rises 1 m/s
+    expect(riseAlong([0, 2], [0, 1 / n, 0.5 / n])).toBeCloseTo(-1);
+    const body = new RampBody(), mm = new CharacterMotor(body);
+    mm.teleport([0, 0, 1]);
+    for (let i = 0; i < 90; i++) mm.update({ wish: [0, -TUNING.walk], jump: false, crouch: false }, 1 / 60);
+    expect(mm.grounded).toBe(true);
+    expect(mm.speed).toBeCloseTo(TUNING.walk, 1); // horizontal speed kept on the slope
+    expect(mm.feet[1]).toBeCloseTo(body.floor(mm.feet[2]), 2);
+    expect(mm.floorTag).toBe('ramp');
+    const last = body.moves[body.moves.length - 1];
+    expect(last[1]).toBeCloseTo((TUNING.walk / 2) / 60, 4); // in the plane, no press
+    body.wall = true;
+    mm.update({ wish: [0, -TUNING.walk], jump: false, crouch: false }, 1 / 60);
+    mm.update({ wish: [0, -TUNING.walk], jump: false, crouch: false }, 1 / 60);
+    expect(body.moves[body.moves.length - 1][1]).toBeLessThan((TUNING.walk / 2) / 60 - 0.01); // pressed: touching a wall
+    // going down: the floor under the axis
+    body.wall = false;
+    for (let i = 0; i < 30; i++) mm.update({ wish: [0, TUNING.walk], jump: false, crouch: false }, 1 / 60);
+    expect(body.moves[body.moves.length - 1][1]).toBeLessThan(0);
+    // standing still: no lookahead, no rise
+    for (let i = 0; i < 30; i++) mm.update(IDLE, 1 / 60);
+    expect(body.moves[body.moves.length - 1][1]).toBeCloseTo(0, 6);
   });
 });
