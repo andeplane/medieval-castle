@@ -33,7 +33,9 @@ describe('serveTunnel', () => {
     send({ t: 'size', w: 640, h: 360 });
     for (let i = 0; i < 400; i++) clock.frame();
     expect([c.width, c.height]).toEqual([640, 360]);
-    expect(gl.uniforms.get('uLook')).toEqual([0.3, -0.3]);
+    const [lx, ly] = gl.uniforms.get('uLook') as number[];   // eased all the way to the pointer
+    expect(lx).toBeCloseTo(0.3);
+    expect(ly).toBeCloseTo(-0.3);
     expect(out.at(-1)).toEqual({ t: 'shown', v: 1 });
     const n = out.length;
     clock.frame();
