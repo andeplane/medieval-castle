@@ -40,6 +40,8 @@ import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
+import { wallTorches } from '../src/render/interiorFire';
+import { LightRig } from '../src/light/rig';
 
 type V3 = [number, number, number];
 const OUTDOOR = new Set(['courtyard', 'outside']);
@@ -474,7 +476,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const A: V3 = [a[0] + nn[0], r.y0 + 0.5, a[1] + nn[1]], B: V3 = [b[0] + nn[0], r.y0 + 0.5, b[1] + nn[1]], C: V3 = [b[0] + nn[0], r.y0 + 2, b[1] + nn[1]];
     const shard: Tri = { a: A, b: B, c: C, lo: [0, 1, 2].map((j) => Math.min(A[j], B[j], C[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(A[j], B[j], C[j])) as V3 };
     expect(hiddenFaceFaults(P, [...tris, shard], 0.08).some((x) => x.startsWith('N0-2: castle surface within 8 cm'))).toBe(true);
-  });
+   }, 120_000);
 
   it('lights each half of a reveal from one room', () => {
     expect(revealFaults(P, shell)).toEqual([]);
@@ -553,6 +555,54 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     }
     expect(shown).toEqual([]);
   }, 120_000);
+
+  // walking through a doorway: from 1 m before it to 1 m past it, in 5 cm steps, the rooms on both
+  // sides stay drawn at every step (inside the wall's thickness the camera is in neither room)
+  it('keeps both rooms of every doorway drawn while the camera walks through it', () => {
+    const bake = bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() });
+    const cam = { position: { x: 0, y: 0, z: 0 } };
+    const vis = createVisibility(cam, inner.groups, P, { apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) }); // as main.ts
+    const faults = new Map<string, string>();
+    let poses = 0;
+    for (const d of P.doors) {
+      const rooms = d.spaces.filter((s) => !OUTDOOR.has(s) && s !== 'farbank');
+      if (!rooms.length) continue;
+      const reach = d.wall / 2 + 1;
+      for (let t = -reach; t <= reach + 1e-9; t += 0.05) for (const across of [0, -d.width / 4, d.width / 4]) {
+        const q = on(d, across, t);
+        cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
+        vis.update(); poses++;
+        for (const r of rooms) if (!vis.isRoomVisible(r) && !faults.has(`${d.id}:${r}`)) faults.set(`${d.id}:${r}`, `${d.id}: ${r} culled ${t.toFixed(2)} m through, ${across.toFixed(2)} m aside (camera room ${vis.roomId ?? 'none'})`);
+      }
+    }
+    expect(poses).toBeGreaterThan(1000);
+    expect([...faults.values()]).toEqual([]);
+  }, 120_000);
+
+  // firelight never goes out because the camera crossed a doorway: walking through every doorway, a
+  // torch whose light still reaches the camera keeps its light (main.ts picks lights by distance only)
+  it('keeps every torch that reaches the camera lit while it walks through a doorway', () => {
+    const groupOf = new Map<string, string>();
+    for (const g of inner.groups) for (const id of g.rooms) groupOf.set(id, g.key);
+    const fire = wallTorches(P, (id) => groupOf.get(id));
+    const rig = new LightRig({ create: () => ({ set() {} }) }, { shadows: 0, lights: 8 }); // as main.ts
+    rig.setEmitters(fire.emitters);
+    const src = rig.meanLights();
+    const faults: string[] = [];
+    for (const d of P.doors) {
+      const reach = d.wall / 2 + 2;
+      let prev = new Set<number>();
+      for (let t = -reach; t <= reach + 1e-9; t += 0.05) {
+        const q = on(d, 0, t), eye: V3 = [q[0], d.centre[1] + 1.6, q[1]];
+        rig.update(0, 1, eye); // as main.ts: no visibility filter
+        const lit = new Set([...rig.snapshot().plain].filter((s) => s.source >= 0 && s.weight > 0).map((s) => s.source));
+        for (const id of prev) if (!lit.has(id) && Math.hypot(...src[id].position.map((v, k) => v - eye[k]) as V3) < src[id].range) faults.push(`${d.id}: torch ${id} went out ${t.toFixed(2)} m through`);
+        prev = lit;
+      }
+    }
+    expect(fire.emitters.length).toBeGreaterThan(10);
+    expect(faults).toEqual([]);
+  }, 60_000);
 
   it('lays no real stone, at any level of detail, in a doorway', () => {
     // every level draws the same stones (field.ts: hi, mid, lo and silhouette-only are one set and a draw

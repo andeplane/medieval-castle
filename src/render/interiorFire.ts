@@ -4,6 +4,8 @@
 // makeFlameSprites(linkFlames(flames, emitters)).
 import type { InteriorPlan, RoomSpec, SpaceId } from '../castle/interior/types';
 import type { Flame, LightEmitter, V3 } from '../light/types';
+import type { TunnelSpec } from '../castle/interior/plan';
+import { FLAME_OUT, type TorchHolder } from '../castle/interior/torch';
 import { inPoly } from './interiorMath';
 
 export interface FireSources {
@@ -11,11 +13,13 @@ export interface FireSources {
   flames: Flame[];
   /** Visibility group key of each emitter (so the rig only lights shown rooms). */
   group: string[];
+  /** Each wall torch's holder (shaft and bracket), one per flame, for the shell to build; none for furniture. */
+  holders: TorchHolder[];
 }
 
 /** Flatten the furniture's per-group maps. */
 export function fromFurniture(emitters: Map<string, LightEmitter[]>, flames: Map<string, Flame[]>): FireSources {
-  const out: FireSources = { emitters: [], flames: [], group: [] };
+  const out: FireSources = { emitters: [], flames: [], group: [], holders: [] };
   for (const [k, es] of emitters) for (const e of es) { out.emitters.push(e); out.group.push(k); }
   for (const fs of flames.values()) out.flames.push(...fs);
   return out;
@@ -23,13 +27,17 @@ export function fromFurniture(emitters: Map<string, LightEmitter[]>, flames: Map
 
 const TORCH_ROOMS = new Set(['hall', 'gate', 'undercroft']);
 
+/** Flame base above the floor: rooms 2 m; tunnels lower, under the vault's springing (1.75 m) so the bracket is on the upright wall. */
+const ROOM_Y = 2.0, TUNNEL_Y = 1.55;
+
 /**
  * One torch per lit room on the room edge (≥ 2.5 m) farthest from its doors, 2 m up; tunnels get one
- * every ~10 m along that wall. `groupOf(room)` names the visibility group; rooms without a group are
- * skipped. At most `max`.
+ * every ~10 m along that wall, over the tunnel's own floor there. `groupOf(room)` names the visibility
+ * group; rooms without a group are skipped. At most `max`. Each torch has a holder (castle/interior/torch.ts)
+ * for the shell to build in its room.
  */
-export function wallTorches(plan: InteriorPlan, groupOf: (room: SpaceId) => string | undefined, max = 64): FireSources {
-  const out: FireSources = { emitters: [], flames: [], group: [] };
+export function wallTorches(plan: InteriorPlan & { tunnels?: TunnelSpec[] }, groupOf: (room: SpaceId) => string | undefined, max = 64): FireSources {
+  const out: FireSources = { emitters: [], flames: [], group: [], holders: [] };
   for (const r of plan.rooms) {
     if (out.emitters.length >= max) break;
     if (!TORCH_ROOMS.has(r.kind) && r.zone !== 'tunnel') continue;
@@ -37,17 +45,29 @@ export function wallTorches(plan: InteriorPlan, groupOf: (room: SpaceId) => stri
     const spot = g === undefined ? null : torchSpot(plan, r);
     if (!spot) continue;
     const { n, a, b } = spot, L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const tunnel = r.zone === 'tunnel' ? plan.tunnels?.find((t) => t.room === r.id) : undefined;
     const count = r.zone === 'tunnel' ? Math.max(1, Math.round(L / 10)) : 1;
-    const y = Math.min(r.y0 + 2.0, r.y1 - 0.5);
     for (let k = 0; k < count && out.emitters.length < max; k++) {
-      const t = (k + 0.5) / count, p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const t = (k + 0.5) / count, p: P2 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const y = tunnel ? floorAlong(tunnel.path, p) + TUNNEL_Y : Math.min(r.y0 + ROOM_Y, r.y1 - 0.5);
       const at = (d: number, h: number): V3 => [p[0] + n[0] * d, h, p[1] + n[1] * d];
-      out.flames.push({ kind: 'torch', base: at(0.22, y), height: 0.24 });
+      out.flames.push({ kind: 'torch', base: at(FLAME_OUT, y), height: 0.24 });
       out.emitters.push({ kind: 'torch', position: at(0.4, y + 0.3), colour: [1, 0.96, 0.92], intensity: 3, flicker: 0.25 });
       out.group.push(g!);
+      out.holders.push({ room: r.id, wall: at(0, y), n, base: at(FLAME_OUT, y) });
     }
   }
   return out;
+}
+
+/** The floor line of a tunnel path (x, y, z points) at the plan point p, by its distance along the path. */
+export function floorAlong(path: V3[], p: P2): number {
+  const a = path[0], z = path[path.length - 1], L = Math.hypot(z[0] - a[0], z[2] - a[2]), d: P2 = [(z[0] - a[0]) / L, (z[2] - a[2]) / L];
+  const along = (x: number, zz: number) => (x - a[0]) * d[0] + (zz - a[2]) * d[1], sp = along(p[0], p[1]);
+  let k = 0;
+  while (k < path.length - 2 && sp > along(path[k + 1][0], path[k + 1][2])) k++;
+  const s0 = along(path[k][0], path[k][2]), s1 = along(path[k + 1][0], path[k + 1][2]);
+  return path[k][1] + (path[k + 1][1] - path[k][1]) * Math.max(0, Math.min(1, (sp - s0) / (s1 - s0)));
 }
 
 type P2 = [number, number];
