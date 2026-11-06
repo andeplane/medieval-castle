@@ -2,7 +2,7 @@
 // building in front of it, and of floors, string courses, plinth and parapet (castle/openings.ts).
 import { describe, it, expect } from 'vitest';
 import { buildCastle } from '../src/castle/castle';
-import { masses, boxOf, CLEAR, V_CLEAR, FRONT } from '../src/castle/openings';
+import { masses, boxOf, CLEAR, V_CLEAR, FRONT, stairSlits, STAIR_SLIT, angleBetween, type SpiralBehind } from '../src/castle/openings';
 import { mulberry32 } from '../src/core/rng';
 import { pointInPoly, add, scale, sub, norm, type V2 } from '../src/core/math2d';
 
@@ -36,4 +36,37 @@ describe('window placement', () => {
     }
     expect(bad).toEqual([]);
   }, 60_000);
+});
+
+describe('a spiral stair\'s light slits', () => {
+  // a stair of radius 1.9 at 3 m from the centre of a drum of radius 5.4, toward +x; a turn every 3.6 m
+  const drum = { owner: 't', c: [0, 0] as V2, R: 5.4, bands: [[-2, 4.0]] as [number, number][] };
+  const st = (over: Partial<SpiralBehind> = {}): SpiralBehind => ({
+    id: 's', c: [3, 0], R: 1.9, floor: 2.6, ceiling: 20, doors: [{ angle: Math.PI, hw: 0.6 }],
+    stonesAt: (th) => [0, 1, 2, 3].map((k) => { const y = 2.6 + k * 3.6 + (th / (2 * Math.PI)) * 3.6; return [y - 0.35, y] as [number, number]; }),
+    ...over,
+  });
+  it('puts one per turn on the line through the stair, clear of the steps and the bands', () => {
+    const s = stairSlits(drum, st(), []);
+    expect(s.length).toBeGreaterThanOrEqual(3);
+    for (const q of s.filter((x) => x.at)) {
+      expect(q.angle).toBeCloseTo(0);
+      expect(q.at!.y - STAIR_SLIT.below).toBeGreaterThan(4.0); // off the batter band and its V_CLEAR
+      const top = q.at!.y + STAIR_SLIT.h + STAIR_SLIT.above;
+      for (const [y0, y1] of st().stonesAt(0)) expect(top < y0 - 0.05 || q.at!.y - STAIR_SLIT.below > y1 + 0.05).toBe(true);
+    }
+  });
+  it('lets daylight in through every stair slit of the castle, and its stair show through it (an open light)', () => {
+    const { builder, lights } = buildCastle();
+    const slits = builder.curved.filter((c) => c.room);
+    expect(slits.length).toBeGreaterThanOrEqual(6);
+    expect(lights.filter((l) => l.kind === 'open').length).toBe(slits.length);
+  }, 60_000);
+  it('leaves out a turn whose free height is all band, and every slit when a door opens onto the strip', () => {
+    const s = stairSlits({ ...drum, bands: [[-2, 30]] }, st(), []);
+    expect(s.length).toBeGreaterThan(0);
+    expect(s.every((q) => q.at === null)).toBe(true);
+    expect(stairSlits(drum, st({ doors: [{ angle: 2 * Math.PI + 0.1, hw: 0.6 }] }), [])).toEqual([]);
+    expect(angleBetween(-3, 3)).toBeCloseTo(2 * Math.PI - 6);
+  });
 });

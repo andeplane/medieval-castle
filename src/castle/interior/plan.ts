@@ -20,8 +20,8 @@ import { pointInPoly } from '../../core/math2d';
 import { floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND, type Phase, type TowerSpec } from '../spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, castleCentre, islandOutline, moatOuter, outerPoly, type WingQuad } from '../layout';
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
-import { spiralStartFor, validateStair, planStair, spiralNosingY, type StairOpts, type SpiralPlan } from './stairs';
-import { masses, fits, boxOf, type Face, type DoorHole } from '../openings';
+import { spiralStartFor, validateStair, planStair, spiralNosingY, spiralStonesAt, type StairOpts, type SpiralPlan } from './stairs';
+import { masses, fits, boxOf, STAIR_SLIT, type Face, type DoorHole, type SpiralBehind } from '../openings';
 import { placeLeaves, leafPoint, leafMatrix, m4apply, leafDepth, m4swing, LIP, doorOutlines, stopPlane, type LeafPlace } from './doorGeom';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
@@ -387,7 +387,7 @@ export function planInterior(seed = WORLD_SEED): PlanX {
   for (const t of TOWERS) {
     const ys = towerFloorsY(t.top), tw = TOWER_WALL[t.id], ph = t.phase;
     const rS = rngOf(`interior-tower-${t.id}`, seed);
-    let base: V2[], stairC: V2, stairR: number, stairDoorDir: V2, clipH: Half;
+    let base: V2[], stairC: V2, stairR: number, stairDoorDir: V2, clipH: Half, slitFacet: Half | null = null;
     const wingsHere = Object.values(wings).filter((W) => W.w.a === t.at || W.w.b === t.at);
     const facets: { n: V2; h: number }[] = [];
     if (t.kind === 'square') {
@@ -430,6 +430,8 @@ export function planInterior(seed = WORLD_SEED): PlanX {
       stairC = add(c, scale(dirOf(bestA), cr));
       clipH = { n: scale(dirOf(bestA), -1), c: -(dot(dirOf(bestA), c) + cr - stairR - 0.4) };
       stairDoorDir = scale(dirOf(bestA), -1);
+      // the flat strip of the shaft's wall its light slits open from (openings.ts STAIR_SLIT, stairSlits)
+      slitFacet = { n: stairDoorDir, c: -(dot(dirOf(bestA), stairC) + Math.sqrt(stairR * stairR - STAIR_SLIT.facet * STAIR_SLIT.facet)) };
     }
     const ids: SpaceId[] = [];
     const levels: { y: number; y1: number; f: number; id: SpaceId }[] = [{ y: CELLAR_Y, y1: CELLAR_TOP, f: -1, id: `${t.id}-c` }];
@@ -451,7 +453,8 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     towerRooms[t.id] = ids;
     // spiral stair shaft
     const sid = `${t.id}-stair`;
-    const shaftPoly = clip(circlePoly(stairC, stairR, 32), { n: scale(stairDoorDir, -1), c: -(dot(stairDoorDir, stairC) + chordH(stairR)) });
+    let shaftPoly = clip(circlePoly(stairC, stairR, 32), { n: scale(stairDoorDir, -1), c: -(dot(stairDoorDir, stairC) + chordH(stairR)) });
+    if (slitFacet) shaftPoly = clip(shaftPoly, slitFacet);
     const yb = withCellar ? CELLAR_Y : ys[0], yt = ys[ys.length - 1];
     addRoom({ id: sid, zone: t.id, floor: -1, kind: 'stair', poly: shaftPoly, y0: yb, y1: yt + 2.6 }, ph, 'flag');
     round[sid] = { c: stairC, r: stairR };
@@ -805,6 +808,14 @@ export function doorUnderSteps(sp: SpiralPlan, d: DoorSpec, rise = headRise(d.he
 export function stairOpts(P: InteriorPlan, s: StairSpec): StairOpts {
   const r = P.rooms.find((x) => x.id === s.id);
   return { doorWidth: STAIR_DOOR_W, drumPoly: s.kind === 'spiral' ? r?.poly : undefined, ceiling: r ? r.y1 : undefined, mural: false };
+}
+
+/** The spiral stairs in the round towers' walls, as their light slits see them (openings.ts stairSlits). */
+export function towerSpirals(P: InteriorPlan): SpiralBehind[] {
+  return P.stairs.filter((s) => s.kind === 'spiral' && TOWERS.some((t) => t.kind === 'round' && s.id === `${t.id}-stair`)).map((s) => {
+    const sp = planStair(s, stairOpts(P, s)) as SpiralPlan, r = P.rooms.find((x) => x.id === s.id)!;
+    return { id: s.id, c: sp.c, R: sp.R, floor: sp.yFloor, ceiling: r.y1, doors: sp.landings.filter(Boolean).map((l) => ({ angle: l.angle, hw: STAIR_DOOR_W / 2 + LIP })), stonesAt: (th: number) => spiralStonesAt(sp, th) };
+  });
 }
 
 /** Clearance kept between a door's head (incl. its rebate) and the ceiling or vault of either room. */

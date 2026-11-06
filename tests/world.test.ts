@@ -11,11 +11,17 @@
 // - an indoor door opens fully into the rooms on both sides (no junction through its jambs or rebate);
 // - every leaf, from shut to fully open, stays in its doorway or its room, under the ceiling, off the
 //   stair treads and out of every other leaf's sweep;
+// - a round tower's spiral takes its light through real slits (openings.ts stairSlits): open from outside
+//   into the stairwell, the embrasure behind each clear of every step stone, off the doors and the drum's
+//   other openings, and every such spiral has some.
 // - no reveal triangle spans the wall's mid-plane: the interior light gives each triangle the room nearest
 //   its centre, so a soffit quad from face to face lit its two halves from the two rooms (saw teeth round
 //   the gate-inner head, 2026-11-06).
 import { describe, it, expect, beforeAll } from 'vitest';
-import type { WallRecord, Builder } from '../src/castle/builder';
+import type { WallRecord, Builder, CurvedRecord } from '../src/castle/builder';
+import * as THREE from 'three/webgpu';
+import type { InteriorGroup } from '../src/castle/interior/types';
+import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, type PlanX } from '../src/castle/interior/plan';
 import { placeLeaves, leafPoint, leafDepth, m4swing, headRise, LIP, type LeafPlace } from '../src/castle/interior/doorGeom';
@@ -24,14 +30,13 @@ import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
 import { mats, islandCastle } from './world';
 import { planStair, spiralNosingY, type SpiralPlan } from '../src/castle/interior/stairs';
-import type { DoorSpec, InteriorGroup } from '../src/castle/interior/types';
-import type * as THREE from 'three/webgpu';
-import { masses, convexOverlap, CLEAR, FRONT, type Mass } from '../src/castle/openings';
+import type { DoorSpec } from '../src/castle/interior/types';
+import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../src/castle/openings';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
 import { createVisibility, courtView } from '../src/world/visibility';
-import { WINGS } from '../src/castle/spec';
+import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
@@ -195,6 +200,72 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
   return bad;
 }
 
+/** The triangles of interior groups (world space). */
+function groupTris(gs: InteriorGroup[]): Tri[] {
+  const B = { bins: {} as Record<string, { pos: number[] }> };
+  gs.forEach((g, i) => g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) B.bins[`${i}:${o.name}`] = { pos: Array.from(((o as THREE.Mesh).geometry.getAttribute('position') as THREE.BufferAttribute).array) }; }));
+  return trianglesOf(B as unknown as Builder);
+}
+
+/** Is a point inside one of a spiral's step stones (tread down to soffit, or to the floor when solid)? */
+function inStep(sp: SpiralPlan, q: V3): boolean {
+  const ex = q[0] - sp.c[0], ez = q[2] - sp.c[1], rr = Math.hypot(ex, ez);
+  if (rr < sp.rn || rr > sp.R + 0.1) return false; // tread ends run 8 cm into the wall
+  const T = Math.PI * 2, prog0 = (Math.atan2(ez, ex) - sp.theta0) * sp.dir;
+  return sp.steps.some((st) => {
+    const prog = prog0 + Math.round((st.a0 - prog0) / T) * T;
+    if (prog < st.a0 || prog > st.a1) return false;
+    const under = st.solid ? sp.yFloor - 1 : spiralNosingY(sp, prog) - sp.T;
+    return q[1] < st.y + 0.01 && q[1] > under - 0.01;
+  });
+}
+
+/**
+ * The round towers' spiral stairs and their slits: each slit is open from 0.3 m outside the drum to 0.25 m
+ * inside the stairwell (no castle or interior surface left in it), its embrasure (front at the shaft's flat
+ * strip, `below` under the sill to `above` over the head) is clear of every step stone, of the stair's doors,
+ * and of the drum's other openings; every such stair has at least three.
+ */
+function slitFaults(curved: CurvedRecord[], P: PlanX, ext: Tri[], inner: Map<string, Tri[]>): string[] {
+  const bad: string[] = [], S = STAIR_SLIT;
+  const spirals = P.stairs.filter((s) => s.kind === 'spiral' && TOWERS.some((t) => t.kind === 'round' && s.id === `${t.id}-stair`));
+  for (const s of spirals) {
+    const sp = planStair(s, stairOpts(P, s)) as SpiralPlan, mine = curved.filter((c) => c.room === s.id);
+    if (mine.length < 3) bad.push(`${s.id}: ${mine.length} light slits`);
+    const near = (o: V3) => [...ext, ...(inner.get(s.id) ?? [])].filter((t) => Math.hypot((t.lo[0] + t.hi[0]) / 2 - o[0], (t.lo[2] + t.hi[2]) / 2 - o[2]) < 3 + Math.hypot(t.hi[0] - t.lo[0], t.hi[2] - t.lo[2]) / 2 && t.hi[1] > o[1] - 3 && t.lo[1] < o[1] + 3);
+    for (const c of mine) {
+      const n: V2 = [Math.cos(c.a), Math.sin(c.a)], tan: V2 = [-n[1], n[0]], o: V2 = [c.c[0] + n[0] * c.R, c.c[1] + n[1] * c.R];
+      const where = `${s.id} slit at ${c.y.toFixed(2)}`;
+      const T = (o[0] - sp.c[0]) * n[0] + (o[1] - sp.c[1]) * n[1] - Math.sqrt(sp.R * sp.R - S.facet * S.facet); // drum face to the flat strip
+      const W = (u: number, y: number, t: number): V3 => [o[0] + tan[0] * u - n[0] * t, y, o[1] + tan[1] * u - n[1] * t];
+      const tr = near(W(0, c.y, 0));
+      // open: straight through, outside to stairwell
+      for (const y of [c.y + 0.05, c.y + c.h / 2, c.y + c.h - 0.05]) for (const u of [-c.w / 2 + 0.02, 0, c.w / 2 - 0.02]) {
+        const a = W(u, y, -0.3), b = W(u, y, T + 0.25), d: V3 = [b[0] - a[0], 0, b[2] - a[2]];
+        if (tr.some((t) => t.hi[1] >= y && t.lo[1] <= y && crosses(a, d, t))) { bad.push(`${where}: not open at (${u.toFixed(2)}, ${(y - c.y).toFixed(2)})`); break; }
+      }
+      // the embrasure's front on the flat strip, and its depth to the slit, clear of the steps
+      const wf = c.w + 2 * nicheSplay(T + 0.1);
+      let hit = false;
+      for (let y = c.y - S.below; y <= c.y + c.h + S.above + 1e-9 && !hit; y += 0.05) for (let u = -wf / 2; u <= wf / 2 + 1e-9 && !hit; u += 0.05) for (const t of [T - 0.1, T, T + 0.03]) {
+        if (inStep(sp, W(u, y, t))) { hit = true; bad.push(`${where}: its embrasure runs into the steps at (${u.toFixed(2)}, ${(y - c.y).toFixed(2)})`); break; }
+      }
+      // off the stair's doors (their reveals, a door's width and its rebate either side) and every other door
+      for (const d of P.doors) {
+        const dx = d.centre[0] - o[0], dz = d.centre[2] - o[1];
+        if (d.centre[1] < c.y + c.h + S.above && d.centre[1] + d.height + 0.6 > c.y - S.below && Math.hypot(dx, dz) < d.width / 2 + LIP + wf / 2 + d.wall) bad.push(`${where}: against door ${d.id}`);
+      }
+      // off the drum's other openings (surround 0.25 m round each)
+      for (const e of curved) {
+        if (e === c || Math.hypot(e.c[0] - c.c[0], e.c[1] - c.c[1]) > 0.01) continue;
+        const da = Math.abs(((((e.a - c.a) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI) * c.R;
+        if (da < (e.w + c.w) / 2 + 0.6 && e.y - 0.25 < c.y + c.h + 0.25 && c.y - 0.25 < e.y + e.h + 0.25) bad.push(`${where}: overlaps another opening on its drum`);
+      }
+      }
+    }
+    return bad;
+  }
+
 /** Interior triangles (world space) with their face normals. */
 function shellTriangles(groups: InteriorGroup[]): { p: V3[]; n: V3; c?: V3 }[] {
   const out: { p: V3[]; n: V3; c?: V3 }[] = [];
@@ -230,14 +301,30 @@ function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
 }
 
 describe('every opening in the castle: one owner, one outline, room to open', () => {
-  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], shell: { p: V3[]; n: V3 }[];
+  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], curved: CurvedRecord[], stairTris: Map<string, Tri[]>, shell: { p: V3[]; n: V3 }[];
   beforeAll(() => {
     const isl = islandCastle(); // the castle as main.ts lays it, cut by the interior as main.ts does
     B = isl.builder; lights = isl.lights as WindowInput[];
     inner = buildInterior(mats(), B, { heightAt });
     P = inner.plan; shell = shellTriangles(inner.groups);
-    walls = B.walls; tris = trianglesOf(B);
+    walls = B.walls; tris = trianglesOf(B); curved = B.curved;
+    stairTris = new Map(inner.groups.filter((g) => g.key.startsWith('stairs:')).map((g) => [g.key.slice(7), groupTris([g])]));
   }, 300_000);
+
+  it('lights every round tower\'s spiral through real slits', () => {
+    expect(curved.filter((c) => c.room).length).toBeGreaterThanOrEqual(6);
+    expect(slitFaults(curved, P, tris, stairTris)).toEqual([]);
+    // what it is for: a slit dropped onto the steps, one painted on the drum with no hole, one on a door
+    const c = curved.find((x) => x.room === 'se-stair')!, sp = P.stairs.find((x) => x.id === 'se-stair')!;
+    const f = slitFaults([{ ...c, y: c.y - 1.6 }], P, tris, stairTris);
+    expect(f.some((x) => x.includes('its embrasure runs into the steps'))).toBe(true);
+    expect(f).toContain('se-stair: 1 light slits');
+    const solid = slitFaults([c], P, [...tris, ...trianglesOf({ bins: { x: { pos: (() => { const n: V2 = [Math.cos(c.a), Math.sin(c.a)], t: V2 = [-n[1], n[0]], o = [c.c[0] + n[0] * c.R, c.c[1] + n[1] * c.R]; return [o[0] - t[0], c.y, o[1] - t[1], o[0] + t[0], c.y, o[1] + t[1], o[0], c.y + 2, o[1]]; })() } } } as unknown as Builder)], stairTris);
+    expect(solid.some((x) => x.includes('not open'))).toBe(true);
+    const door = P.doors.find((d) => d.spaces.includes(sp.id))!;
+    const onDoor = slitFaults([{ ...c, c: [door.centre[0] - Math.cos(c.a) * c.R, door.centre[2] - Math.sin(c.a) * c.R], y: door.centre[1] + 0.5 }], P, tris, stairTris);
+    expect(onDoor.some((x) => x.includes(`against door ${door.id}`))).toBe(true);
+  }, 120_000);
 
   it('checks every castle wall, window and plan door', () => {
     expect(walls.filter((w) => w.openings.length).length).toBeGreaterThan(20);

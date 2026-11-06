@@ -305,6 +305,22 @@ export function spiralHeadroom(p: SpiralPlan, psi: number, ceiling?: number) {
   return ceiling !== undefined ? ceiling - y : Infinity;
 }
 
+/**
+ * The step stones a vertical line at world angle theta meets in the drum, bottom up: [soffit, top] of each
+ * (a solid first-turn step runs down to the floor; the top takes in the nosing line, so a riser is covered).
+ */
+export function spiralStonesAt(p: SpiralPlan, theta: number): [number, number][] {
+  const s = p.steps, out: [number, number][] = [];
+  let psi = (((theta - p.theta0) * p.dir) % TAU + TAU) % TAU;
+  for (; psi < s[s.length - 1].a1; psi += TAU) {
+    const i = stepAt(p, psi);
+    if (i < 0) continue;
+    const st = s[i], nose = spiralNosingY(p, psi);
+    out.push([st.solid ? p.yFloor : nose - p.T + st.soffitJit, Math.max(st.y, nose)]);
+  }
+  return out;
+}
+
 export function layoutSpiral(s: StairSpec, o: StairOpts, perTurn: number, seed: number): SpiralPlan {
   const RU = STAIR_RULES;
   const R = s.radius ?? 1.2, rn = s.newel ?? 0.15, turn = s.turn ?? -1, dir = (-turn) as 1 | -1;

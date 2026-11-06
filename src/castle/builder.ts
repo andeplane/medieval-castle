@@ -50,7 +50,11 @@ export interface Opening { pts: V2[]; depth: number; fill: 'glass' | 'void' | 'w
 /** Every wall face with its openings, so the interior can cut matching embrasures behind them. */
 export interface WallRecord { mat: MatKey; a: V2; b: V2; out: V2; y0: number; y1: number; openings: Opening[]; frame: Frame }
 /** Surface-mounted openings on curved walls (round towers): centre, radius, angle, sill, size. */
-export interface CurvedRecord { c: V2; R: number; a: number; y: number; w: number; h: number; glass: boolean }
+export interface CurvedRecord {
+  c: V2; R: number; a: number; y: number; w: number; h: number; glass: boolean;
+  /** The room it lights, when its owner says (a spiral stair's slits: openings.ts stairSlits); else the shell finds it. */
+  room?: string;
+}
 
 /** Is the polygon corner at i convex (turning more than ~30°)? Polygon must be counter-clockwise. */
 const convexAt = (p: V2[], i: number) => {

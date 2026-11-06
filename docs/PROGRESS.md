@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-11-06: real light slits for the round towers' spiral stairs (branch `claude/project-thread-ns4g2v-se-slits`)
+
+From "Still open" (2026-11-05): "The SE spiral's light slits were not touched."
+
+Root cause: the round towers' "stair spiral of slits" was decoration. castle.ts put slits at angles round the drum that had nothing to do with the stair (`outward − 1.2 + 0.75 k`). They were only painted on (`curvedOpening`: a trim surround and a black box). The shell finds a room for each curved opening by angle. The spiral shaft, a 32-gon in the wall, never matched, so there was no hole and no embrasure, and nothing showed from inside the stair. NE had one slit that matched by chance. Its facet clip cut the shaft wall but not the steps, which run to the plan's polygon.
+
+Who owns what
+- **The list:** openings.ts `stairSlits` (pure). It makes one slit per turn on the line from the tower's centre through the stair's centre, where the wall is thinnest (≈ 0.6 m). Each slit sits in the middle of the height the steps leave free in front of it. It follows the windows' rule on the drum (bands with V_CLEAR, open air in front through `fits`), and it moves only within that free height. A turn without room gets no slit. There are no slits at all if a landing door opens onto that strip. The steps come from the stair's own plan (stairs.ts `spiralStonesAt`), passed in by plan.ts `towerSpirals`.
+- **The flat strip they open from:** the plan. The shaft polygon of a round-tower spiral is clipped by a 1.0 m chord facing out (`STAIR_SLIT.facet`), so the tread ends (`drumPoly`) stop at the same wall the embrasures open from.
+- **Exterior:** castle.ts `roundTower` logs each slit with the other openings and draws the surround with `curvedOpening`. The record names the room it lights (`CurvedRecord.room`). The decorative spiral of slits skips the drum in front of the stair.
+- **Hole, embrasure, stone keep-out:** the shell, as for every curved opening. It builds a splayed embrasure from the strip back to the slit, 0.6 m under the sill and 0.4 m over the head, with a segmental head in the new phase. Its carve cuts the hole through the drum, and the stone layer keeps off that carve volume. Slits stack on one strip, so for these the hole-overlap check also looks at height.
+
+Result: SE gets 5 slits (sills at 10.0, 17.5, 22.1, 31.0 and 35.9 m) and NE gets 6. Three turns on each tower drop out because the string courses at 13.4 m and 27.0 m and the batter fill their free height. Each slit is also an `open` window light (`WindowLight.kind`): daylight comes into the stair through it, and the interior visibility shows the stair through it from outside. Without that, the stair group stayed hidden from outside, and the hole showed through to whatever lay behind it.
+
+Checked in the built page (headless WebGL2, walk mode). On the tread past the 22.1 m slit, the splayed niche and the lit slit show. On main the same pose shows a plain wall. Captures are in `castle-plan/se-stair-slits/` (`before-` and `after-`: `se-in`, `se-out-slit`, `se-out-close`; after only: `courtyard`, `ward`, `gate`, `hero`).
+
+Bright slit (coordinator review of `after-se-out-close.png`): before the rebase, the stair group was drawn from outside only within 9.6 m (`visibility.ts`, `stairs * 0.8`). From 12 m the stairwell was hidden, so you saw through the slit to whatever lay behind it. Moving the stair group away reproduces this (`debug-stair-group-hidden.png`). On main after #42, stair groups show through open apertures within 120 m, and each slit is one, so the slit reads dark. I re-captured `after-se-out-close`, `-se-out-slit` and `-se-in` on the rebased branch with four different capture orders: all dark. The stair slits use the same `curvedOpening` surround as the drum's other slits (trim surround and sill).
+
+Cost (`__game.state()`): castle 127,527 → 128,187 triangles, interior 239,714 → 240,064, embrasures 135 → 145, window lights 222 → 233. Groups and meshes are unchanged (85 and 301), so the slits add no draw calls.
+
+Tests
+- `tests/world.test.ts`, new invariant over the whole castle (built and carved as main.ts does): every round-tower spiral has at least 3 slits. Each slit is open on rays from 0.3 m outside the drum to 0.25 m inside the stairwell, through castle and stair geometry. Its embrasure (front width and full height, three depths) contains no point inside a step stone. It keeps clear of every door and of the drum's other openings. A mutation check confirms that a slit dropped onto the steps, a slit blocked by a slab, and a slit placed on a door are each reported. On main the invariant fails: neither stair has a slit.
+- `tests/openings.test.ts`: `stairSlits` against a fake stair (one per turn, off steps and bands; dropped by bands; none with a door on the strip). `tests/stairs.test.ts`: `spiralStonesAt`.
+
+Assumption (visible, for Anders to veto): the plainest arrow slit, 0.13 × 1.0 m with a trim surround, stacked one per turn in a vertical column on the outside of each round tower (SE faces south, NE faces north-west). Inside, a splayed niche with a segmental head. NE was changed too, because it is the same code and had the same fault.
+
+Not checked: the square towers' spirals (great, sw) still have no slits. The decorative slits elsewhere on the round drums are still painted only, unless the shell happens to find a tower room behind them. Same for the SE roof turret's slits.
+
 ## 2026-11-06: frame cost (branch `claude/project-thread-ns4g2v-perf`)
 
 Anders: "game is INSANELY slow" (Mac, Chrome, WebGPU; the Mac was in Low Power Mode at the time).

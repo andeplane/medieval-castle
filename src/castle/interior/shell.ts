@@ -18,6 +18,7 @@ import { grooveFromFront } from './portcullis';
 import { doorOutlines, stopPlane } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
+import { STAIR_SLIT } from '../openings';
 
 type V3 = [number, number, number];
 export interface ShellGroup { key: string; zone: string; floor: number; B: Builder; rooms: string[] }
@@ -59,13 +60,14 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
 
   // ------------------------------------------------ windows: gather exterior openings by room
   const masses = solidMasses();
-  type Win = { f: Frame; ops: Opening[]; s0: number; s1: number; yb: number; yt: number; depth: number; curved: boolean; glass: boolean; dir: V2; mid: V2 };
+  type Win = { f: Frame; ops: Opening[]; s0: number; s1: number; yb: number; yt: number; depth: number; curved: boolean; glass: boolean; dir: V2; mid: V2; room?: string };
   const wins: Win[] = [];
   for (const w of ext.walls) if (w.openings.length) wins.push(...groupWindows(w));
   for (const c of ext.curved) wins.push(curvedWindow(c));
   const winFor = new Map<string, Win[]>();
   for (const w of wins) {
     if (w.ops.every((o) => o.fill === 'wood' || o.fill === 'none')) continue;
+    if (w.room) { if (room.has(w.room)) { if (!winFor.has(w.room)) winFor.set(w.room, []); winFor.get(w.room)!.push(w); } continue; } // named by its owner
     const outside = add(w.mid, scale(w.dir, 0.45));
     if (masses.some((m) => pointInPoly(m, outside[0], outside[1]))) continue; // enclosed: inside another mass
     // the room behind it: same height band, an edge facing the opening within 3.6 m
@@ -89,6 +91,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   // facets on round rooms for their windows (skip any that would eat a door facet)
   for (const [id, ws] of winFor) {
     const rd = P.round[id]; if (!rd) continue;
+    if (ws.every((w) => w.room === id)) continue; // a spiral's slits open from the flat strip the plan cut for them
     const doorsHere = P.doors.filter((d) => d.spaces.includes(id)).map((d) => ({ a: Math.atan2(d.centre[2] - rd.c[1], d.centre[0] - rd.c[0]), h: Math.asin(Math.min(0.99, (d.width / 2 + 0.3) / rd.r)) }));
     const taken: { a: number; h: number }[] = [...doorsHere];
     const keep: Win[] = [];
@@ -271,8 +274,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const ybB = w.curved ? w.yb : w.yb - 0.05, ytB = w.curved ? w.yt : w.yt + 0.08;
     const backO = archOutline(cx, ybB, wb, Math.max(0.2, ytB - ybB - (w.curved ? 0 : 0.04)), w.curved ? 'flat' : head, w.curved ? 0 : 0.04);
     const wf = wb + 2 * sp;
-    const low = w.yb - r.y0 > 2.2 ? Math.max(r.y0 + 0.9, w.yb - 0.7 * (T - back)) : w.yb - r.y0 > 0.6 ? Math.max(r.y0 + 0.45, w.yb - 0.15) : r.y0 + 0.02;
-    const yfT = Math.min(r.y1 - 0.12, w.yt + 0.2 + sp * 0.5);
+    const slit = w.room === r.id; // a spiral's slit: its niche clears the steps below and above (openings.ts stairSlits)
+    const low = slit ? w.yb - STAIR_SLIT.below : w.yb - r.y0 > 2.2 ? Math.max(r.y0 + 0.9, w.yb - 0.7 * (T - back)) : w.yb - r.y0 > 0.6 ? Math.max(r.y0 + 0.45, w.yb - 0.15) : r.y0 + 0.02;
+    const yfT = slit ? w.yt + STAIR_SLIT.above : Math.min(r.y1 - 0.12, w.yt + 0.2 + sp * 0.5);
     const riseF = Math.min(headRise(head, wf), Math.max(0.05, (yfT - low) * 0.35));
     const frontO = archOutline(cx, low, wf, Math.max(0.3, yfT - low - riseF), head, riseF);
     // the hole must sit inside the room face
@@ -280,7 +284,11 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const ptsF = frontO.map(([s, y]) => toEdge(e, W(s, y, T)));
     const sMin = Math.min(...ptsF.map((p) => p[0])), sMax = Math.max(...ptsF.map((p) => p[0]));
     if (sMin < 0.12 || sMax > e.L - 0.12 || low < r.y0 - 1e-6 || yfT > r.y1) return false;
-    for (const h of e.holes) { const hs = h.pts.map((p) => p[0]); if (Math.min(...hs) < sMax + 0.15 && Math.max(...hs) > sMin - 0.15) return false; }
+    for (const h of e.holes) {
+      const hs = h.pts.map((p) => p[0]), hy = h.pts.map((p) => p[1]);
+      const above = slit && (Math.min(...hy) > yfT + 0.15 || Math.max(...hy) < low - 0.15); // a spiral's slits stack on one strip
+      if (!above && Math.min(...hs) < sMax + 0.15 && Math.max(...hs) > sMin - 0.15) return false;
+    }
     // the niche must not run into another space (stair shafts, the room next door)
     const foot: V2[] = [[cx - wf / 2, T], [cx + wf / 2, T], [cx + wb / 2, back], [cx - wb / 2, back]].map(([s, dd]) => { const p = W(s, 0, dd); return [p[0], p[2]] as V2; });
     for (const o of P.rooms) {
@@ -514,7 +522,7 @@ function curvedWindow(c: CurvedRecord) {
   const n: V2 = [Math.cos(c.a), Math.sin(c.a)], tan: V2 = [-Math.sin(c.a), Math.cos(c.a)];
   const o = add(c.c, scale(n, c.R));
   const f: Frame = { o: [o[0], 0, o[1]], r: [tan[0], 0, tan[1]], u: [0, 1, 0], n: [n[0], 0, n[1]] };
-  return { f, ops: [{ pts: rectPts(-c.w / 2, c.w / 2, c.y, c.y + c.h), depth: 0, fill: c.glass ? 'glass' : 'void', reveal: 'trim' } as Opening], s0: -c.w / 2, s1: c.w / 2, yb: c.y, yt: c.y + c.h, depth: 0, curved: true, glass: c.glass, dir: n, mid: o };
+  return { f, ops: [{ pts: rectPts(-c.w / 2, c.w / 2, c.y, c.y + c.h), depth: 0, fill: c.glass ? 'glass' : 'void', reveal: 'trim' } as Opening], s0: -c.w / 2, s1: c.w / 2, yb: c.y, yt: c.y + c.h, depth: 0, curved: true, glass: c.glass, dir: n, mid: o, room: c.room };
 }
 
 /** Plan polygons of solid masses that enclose an opening (so it lights nothing). */
