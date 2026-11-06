@@ -13,6 +13,13 @@ Tests: `tests/doorswing.test.ts` (the key-path world and the player's own motor 
 In the game (vite, headless WebGL2, `__game.player.teleport`, `__game.use()` = E, `__game.input`): in the arc of `N0-0>N0-1`, `se-stair>se-0` and `court>W0-2`, mid-leaf and near the latch, facing the leaf. E opened it ("Open door" under the crosshair); the leaf stayed shut or stopped part-open (0.08 to 0.38) with the player unmoved (< 1 mm), the player walked 2.6 to 2.85 m away in 1 s (0.55 m into the cramped `se-stair` landing), and then the leaf swung fully open. No capture: a behaviour change, not a look change.
 
 Not checked: two characters closing on a leaf from both sides at once; a running NPC whose motor ticks after the doors (it can close 10 cm in one tick, so it may touch a leaf by a cm or two, which the controller then pushes it out of; the leaf is stopped by then, so nothing ratchets).
+## 2026-11-06: rooms and torchlight vanishing in doorways (branch `claude/project-thread-ns4g2v-roomlight`)
+
+- Cause: `visibleSet` (src/world/visibility.ts) put the camera in a room only within 0.9 m of its outline. In a thick wall's doorway it was in no room, so the "outside" rules ran and the room ahead (or behind) was culled: Anders saw straight through to the courtyard for 10-20 cm, then the room came back. Fire lights were picked only among drawn rooms, so torchlight also switched as you crossed a threshold.
+- Fix: `doorwayRooms` puts a camera standing in a doorway (its width and the wall's thickness, plus 30 cm) in both its rooms; the rig picks torches by distance only (main.ts), never by what is drawn.
+- Tests (tests/world.test.ts): every doorway walked from 1 m before to 1 m past in 5 cm steps (3 lines across), both rooms drawn at every step (failed at 60+ doors before); torches that reach the camera stay lit across every doorway walk.
+- Help: fly and orbit help lines now say "P walk".
+- Not checked: torch light still passes through walls within its 6.9 m range (as before; no fire shadows).
 
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
