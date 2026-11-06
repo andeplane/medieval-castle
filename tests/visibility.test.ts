@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createVisibility, roomShown, visContext, visibleSet, type GroupInfo } from '../src/world/visibility';
+import { courtView, createVisibility, roomShown, visContext, visibleSet, type GroupInfo } from '../src/world/visibility';
 import type { InteriorGroup, InteriorPlan, RoomSpec, V3 } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
 import type { Aperture } from '../src/render/interiorMath';
@@ -59,14 +59,37 @@ describe('visibleSet', () => {
     expect(shown(south)).toEqual(['N:0', 'doors']);
     expect(shown(visibleSet(ctx, [2, 0, 60]))).toEqual(['tunnel:-1', 'doors']); // facing its grille; N:0's window is 51 m away
     const north = visibleSet(ctx, [10, 20, -30]);
-    expect(shown(north)).toEqual(['N:3', 'doors']);
+    expect(shown(north)).toEqual(['N:3', 'great:0', 'doors']); // great:0's doorway faces it 95 m off: doorways reach 120 m
     expect(shown(visibleSet(ctx, [500, 4, 500]))).toEqual([]);
     expect(shown(visibleSet(ctx, [2, 0, 10.5]))).toContain('stairs:s');   // close to the stair
   });
+  test('a room seen through its doorway is drawn at every distance: stair towers too, and from inside near a way out', () => {
+    // a courtyard: a stair tower whose door faces west, a hall across the yard with an open door facing east
+    const yard: InteriorPlan = { rooms: [room('stair', 'stairtower', 0, sq(20, 0, 26, 6), 3), room('H0', 'W', 0, sq(-30, 0, -20, 10), 3)], doors: [], stairs: [] };
+    const g2: GroupInfo[] = [
+      G('stairs:stair', 'stairs', -1, box([20, 3, 0], [26, 40, 6]), [0], [{ p: [20, 4, 3], n: [-1, 0, 0], open: true }]),
+      G('W:0', 'W', 0, box([-30, 3, 0], [-20, 7, 10]), [1], [{ p: [-20, 4, 5], n: [1, 0, 0], open: true }]),
+    ];
+    const c2 = visContext(yard, g2);
+    for (const x of [18, 10, 0, -15]) expect(visibleSet(c2, [x, 4.2, 3]).visible[0]).toBe(true);  // 2 … 35 m in front of the stair door
+    expect(visibleSet(c2, [40, 4.2, 3]).visible[0]).toBe(false);                                       // behind it, 14 m off
+    expect(visibleSet(c2, [-60, 4.2, 3]).visible).toEqual([true, false]);                              // behind the hall: its door faces away
+    // standing in the stair doorway looking out: the hall's open door faces it, 40 m away
+    const inDoor = visibleSet(c2, [20.5, 4.2, 3]);
+    expect(inDoor).toMatchObject({ room: 0, deep: false });
+    expect(inDoor.visible).toEqual([true, true]);
+    expect(visibleSet(c2, [21, 4.2, 3], { far: 40, farOpen: 120, stairs: 12, deepClear: 0.1 }).visible).toEqual([true, false]); // deep: no
+    // a courtyard doorway counts only from the courtyard or above the roofs (courtView, as main.ts)
+    const g3 = g2.map((g) => ({ ...g, apertures: g.apertures.map((a) => ({ ...a, court: true })) }));
+    const c3 = visContext(yard, g3), o3 = { far: 40, farOpen: 120, stairs: 12, deepClear: 40, inCourt: courtView([[-20, -10], [20, -10], [20, 20], [-20, 20]], 30) };
+    expect(visibleSet(c3, [0, 4.2, 3], o3).visible).toEqual([true, true]);    // in the yard
+    expect(visibleSet(c3, [0, 4.2, 40], o3).visible).toEqual([false, false]); // outside it, behind the walls
+    expect(visibleSet(c3, [0, 40, 40], o3).visible).toEqual([true, true]);    // looking down from above the roofs
+  });
   test('underground hides the landscape', () => {
-    const r = visibleSet(ctx, [2, -4, 30], { far: 60, stairs: 30, deepClear: 40, ground: () => 2.6 });
+    const r = visibleSet(ctx, [2, -4, 30], { far: 60, farOpen: 60, stairs: 30, deepClear: 40, ground: () => 2.6 });
     expect(r).toMatchObject({ room: 7, underground: true, deep: true });
-    expect(visibleSet(ctx, [10, 4, 30], { far: 60, stairs: 30, deepClear: 40, ground: () => 2.6 }).underground).toBe(false);
+    expect(visibleSet(ctx, [10, 4, 30], { far: 60, farOpen: 60, stairs: 30, deepClear: 40, ground: () => 2.6 }).underground).toBe(false);
   });
   test('roomShown for dynamic objects', () => {
     const r = visibleSet(ctx, [10, 4.7, 4]);
