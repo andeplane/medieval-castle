@@ -22,6 +22,28 @@ Not checked
 - I could not find a camera pose that shows the strip in a capture (courtyard junctions, inside the stair-tower shaft, from above); the evidence is the geometric check. The capture that first showed it (doors-fix) was not available here.
 - Corner-tower and east-turret batters still run up to 1.4 m under the wing corners (inside walls and carved rooms); the test allows that.
 
+## 2026-11-06: things popping in the gate passage and courtyard (branch `claude/project-thread-ns4g2v-gate-popin`)
+
+Anders, on the live site (WebGPU): things in the gate passage pop in and out as he walks up (an iron bracket, a ring, a dark bar on the floor); in the courtyard a door leaf stands on the stair tower's wall beside a black slot, doors vanish or shift between two nearby poses, a big arch is a black void.
+
+Two causes, both "a cull that changes what exists":
+- Door leaves, the portcullis and its windlass are `BatchedMesh` instances (`interior/doorBatch.ts`) with three.js per-instance frustum culling. three.js keeps one instance-id table per batch (its indirect texture) but records draw ranges per pass. Under WebGPU the table written for the last camera of the frame (the sun's shadow camera or the view) is the one every pass reads, so the view drew leaf, grille and windlass parts with other instances' matrices: leaves beside their doorways, leaves missing, a pawl or strap on the passage floor, and a set that changes with every step. Fix: `perObjectFrustumCulled = false` (and no sorting), so the table depends only on `setVisibleAt`. `tests/doors.test.ts` drives the real BatchedMesh with two cameras in both draw formats and asserts one table.
+- Room culling (`world/visibility.ts`) from outside: a stair tower was shown only within 9.6 m and ignored its doorway, and every room was cut at 40 m even through an open doorway. Beyond 9.6 m the courtyard's stair door showed no reveal and no stair (a see-through slot, with its leaf standing alone on the wall). Now a group is drawn when one of its openings faces the camera: windows within 40 m (the dark fallback pane covers the rest), doorways within 120 m (nothing covers a hidden room behind a doorway); near a way out, the doorways of other buildings count from inside too. A courtyard doorway counts only from the courtyard or from above the lowest roof (`courtView`), and stair towers still use the fallback pane for their windows, so nothing is added behind the walls.
+
+Tests
+- `tests/world.test.ts` (whole castle, same `createVisibility` and bake apertures as main.ts): from several hundred poses in front of every outdoor doorway (1.5–60 m, ±4 m aside, two eye heights) the room behind and the leaf are drawn; from the middle of every room, every room behind its doors is drawn; no real stone (any LOD level: the levels are one stone set) lies in a doorway. The old visibility fails it (stair tower at 12–20 m, gate passage at 40–60 m).
+- `tests/visibility.test.ts`: stair tower through its door, the 120 m doorway reach, inside-near-a-way-out.
+- `tests/world.test.ts` also checks the other way: walking up to the gate, the rooms off the courtyard stay culled.
+- AGENTS.md: rule "one model for visibility and LOD".
+
+Cost (interior groups drawn, counted over the same poses with the real groups): walking up to the gate 0 to 9 fewer meshes (N:0, E:0, W:0 were drawn through their courtyard doors from outside); in the courtyard beyond 9.6 m from the stair tower +4 meshes, +36k triangles (the stair). Door leaves are no longer culled per instance: every leaf of a batch is drawn in each pass, same draw calls.
+
+Checked: captures before/after from the same poses (gate approach 30→3 m, the courtyard views of Anders's screenshots, the stair door 3–16 m out with its leaf open), in `castle-plan/gate-popin/`. Headless capture is WebGL2: there the leaf mix-up did not show (WebGL uploads the table per draw), and WebGPU does not run headless here (device lost), so the WebGPU fix is checked by the unit test through three.js's own BatchedMesh code, not by a capture. Before: from 12 and 16 m the stair door was a see-through slot with its leaf standing alone (Anders's screenshot); after: the stair and its newel show through it.
+
+Also seen, not changed: the reveals of courtyard doors are near black from the sunlit courtyard (interior material), so a leaf set back in its doorway reads as a leaf beside a black slit.
+
+Not changed: the light budget (`light/budget.ts`) still lights only the 8 strongest fires within 1.6 × range of the eye, fading in over its fade time, so a torch's glow on the passage wall still fades in as you walk up (its flame is always drawn). Assumption: this is LOD of the look, not of what exists.
+
 ## 2026-11-05: one owner per wall opening; door prompt and door clipping (branch `door-prompt-clipping`)
 
 Anders: "what door?" (`castle-plan/feedback/door-prompt-floor.png`: "Open door" while looking at the floor), "some clipping error on doors, please fix", then "rethink and redo. do better". The coordinator added `courtyard-door-cut.png` and `CLIPPING.md`.
@@ -229,6 +251,7 @@ Anders: "default should be walk for sure". The page now starts in walk mode at t
 - The tunnel draws in a worker on an OffscreenCanvas (`src/loading/tunnel.worker.ts` → `worker.ts`, loop in `loop.ts`, main-thread fallback in `backend.ts`), so it animates while the castle build and shader compile block the main thread (checked by blocking the page for 8 s). It draws at 30 fps at most, at half the device pixels. The caption is page DOM and only updates when the main thread is free.
 - Look: fully black at 0 %. The farthest torch strikes first and the light walks toward the viewer. Far torches keep a minimum size on screen. Daylight at the grille only comes up with the final fill.
 - Progress is proportional to time (`src/loading/timeline.ts`). Each boot step gets a share of the bar sized by how long it took on this device last time. Timings are kept in localStorage `moated-castle:boot-ms:v1`, averaged 70/30 with the previous value; the first visit uses defaults. Inside a step, progress moves linearly over the expected time, then slows and never reaches the step's end. main.ts calls `screen.step(label)`, matched without regard to case; unknown labels only change the caption.
+- 2026-11-06, Anders asked for the camera to answer the mouse: the pointer turns the view up to about 10° sideways and 6° up/down and leans the camera ~12 cm, so near torches slide against far ones. The loop eases toward the pointer (`followLook` in `loop.ts`, ~1/3 s), which also smooths pointer moves that reach the worker in bursts while the main thread is busy. Checked headless at ?loading=0.8 with the mouse at the centre, left edge and top-right corner.
 
 ## 2026-11-05: combined build on main checked (after #27–#30)
 
