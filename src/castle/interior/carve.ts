@@ -14,16 +14,18 @@ export interface TriBin { pos: number[]; nor: number[]; uv: number[] }
 
 const EPS = 1e-3;
 
-/** Vertical prism over a convex polygon (any winding) between y0 and y1. */
-export function prismVolume(poly: V2[], y0: number, y1: number): Volume {
+/** Vertical prism over a convex polygon (any winding) between y0 and y1, its sides moved out by `grow`. */
+export function prismVolume(poly: V2[], y0: number, y1: number, grow = 0): Volume {
   let s = 0; for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; s += a[0] * b[1] - b[0] * a[1]; }
-  const p = s < 0 ? [...poly].reverse() : poly; // positive (CCW in x,z maths): outward = right normal
+  const q = (s < 0 ? [...poly].reverse() : poly).filter((a, i, all) => { const b = all[(i + 1) % all.length]; return Math.hypot(b[0] - a[0], b[1] - a[1]) >= 1e-9; });
+  // positive (CCW in x,z maths): outward = right normal
+  const nOf = (i: number): V2 => { const a = q[i], b = q[(i + 1) % q.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(b[1] - a[1]) / L, -(b[0] - a[0]) / L]; };
+  // each corner moves along the bisector of its two side normals, so the grown sides still meet
+  const p: V2[] = grow ? q.map((a, i) => { const n0 = nOf((i + q.length - 1) % q.length), n1 = nOf(i), k = grow / (1 + n0[0] * n1[0] + n0[1] * n1[1]); return [a[0] + (n0[0] + n1[0]) * k, a[1] + (n0[1] + n1[1]) * k]; }) : q;
   const planes: Plane[] = [{ n: [0, 1, 0], d: y1 }, { n: [0, -1, 0], d: -y0 }];
   for (let i = 0; i < p.length; i++) {
-    const a = p[i], b = p[(i + 1) % p.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (L < 1e-9) continue;
-    const n: V3 = [(b[1] - a[1]) / L, 0, -(b[0] - a[0]) / L];
-    planes.push({ n, d: n[0] * a[0] + n[2] * a[1] });
+    const [nx, nz] = nOf(i), n: V3 = [nx, 0, nz];
+    planes.push({ n, d: n[0] * p[i][0] + n[2] * p[i][1] });
   }
   const xs = p.map((q) => q[0]), zs = p.map((q) => q[1]);
   const pts: V3[] = [...p.map((q) => [q[0], y0, q[1]] as V3), ...p.map((q) => [q[0], y1, q[1]] as V3)];

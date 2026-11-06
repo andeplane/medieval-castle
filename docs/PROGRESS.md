@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
+
+Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.
+
+Root cause (checked by elimination in the game, `?webgl`, then fixed and re-captured):
+- The specks were sunlit exterior castle stone showing through the wall's mortar joints. The castle is overlapping shells, so tower drums (round and battered), wing faces and plinths run through the wall masses. The shell carved every room out of them with a prism exactly on the room's outline, and the carve keeps faces lying on its boundary. So a castle face could stay flush with a room wall, or a few cm behind it, facing into the room.
+- The stone materials push each pixel back to where its parallax ray hits (pixel depth offset in `render/materials.ts`, up to 6 cm behind the face). In the deep joints and pits that put the wall behind the hidden castle face, which won the depth test. That face has the outdoor material (sun, sky), white at the room's +2.5 stops. The specks follow the line where the castle face crosses the wall plane (an arc where a battered drum cuts it, a row where a plinth top does, vertical lines at a tower's corner), and they sit in the joints. That is why it read as a texture and not as cracks.
+- How it was found: hiding the sun, the fire lights, the interior daylight (`gain` 0), the AO pre-pass (`?ao=0`) and the real stones (`?stones=0`) each left the specks. A plain red material on the wall had none, and the wall's own material with `depthNode = null` had none. With `?pom=0` only a hairline was left (z-fighting with the flush face). A ray test over the whole castle found castle faces within 8 cm behind the walls of 53 rooms on main: every corner undercroft by a tower, the tower rooms and stairs, and `gate-1`.
+- Pitfall for the next agent: vite on this machine missed a `sed -i` edit (new inode), so captures after the first fix were pixel-identical to before. Restart the dev server between A/B builds.
+
+Fix (one owner: the shell's carve)
+- `shell.ts` carves each room's prism `BEHIND = 0.1` m beyond its walls (`prismVolume(…, grow)` in `carve.ts`). Nothing the castle keeps lies within 10 cm behind a room wall, more than the deepest parallax (6 cm). The walls are 0.6 m or more thick, so nothing outside changes. The stone keep-outs follow the grown volume.
+- Exterior triangles: +60 from the extra clipping (127,527 → 127,587, measured before merging #42–#46); the interior is unchanged (239,714). No new draw calls. Bookmarks on the branch (headless WebGL2, 1600×900): courtyard 665 draw calls / 5.26 M triangles, hall 328 / 3.98 M, gate 464 / 4.30 M.
+
+Tests
+- `tests/world.test.ts`: "leaves no castle surface just behind a room wall": rays from 2 mm outside every wall of every room cell, every 0.2 m, 8 cm deep, through the whole castle as main.ts builds and carves it. On main it lists 53 rooms; on the branch it passes. A second case puts a face 3 cm behind N0-2's wall and checks that it is found.
+- `tests/interior-geom.test.ts`: the grown prism carves a face 5 cm outside its side; the plain prism keeps it.
+
+Captures (headless WebGL2, `castle-plan/interior-specks/`, `before-*` = main with the merged #42–#46, `after-*` = branch): the undercrofts N0-5, S0-0, S0-3 and N0-0 looking at the tower door; two close-ups 0.5 m from the wall beside each door; and Anders's gate passage pose (`lookFrom([4.6,4.3,22],[4.5,4.6,0])`). Bookmarks: courtyard, hall, gate.
+
+Not checked: WebGPU (Anders's Mac) after the fix; the furniture build (`?furniture=1`); floors and ceilings (the test samples walls only; the floor carve still stops 2 cm below the floor).
+
 ## 2026-11-06: real light slits for the round towers' spiral stairs (branch `claude/project-thread-ns4g2v-se-slits`)
 
 From "Still open" (2026-11-05): "The SE spiral's light slits were not touched."

@@ -83,6 +83,15 @@ describe('carve', () => {
     const e = bin(); quadZ(e, 1);
     expect(carve([e], [])).toEqual({ removed: 0, added: 0 });
   });
+  it('grows a prism outward, so a face just outside its side is carved too', () => {
+    const v = prismVolume([...sq(1, 0)].reverse(), 1, 3, 0.1); // the 2 m square x 1..3, z 0..2
+    expect(Math.min(...v.pts.map((p) => p[0]))).toBeCloseTo(0.9); expect(Math.max(...v.pts.map((p) => p[2]))).toBeCloseTo(2.1);
+    const face = () => { const b = bin(); tri(b, [0, 1.5, 2.05], [4, 1.5, 2.05], [4, 2.5, 2.05]); return b; }; // 5 cm outside z = 2
+    const kept = face(); carve([kept], [prismVolume(sq(1, 0), 1, 3)]);
+    expect(areaOf(kept)).toBeCloseTo(2, 5);
+    const cut = face(); carve([cut], [v]);
+    expect(areaOf(cut)).toBeLessThan(1.5);
+  });
   it('extrudes outlines through a wall', () => {
     const b = bin(); quadZ(b, 1);
     const v = extrudeVolume([2, 1], [1, 0], [0, 1], archOutline(0, 0.5, 1, 1.5, 'round'), -0.5, 0.5);
