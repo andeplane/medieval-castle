@@ -10,7 +10,10 @@
 //   air FRONT deep in front of it, CLEAR wider either side (not jammed against a tower), as windows are;
 // - an indoor door opens fully into the rooms on both sides (no junction through its jambs or rebate);
 // - every leaf, from shut to fully open, stays in its doorway or its room, under the ceiling, off the
-//   stair treads and out of every other leaf's sweep.
+//   stair treads and out of every other leaf's sweep;
+// - no reveal triangle spans the wall's mid-plane: the interior light gives each triangle the room nearest
+//   its centre, so a soffit quad from face to face lit its two halves from the two rooms (saw teeth round
+//   the gate-inner head, 2026-11-06).
 import { describe, it, expect, beforeAll } from 'vitest';
 import type { WallRecord, Builder } from '../src/castle/builder';
 import { buildInterior } from '../src/castle/interior';
@@ -21,7 +24,8 @@ import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
 import { mats, islandCastle } from './world';
 import { planStair, spiralNosingY, type SpiralPlan } from '../src/castle/interior/stairs';
-import type { DoorSpec } from '../src/castle/interior/types';
+import type { DoorSpec, InteriorGroup } from '../src/castle/interior/types';
+import type * as THREE from 'three/webgpu';
 import { masses, convexOverlap, CLEAR, FRONT, type Mass } from '../src/castle/openings';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
@@ -191,13 +195,47 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
   return bad;
 }
 
+/** Interior triangles (world space) with their face normals. */
+function shellTriangles(groups: InteriorGroup[]): { p: V3[]; n: V3; c?: V3 }[] {
+  const out: { p: V3[]; n: V3; c?: V3 }[] = [];
+  for (const g of groups) g.object.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const a = m.geometry.getAttribute('position').array;
+    for (let i = 0; i + 8 < a.length; i += 9) {
+      const p = [0, 1, 2].map((k) => [a[i + k * 3], a[i + k * 3 + 1], a[i + k * 3 + 2]] as V3);
+      const e1 = [0, 1, 2].map((k) => p[1][k] - p[0][k]), e2 = [0, 1, 2].map((k) => p[2][k] - p[0][k]);
+      const c: V3 = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(...c);
+      if (l > 1e-9) out.push({ p, n: [c[0] / l, c[1] / l, c[2] / l], c: [0, 1, 2].map((k) => (p[0][k] + p[1][k] + p[2][k]) / 3) as V3 });
+    }
+  });
+  return out;
+}
+
+/** Reveal triangles (in a doorway, facing across it) that reach both sides of the wall's mid-plane. */
+function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
+  const bad: string[] = [];
+  for (const d of P.doors) {
+    const hw = d.width / 2 + LIP + 0.02, top = bbox(outlineGrown(P, d, LIP)).y1 + 0.02, R = hw + d.wall;
+    for (const t of tris) {
+      if (t.c && Math.hypot(t.c[0] - d.centre[0], t.c[2] - d.centre[2]) > R + d.wall) continue; // far from this door
+      if (Math.abs(t.n[0] * d.normal[0] + t.n[2] * d.normal[1]) > 0.2) continue; // the faces and the rebate step
+      const loc = t.p.map((q) => { const x = q[0] - d.centre[0], z = q[2] - d.centre[2]; return [x * d.along[0] + z * d.along[1], q[1], x * d.normal[0] + z * d.normal[1]]; });
+      if (loc.some(([u, y, w]) => Math.hypot(u, w) > R || Math.abs(u) > hw || Math.abs(w) > d.wall / 2 + 0.2 || y < d.centre[1] - 0.01 || y > top)) continue;
+      const ws = loc.map((q) => q[2]);
+      if (Math.min(...ws) < -0.01 && Math.max(...ws) > 0.01) { bad.push(`${d.id}: a reveal triangle spans the wall's mid-plane`); break; }
+    }
+  }
+  return bad;
+}
+
 describe('every opening in the castle: one owner, one outline, room to open', () => {
-  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[];
+  let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], shell: { p: V3[]; n: V3 }[];
   beforeAll(() => {
     const isl = islandCastle(); // the castle as main.ts lays it, cut by the interior as main.ts does
     B = isl.builder; lights = isl.lights as WindowInput[];
     inner = buildInterior(mats(), B, { heightAt });
-    P = inner.plan;
+    P = inner.plan; shell = shellTriangles(inner.groups);
     walls = B.walls; tris = trianglesOf(B);
   }, 300_000);
 
@@ -210,6 +248,14 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   it('holds every invariant', () => {
     expect(openingFaults(walls, P, masses(), tris)).toEqual([]);
   }, 120_000);
+
+  it('lights each half of a reveal from one room', () => {
+    expect(revealFaults(P, shell)).toEqual([]);
+    // a soffit quad of gate-inner as one face-to-face triangle pair, as before 2026-11-06
+    const d = P.doors.find((x) => x.id === 'gate-inner')!, y = d.centre[1] + d.height;
+    const W = (u: number, w: number): V3 => [d.centre[0] + d.along[0] * u + d.normal[0] * w, y, d.centre[2] + d.along[1] * u + d.normal[1] * w];
+    expect(revealFaults(P, [{ p: [W(-0.5, -d.wall / 2), W(0.5, -d.wall / 2), W(0.5, d.wall / 2)], n: [0, -1, 0] }])).toEqual(['gate-inner: a reveal triangle spans the wall\'s mid-plane']);
+  });
 
   it('reports what it is for', () => {
     // a door slid into the stair tower's corner of the north wing, a window over the stair door, a slab left in

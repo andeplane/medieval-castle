@@ -47,8 +47,18 @@ describe('2D helpers', () => {
     expect(headRise('flat', 1)).toBe(0);
     expect(headRise('round', 1)).toBe(0.5);
     // a low pointed head (rise below half the width) is still two-centred and symmetric
+    // (the same curve as the leaves' headTop and builder.pointedArch: the apex on the centre line at h + rise)
     const p = archOutline(1, 0, 2, 2, 'pointed', 0.4);
-    expect(Math.max(...p.map((q) => q[1]))).toBeCloseTo(2.4);
+    expect(p[2 + HEAD_SEG / 2][0]).toBeCloseTo(1, 9);
+    expect(p[2 + HEAD_SEG / 2][1]).toBeCloseTo(2.4, 9);
+    for (let i = 1; i < HEAD_SEG; i++) {
+      const [a, b] = [p[2 + i], p[2 + HEAD_SEG - i]];
+      expect(a[0] - 1).toBeCloseTo(1 - b[0], 9);
+      expect(a[1]).toBeCloseTo(b[1], 9);
+    }
+    // gate-inner: 3.4 m wide, 1.4 m rise (2026-11-06: was lopsided, its apex 0.55 m off the centre line)
+    const g = archOutline(0, 0, 3.4, 2.8, 'pointed', 1.4);
+    expect(g[2 + HEAD_SEG / 2][0]).toBeCloseTo(0, 9);
   });
 });
 
