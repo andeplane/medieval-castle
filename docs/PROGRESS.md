@@ -19,6 +19,10 @@ Tests
 - `tests/keypaths.test.ts` "N0-3 → the cellar stair door → its top landing … → down the flight to the N cellar": the player's motor walks through the door, stays at 2.6 (on main it falls), then down to `N-c1`.
 - `tests/stairs.test.ts`: `going` keeps the treads and gives the rest to a closed top landing.
 
+Walked in the game (headless WebGL2, `?webgl&shot`, `__game.player.teleport` 1.6 m in front of the door in N0-3, door opened, `__game.input(['KeyW'], 1100)`): on main the player ends at y −1.8 in the stairwell (Anders's view reproduced, `before-walked-end-look-up-flight.png`); on the branch at y 2.6 on the landing, lowest point 2.6. Captures in `castle-plan/under-stairs/` (`before-*` main, `after-*` branch; bookmarks courtyard 665 draw calls / 5.26 M triangles, hall 328 / 3.98 M, gate 464 / 4.30 M, unchanged).
+
+Not fixed, seen in the captures on main and branch alike: the cellar stair's treads render as one flat, bright grey-white strip (no step edges read) in headless WebGL2; the N0-3 leaf swings into the 1.25 m stairwell and stands across the landing when open.
+
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
 Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.
