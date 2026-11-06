@@ -19,7 +19,7 @@ export interface NearFarOpts {
 }
 
 const _m = new THREE.Matrix4(), _mi = new THREE.Matrix4(), _c = new THREE.Vector3(), _f = new THREE.Vector3(), _dir = new THREE.Vector3();
-const _up = new THREE.Vector3(0, 1, 0);
+const _up = new THREE.Vector3(0, 1, 0), _fwd = new THREE.Vector3();
 const PULL = 800; // m from the box centre back towards the sun
 
 export class NearFarShadowNode extends ShadowBaseNode {
@@ -30,6 +30,7 @@ export class NearFarShadowNode extends ShadowBaseNode {
   private axisY = uniform(new THREE.Vector3(0, 1, 0)).setGroup(renderGroup);
   private nearHalfU = uniform(1).setGroup(renderGroup);
   private lastSun = new THREE.Vector3();
+  private lastFrame = -1;
   private o: NearFarOpts;
   private nodes: { near: THREE.Node<'vec4'>; far: THREE.Node<'vec4'> } | null = null;
 
@@ -84,9 +85,14 @@ export class NearFarShadowNode extends ShadowBaseNode {
     if (parent && l.parent === null) { parent.add(l); parent.add(l.target); }
   }
 
-  updateBefore(): undefined {
+  updateBefore(frame?: { frameId: number }): undefined {
     const light = this.light as THREE.DirectionalLight, cam = this.camera;
     if (!cam) return;
+    // once per frame: this runs for every render that uses the sun (the AO pre-pass, the main pass and the
+    // water reflection's mirrored camera). three re-renders an auto-updating shadow map once per frame per
+    // camera, so the reflection drew the near map a second time from the same box; it is now asked for
+    // explicitly, once a frame, and placed from the view camera only.
+    if (frame) { if (frame.frameId === this.lastFrame) return; this.lastFrame = frame.frameId; }
     const o = this.o;
     _dir.subVectors(light.target.position, light.position).normalize();
     if (!_dir.equals(this.lastSun)) {
@@ -99,11 +105,12 @@ export class NearFarShadowNode extends ShadowBaseNode {
     // near level: a box ahead of the camera, off when flying high (the far map is enough there)
     const pos = cam.getWorldPosition(_f);
     const on = pos.y < o.nearMaxHeight && Math.hypot(pos.x - o.centre.x, pos.z - o.centre.z) < o.farHalf;
-    this.near.shadow.autoUpdate = on;
+    this.near.shadow.autoUpdate = false;
+    this.near.shadow.needsUpdate = on;
     if (on) {
-      const fwd = cam.getWorldDirection(new THREE.Vector3());
+      const fwd = cam.getWorldDirection(_fwd);
       fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
-      const c = pos.clone().addScaledVector(fwd, o.nearAhead);
+      const c = pos.addScaledVector(fwd, o.nearAhead);
       this.place(this.near, c, o.nearHalf, o.nearMap);
       this.nearCentre.value.copy(this.near.position).addScaledVector(_dir, PULL);
       this.nearHalfU.value = o.nearHalf;

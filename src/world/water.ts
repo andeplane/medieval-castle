@@ -24,7 +24,10 @@ export function makeWater(sunDir: THREE.Vector3) {
   const cosT = max(dot(eye, nWorld), 0);
   const fres = float(0.02).add(float(0.98).mul(pow(float(1).sub(cosT), 5)));
 
-  const refl = reflector({ resolutionScale: 0.5 });
+  // bounces: false renders the reflection once per frame. With the default (true) it re-renders for every
+  // pass that draws the water, so the AO normal pre-pass and the main pass each drew the whole mirrored
+  // scene again from the same camera (2 × ~1.1 M triangles and ~85 draw calls a frame, for the same image).
+  const refl = reflector({ resolutionScale: 0.5, bounces: false });
   const dist = positionWorld.sub(cameraPosition).length();
   refl.uvNode = refl.uvNode!.add(nWorld.xz.mul(float(0.25).div(dist.add(8))).mul(4));
   const deep = vec3(0.012, 0.022, 0.018);

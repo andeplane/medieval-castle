@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-11-06: frame cost (branch `claude/project-thread-ns4g2v-perf`)
+
+Anders: "game is INSANELY slow" (Mac, Chrome, WebGPU; the Mac was in Low Power Mode at the time).
+
+How it was measured: headless WebGL2 (SwiftShader), 1600×900, `?shot`, with `backend.draw` wrapped to count draw calls and triangles per pass (render target, shadow camera, and whether the water reflector is rendering), plus `__game.state()`. SwiftShader on a shared, loaded machine (load average 25–30) gives no usable frame times, so only counts are compared.
+
+What dominated: the moat's planar reflection drew the whole scene **twice a frame** at half resolution. `reflector()` defaults to `bounces: true`, which re-renders the mirror for every render that draws the water: the AO normal pre-pass and the main pass, from the same camera. That was ~2.3 M of the 5.6 M triangles and ~170 of the ~720 draw calls in the courtyard. Each of those mirror renders also counted as a new camera for three's shadows, so the near sun shadow map (auto-update) was drawn a second time per frame from the same box.
+
+Changes (no look change intended)
+- `src/world/water.ts`: `reflector({ resolutionScale: 0.5, bounces: false })`: the reflection renders once per frame.
+- `src/render/shadows.ts`: the near shadow map is requested once per frame (`needsUpdate`, guarded by the frame id) instead of `autoUpdate`, so other cameras in the frame (the reflector) do not redraw it; no per-frame vector allocations.
+- `src/main.ts`: cellar and tunnel door leaves cast no sun shadow (the interior shell already does not; no sun reaches them).
+- `src/render/resolution.ts`, `src/main.ts`: dynamic resolution starts at the 1440p pixel budget (`startRatio`, 2560×1440 device pixels, on the 0.25 step grid) and climbs to the screen ratio (≤ 2) when the GPU has headroom. A full-screen 14" MacBook Pro starts at 1.5, a 16" at 1.25, instead of 2 (6–8 M pixels, twice the brief's target), which the governor took several seconds to step down from.
+
+| bookmark | draw calls before → after | triangles before → after | shadow-pass calls |
+|---|---|---|---|
+| courtyard | 724 → 627 | 5,657,020 → 4,152,028 | 44 → 21 |
+| gate | 560 → 453 | 5,592,666 → 4,114,666 | 44 → 21 |
+| hero | 308 → 233 | 4,109,850 → 3,088,902 | 2 → 2 |
+| hall | 414 → 317 | 5,203,292 → 3,868,232 | 44 → 21 |
+
+Frame time: not measured (see above). The triangles saved are full scene passes (≈ 27 %), and the reflection's fragments too.
+
+Captures (`castle-plan/perf/`, `before-*` / `after-*`: hero, gate, courtyard, hall, same order and page): hall is pixel-identical; courtyard differs in 15 non-sky pixels; hero and gate differ only in the drifting clouds and their reflection on the moat (wall-clock animation). The reflection is still there.
+
+Assumption (visible, for Anders to veto): on a big retina screen the game starts at a lower render resolution (1.25–1.5×) and sharpens to 2× after a few seconds only if the GPU reports headroom (WebGPU timestamp queries). Without timestamps it stays at the start ratio. `?dynres=0` keeps the screen's ratio, `?scale=2` fixes it.
+
+Not done, for the visibility/culling owner
+- The reflection still renders the full scene (~1.1 M triangles, ~85 calls) when the moat cannot be seen: in the courtyard, in every room, underground. Skipping it when the camera is inside (`vis.state.inside`) or the water is off screen is the next biggest win.
+- The reflection also draws the interior groups and door leaves; the terrain's near mesh (353k triangles) is drawn in all three passes.
+- Not checked: real WebGPU on an M-series Mac, Low Power Mode, `?bench` numbers.
+
 ## 2026-11-06: the `gate-inner` arch's saw teeth (branch `claude/project-thread-ns4g2v-gate-arch`)
 
 The `gatepass` view showed triangular teeth round the head of the arch between the two gate-passage rooms (`castle-plan/gate-inner-teeth/before-gatepass.png`).
