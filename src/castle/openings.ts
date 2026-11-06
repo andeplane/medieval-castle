@@ -152,3 +152,63 @@ export function doorBox(pts: V2[]): Box {
   const ss = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   return { s0: Math.min(...ss) - 0.3, s1: Math.max(...ss) + 0.3, y0: Math.min(...ys), y1: Math.max(...ys) + 0.4 };
 }
+
+// ---------------------------------------------------------------- a round tower's spiral stair: its light slits
+
+/**
+ * A spiral stair's light slits: a narrow arrow slit (w × h) through the tower's drum, with a splayed
+ * embrasure behind it from a flat strip of the stair's wall, `facet` either side of the line through the
+ * two centres (the plan cuts that strip: plan.ts). The embrasure reaches `below` under the slit's sill and
+ * `above` over its head (interior/shell.ts), and keeps `clear` from every step stone, the floor and the ceiling.
+ */
+export const STAIR_SLIT = { w: 0.13, h: 1.0, facet: 0.5, below: 0.6, above: 0.4, clear: 0.1 };
+
+/** What the slits need to know of the stair behind a drum (plan.ts towerSpirals). */
+export interface SpiralBehind {
+  id: string; c: V2; R: number; floor: number; ceiling: number;
+  doors: { angle: number; hw: number }[];      // doors off its landings: angle round the stair's centre, half width
+  stonesAt(theta: number): [number, number][]; // step stones [bottom, top] on a vertical line at this angle
+}
+/** A slit as placed on its drum: the tangent strip it sits on, its dressing, where planned, where it went. */
+export interface DrumSlit { face: Face; d: Dressed; angle: number; s: number; y: number; at: { s: number; y: number } | null }
+
+/** The dressing of a slit or window on a drum (castle.ts curvedOpening): its trim surround and sill. */
+export const drumDressed = (w: number, h: number): Dressed => ({ hw: w / 2 + 0.3, below: 0.25, above: h + 0.25 });
+
+/**
+ * One slit per turn of the stair, on the line from the tower's centre through the stair's (where the wall
+ * is thinnest), in the middle of the height the steps leave free in front of the facet. Each keeps the
+ * windows' rule on its drum (bands, open air in front: `fits`), moving up or down within that height only;
+ * a turn with no room for one is left out (at: null). None where a landing door opens onto the facet.
+ */
+export function stairSlits(drum: { owner: string; c: V2; R: number; bands: [number, number][] }, st: SpiralBehind, others: Mass[]): DrumSlit[] {
+  const S = STAIR_SLIT, toStair = sub(st.c, drum.c), angle = Math.atan2(toStair[1], toStair[0]);
+  const half = Math.asin(Math.min(1, S.facet / st.R));
+  if (st.doors.some((d) => angleBetween(d.angle, angle) < half + d.hw / st.R)) return [];
+  // what stands in front of the facet: floor, ceiling and every stone across it (sampled 5 cm apart)
+  const n = Math.ceil((2 * S.facet) / 0.05);
+  const blocks: [number, number][] = [[-Infinity, st.floor], [st.ceiling, Infinity]];
+  for (let k = 0; k <= n; k++) blocks.push(...st.stonesAt(angle - half + (2 * half * k) / n));
+  blocks.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const b of blocks) { const m = merged[merged.length - 1]; if (m && b[0] <= m[1]) m[1] = Math.max(m[1], b[1]); else merged.push([b[0], b[1]]); }
+  const out: V2 = [Math.cos(angle), Math.sin(angle)], tan: V2 = [-out[1], out[0]], o = add(drum.c, scale(out, drum.R));
+  const d = drumDressed(S.w, S.h), L = d.hw + CLEAR + 0.01;
+  const face: Face = { owner: drum.owner, a: add(o, scale(tan, -L)), b: add(o, scale(tan, L)), out, bands: drum.bands };
+  const ok = (y: number) => clearOfBands(drum.bands, boxOf(d, L, y)) && fits(face, others, [], boxOf(d, L, y));
+  const slits: DrumSlit[] = [];
+  for (let i = 0; i + 1 < merged.length; i++) {
+    const lo = merged[i][1] + S.clear + S.below, hi = merged[i + 1][0] - S.clear - S.above - S.h; // the sill's range
+    if (hi < lo) continue;
+    const y = (lo + hi) / 2, steps = Math.floor((hi - lo) / 2 / 0.05);
+    let at: { s: number; y: number } | null = null;
+    for (let k = 0; k <= steps && !at; k++) for (const q of k ? [y + k * 0.05, y - k * 0.05] : [y]) if (!at && ok(q)) at = { s: L, y: q };
+    slits.push({ face, d, angle, s: L, y, at });
+  }
+  return slits;
+}
+
+/** Does a dressed box keep V_CLEAR from every band? */
+export const clearOfBands = (bands: [number, number][], b: Box) => bands.every(([y0, y1]) => b.y1 <= y0 - V_CLEAR + 1e-9 || b.y0 >= y1 + V_CLEAR - 1e-9);
+/** Unsigned angle between two directions, 0..π. */
+export const angleBetween = (a: number, b: number) => Math.abs(((((a - b) % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);

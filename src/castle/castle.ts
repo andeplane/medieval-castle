@@ -7,29 +7,32 @@ import { Builder, offsetPoly, pointedArch, roundArch, rect, at, wallFrame, type 
 import { GROUND, floorBase, FLOOR_HEIGHTS, TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, type TowerSpec } from './spec';
 import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFrame, stairTowerCentre, stairTowerPoly, type WingQuad } from './layout';
 import { buildPaving, wellCentre } from './paving';
-import { OPEN_W, OPEN_H, dressed, boxOf, fits, fitOpening, masses, doorHoleOn, doorBox, type Box, type Dressed, type Face, type Mass, type DoorHole } from './openings';
-import { planInterior, doorHoles, GATE } from './interior/plan';
+import { OPEN_W, OPEN_H, dressed, boxOf, fits, fitOpening, masses, doorHoleOn, doorBox, stairSlits, STAIR_SLIT, type Box, type Dressed, type Face, type Mass, type DoorHole, type SpiralBehind } from './openings';
+import { planInterior, doorHoles, towerSpirals, GATE } from './interior/plan';
 
 const G0 = GROUND - 1.6; // walls start below the ground so the terrain never shows a gap
 const BATTER_TOP = GROUND + 2.6;
 type V3 = [number, number, number];
 
-export interface WindowLight { p: V3; n: V3; w: number; h: number }
+/** A window or open slit the interior light takes daylight through (render/interiorMath WindowInput); glazed unless `kind`. */
+export interface WindowLight { p: V3; n: V3; w: number; h: number; kind?: 'open' }
 
 /** Every window, slit and loop the generator planned: where it was planned and where it went (null: left out). */
 export interface PlacedOpening { face: Face; kind: string; d: Dressed; s: number; y: number; at: { s: number; y: number } | null }
-interface Ctx { others: Mass[]; log: PlacedOpening[]; doors: DoorHole[]; seeded: WeakSet<Box[]> }
+interface Ctx { others: Mass[]; log: PlacedOpening[]; doors: DoorHole[]; spirals: SpiralBehind[]; seeded: WeakSet<Box[]> }
 
 /**
  * The castle's exterior. `doors` are the interior plan's doors (openings.ts DoorHole): every wall face a
  * door passes through is cut with the door's own outline, and windows are placed around them. Pass []
- * for a castle without interiors.
+ * for a castle without interiors. `spirals` are the round towers' stairs (plan.ts towerSpirals): each
+ * takes its light slits through the drum in front of it (openings.ts stairSlits).
  */
-export function buildCastle(r: Rng = rngFor('castle'), doors: DoorHole[] = doorHoles(planInterior())) {
+export function buildCastle(r: Rng = rngFor('castle'), doors?: DoorHole[], spirals?: SpiralBehind[]) {
+  if (!doors || !spirals) { const P = planInterior(); doors ??= doorHoles(P); spirals ??= towerSpirals(P); }
   const B = new Builder();
   B.doorHoles = doors;
   const lights: WindowLight[] = [];
-  const ctx: Ctx = { others: masses(), log: [], doors, seeded: new WeakSet() };
+  const ctx: Ctx = { others: masses(), log: [], doors, spirals, seeded: new WeakSet() };
   B.stoneFloor = GROUND - 0.5; // walls run 1.6 m into the ground; no stones where nobody can see them
   for (const w of wingQuads()) wing(B, r, w, lights, ctx);
   for (const t of TOWERS) t.kind === 'square' ? squareTower(B, r, t, lights, ctx) : roundTower(B, r, t, lights, ctx);
@@ -232,14 +235,15 @@ function roundParapetInner(B: Builder, r: Rng, cx: number, cz: number, R: number
 }
 
 /** Surface-mounted opening for curved walls: dark slit/window with a dressed surround. */
-function curvedOpening(B: Builder, cx: number, cz: number, R: number, a: number, y: number, w: number, h: number, glass: boolean, lights: WindowLight[]) {
+function curvedOpening(B: Builder, cx: number, cz: number, R: number, a: number, y: number, w: number, h: number, glass: boolean, lights: WindowLight[], room?: string) {
   const n: V2 = [Math.cos(a), Math.sin(a)], tan: V2 = [-Math.sin(a), Math.cos(a)];
   const p = (d: number): V3 => [cx + n[0] * (R + d), y + h / 2, cz + n[1] * (R + d)];
-  B.curved.push({ c: [cx, cz], R, a, y, w, h, glass });
+  B.curved.push({ c: [cx, cz], R, a, y, w, h, glass, ...(room ? { room } : {}) });
   B.box('trim', p(0.03), [w + 0.5, h + 0.5, 0.14], tan);
   B.box(glass ? 'glass' : 'void', p(0.11), [w, h, 0.02], tan);
   B.box('trim', [cx + n[0] * (R + 0.12), y - 0.1, cz + n[1] * (R + 0.12)], [w + 0.6, 0.16, 0.3], tan);
-  if (glass) lights.push({ p: [cx + n[0] * R, y + h / 2, cz + n[1] * R], n: [n[0], 0, n[1]], w, h });
+  // a slit with a room behind it is open: daylight comes in, and its room shows through it from outside
+  if (glass || room) lights.push({ p: [cx + n[0] * R, y + h / 2, cz + n[1] * R], n: [n[0], 0, n[1]], w, h, ...(glass ? {} : { kind: 'open' as const }) });
 }
 
 function stringCourse(B: Builder, poly: V2[], y: number, out = 0.13) {
@@ -520,9 +524,17 @@ function roundTower(B: Builder, r: Rng, t: Extract<TowerSpec, { kind: 'round' }>
     const q = place(ctx, { owner: t.id, a: add(o, scale(tan, -half)), b: add(o, scale(tan, half)), out: n, bands: rb }, [], glass ? 'window' : 'slit', half, y, d, 0);
     if (q) curvedOpening(B, cx, cz, R, a, q.y, w, h, glass, lights);
   };
+  // the spiral stair in the drum's thickness takes its light slits in front of it (openings.ts stairSlits);
+  // the decorative spiral of slits keeps off the drum there
+  const sp = ctx.spirals.find((s) => s.id === `${t.id}-stair`);
+  if (sp) for (const q of stairSlits({ owner: t.id, c: [cx, cz], R, bands: rb }, sp, ctx.others)) {
+    ctx.log.push({ face: q.face, kind: 'slit', d: q.d, s: q.s, y: q.y, at: q.at });
+    if (q.at) curvedOpening(B, cx, cz, R, q.angle, q.at.y, STAIR_SLIT.w, STAIR_SLIT.h, false, lights, sp.id);
+  }
+  const byStair = (a: number) => !!sp && Math.hypot(cx + Math.cos(a) * R - sp.c[0], cz + Math.sin(a) * R - sp.c[1]) < sp.R + 1.2;
   const outward = Math.atan2(cz, cx);
   let a = outward - 1.2;
-  for (let y = GROUND + 4; y < t.top - 4; y += 2.6) { drum(a, y, 0.13, 1.25, false); a += 0.75; }
+  for (let y = GROUND + 4; y < t.top - 4; y += 2.6) { if (!byStair(a)) drum(a, y, 0.13, 1.25, false); a += 0.75; }
   towerFloors(t.top).forEach((y, fl) => {
     if (fl < 2) return;
     for (const off of [-0.5, 0.55]) { if (r() < 0.3) continue; drum(outward + off + (r() - 0.5) * 0.15, y + 1.2, 0.62, fl % 2 ? 1.5 : 1.15, true); }

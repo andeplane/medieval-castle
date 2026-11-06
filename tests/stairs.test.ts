@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { Builder } from '../src/castle/builder';
 import {
   buildStair, planStair, stairCollisionRamp, stairNavPath, STAIR_RULES, spiralTreadY, spiralLandingAngles, spiralStartFor,
-  validateStair, drumWall, type SpiralPlan, type StairPlan, type StairOpts,
+  validateStair, drumWall, spiralStonesAt, spiralNosingY, type SpiralPlan, type StairPlan, type StairOpts,
 } from '../src/castle/interior/stairs';
 import { probeStair, VerticalCaster, binTriangles, meshHealth } from '../src/castle/interior/stairprobe';
 import type { StairSpec } from '../src/castle/interior/types';
@@ -54,6 +54,15 @@ function checkProbe(s: StairSpec, o: StairOpts = {}) {
 }
 
 describe('spiral stairs', () => {
+  it('lists the step stones on a vertical line through the drum, one per turn (light slits keep off them)', () => {
+    const p = planStair(TEST_SPIRAL) as SpiralPlan, last = p.steps[p.steps.length - 1];
+    const th = p.theta0 + p.dir * (p.steps[3].a0 + p.steps[3].a1) / 2, st = spiralStonesAt(p, th);
+    expect(st.length).toBeGreaterThanOrEqual(Math.floor((last.a1 - p.steps[3].a1) / (Math.PI * 2)));
+    for (let i = 1; i < st.length; i++) expect(st[i][0]).toBeGreaterThan(st[i - 1][1]); // a gap between the turns
+    const psi = (p.steps[3].a0 + p.steps[3].a1) / 2, nose = spiralNosingY(p, psi);
+    expect(st[0]).toEqual([p.steps[3].solid ? p.yFloor : nose - p.T + p.steps[3].soffitJit, Math.max(p.steps[3].y, nose)]);
+    expect(spiralStonesAt(p, th + 2 * Math.PI)).toEqual(st);
+  });
   it('plans the test stair within the rules', () => {
     const p = planStair(TEST_SPIRAL) as SpiralPlan;
     expect(p.stats.problems).toEqual([]);
