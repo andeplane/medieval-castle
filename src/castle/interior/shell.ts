@@ -191,17 +191,28 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const B = groupOf(owner).B;
     // the stop: just behind the shut leaf's back face (doorGeom places the leaf)
     const rebT = (swing === 1 ? 1 : -1) * stopPlane(d);
-    // reveal: from face 0 to the rebate plane with one outline, then the other to face 1
+    // reveal: from face 0 to the rebate plane with one outline, then the other to face 1.
+    // A band that crosses the wall's mid-plane is split there: the interior light gives each triangle the
+    // room nearest its centre (render/interiorMath tagTriangles), so a quad from face to face would light
+    // its two triangles from the two rooms and show saw teeth round the head (the gate-inner arch).
     const ring = (o: V2[], tA: (u: number) => number, tB: (u: number) => number) => {
+      const cx = o.reduce((s, v) => s + v[0], 0) / o.length, cy = o.reduce((s, v) => s + v[1], 0) / o.length;
       for (let i = 0; i < o.length; i++) {
         const p = o[i], q = o[(i + 1) % o.length];
-        const cx = o.reduce((s, v) => s + v[0], 0) / o.length, cy = o.reduce((s, v) => s + v[1], 0) / o.length;
         const mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
         const nn = norm3([al[0] * (cx - mx), cy - my, al[1] * (cx - mx)]);
-        const A = W(p[0], p[1], tA(p[0])), Bq = W(q[0], q[1], tA(q[0])), C = W(q[0], q[1], tB(q[0])), D = W(p[0], p[1], tB(p[0]));
-        const seg = Math.hypot(q[0] - p[0], q[1] - p[1]), dep = Math.abs(tB(p[0]) - tA(p[0]));
-        B.bins.trim.tri(A, Bq, C, nn, [0, 0], [seg / 2, 0], [seg / 2, dep / 2]);
-        B.bins.trim.tri(A, C, D, nn, [0, 0], [seg / 2, dep / 2], [0, dep / 2]);
+        const seg = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        const crosses = (u: number) => Math.min(tA(u), tB(u)) < -0.01 && Math.max(tA(u), tB(u)) > 0.01;
+        const cuts = crosses(p[0]) && crosses(q[0]) ? [tA, () => 0, tB] : [tA, tB];
+        let v0 = 0;
+        for (let k = 0; k + 1 < cuts.length; k++) {
+          const ta = cuts[k], tb = cuts[k + 1];
+          const A = W(p[0], p[1], ta(p[0])), Bq = W(q[0], q[1], ta(q[0])), C = W(q[0], q[1], tb(q[0])), D = W(p[0], p[1], tb(p[0]));
+          const v1 = v0 + Math.abs(tb(p[0]) - ta(p[0])) / 2;
+          B.bins.trim.tri(A, Bq, C, nn, [0, v0], [seg / 2, v0], [seg / 2, v1]);
+          B.bins.trim.tri(A, C, D, nn, [0, v0], [seg / 2, v1], [0, v1]);
+          v0 = v1;
+        }
       }
     };
     if (!leafy) ring(clear, (u) => depthOn(0, u), (u) => depthOn(1, u));
