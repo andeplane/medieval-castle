@@ -21,7 +21,9 @@ describe('localBackend', () => {
     expect(c.width).toBe(100);   // under 30 fps: no redraw yet
     clock.frame(30);
     expect([c.width, c.height]).toEqual([200, 80]);
-    expect(gl.uniforms.get('uLook')).toEqual([1, -1]);
+    const [lx, ly] = gl.uniforms.get('uLook') as number[];   // easing toward the pointer
+    expect(lx).toBeGreaterThan(0);
+    expect(ly).toBeCloseTo(-lx);
     let done = false;
     void b.whenDone().then(() => { done = true; });
     b.progress(1);
