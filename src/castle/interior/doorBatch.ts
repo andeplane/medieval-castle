@@ -21,7 +21,14 @@ export const threeBatch: BatchFactory = (name, material, maxInstances, maxVertic
   const mesh = new THREE.BatchedMesh(Math.max(1, maxInstances), Math.max(3, maxVertices), 0, material);
   mesh.name = name; mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.sortObjects = false;      // opaque: no per-frame sort
-  mesh.frustumCulled = false;    // instances move; per-instance culling still runs (perObjectFrustumCulled)
+  mesh.frustumCulled = false;    // instances move
+  // No per-instance culling either. three.js keeps ONE instance-id table per batch (its indirect texture)
+  // but records the draw ranges per pass; with WebGPU the table written for the last camera of the frame
+  // (the sun's shadow camera, or the view) is the one every pass reads, so a pass culled for another
+  // camera drew leaf, grille and windlass parts with other instances' matrices: leaves beside their
+  // doorways, doors vanishing, a strap on the floor (2026-11-06). Without culling (and without sorting)
+  // the table depends only on setVisibleAt, the same for every pass; a few hundred leaves cost little.
+  mesh.perObjectFrustumCulled = false;
   return {
     object: mesh,
     addGeometry(b) {

@@ -1,8 +1,12 @@
 // Room/cell visibility for the interior (game-performance-optimization: cells and portals beat generic
 // occlusion indoors). Each frame: find the camera's room, then show
-//   inside:  its group, the groups of rooms joined to it by a door or stair, stairs within 12 m;
-//   outside: groups within 40 m that have a window or door facing the camera (the windows of the
-//            others show the dark fallback pane, render/windowGlass.ts).
+//   inside:  its group, the groups of rooms joined to it by a door or stair, stairs within 12 m, and,
+//            unless deep inside, every group seen through one of its doorways (below);
+//   outside: every group (stair towers too) with a window within 40 m or a doorway within 120 m facing
+//            the camera (the windows of the others show the dark fallback pane, render/windowGlass.ts).
+// A doorway has no fallback: a room hidden behind one shows as a black hole, so whatever can be seen
+// through an opening is drawn, at every distance at which the opening itself is drawn. Culling never
+// adds, moves or removes an opening or a door (tests/visibility.test.ts checks the whole castle).
 // Underground (camera below the terrain) everything outdoors is hidden: terrain, water, vegetation,
 // the castle exterior, its stones and the gate; deep inside a room with no open way out within 40 m
 // the vegetation is hidden too.
@@ -13,8 +17,17 @@ import { roomAt } from '../render/interiorMath';
 
 export interface GroupInfo { key: string; zone: string; floor: number; min: V3; max: V3; rooms: number[]; apertures: { p: V3; n: V3; open: boolean }[] }
 
-export interface VisOpts { far: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number }
-const DEF: VisOpts = { far: 40, stairs: 12, deepClear: 40 };
+export interface VisOpts { far: number; farOpen: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number }
+const DEF: VisOpts = { far: 40, farOpen: 120, stairs: 12, deepClear: 40 };
+
+/** Is group g seen from p through one of its openings: one facing p, a window within `far`, a doorway within `farOpen`? */
+export function seenThrough(g: GroupInfo, p: V3, o: Pick<VisOpts, 'far' | 'farOpen'>, openOnly = false) {
+  return g.apertures.some((a) => {
+    if (openOnly && !a.open) return false;
+    const dx = p[0] - a.p[0], dy = p[1] - a.p[1], dz = p[2] - a.p[2];
+    return dx * a.n[0] + dy * a.n[1] + dz * a.n[2] > 0 && Math.hypot(dx, dy, dz) < (a.open ? o.farOpen : o.far);
+  });
+}
 
 const boxDist = (g: GroupInfo, p: V3) => Math.hypot(
   Math.max(g.min[0] - p[0], 0, p[0] - g.max[0]), Math.max(g.min[1] - p[1], 0, p[1] - g.max[1]), Math.max(g.min[2] - p[2], 0, p[2] - g.max[2]));
@@ -58,18 +71,15 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
       const d = boxDist(g, cam);
       if (d < 1) { visible[i] = true; return; }
       if (g.key === 'doors') { visible[i] = d < o.far; return; }
-      if (g.key.startsWith('stairs:')) { visible[i] = d < o.stairs * 0.8; return; }
-      if (d > o.far) return;
-      visible[i] = g.apertures.some((a) => {
-        const dx = cam[0] - a.p[0], dy = cam[1] - a.p[1], dz = cam[2] - a.p[2];
-        return dx * a.n[0] + dy * a.n[1] + dz * a.n[2] > 0 && Math.hypot(dx, dy, dz) < o.far;
-      });
+      visible[i] = (g.key.startsWith('stairs:') && d < o.stairs * 0.8) || seenThrough(g, cam, o);
     });
   }
   // deep inside: no open way out (door, grille) in the visible cells within reach
   let deep = false;
   if (room >= 0) {
     deep = !groups.some((g, i) => visible[i] && g.apertures.some((a) => a.open && Math.hypot(cam[0] - a.p[0], cam[1] - a.p[1], cam[2] - a.p[2]) < o.deepClear));
+    // near a way out, the doorways of other buildings are in view through it (the courtyard from the gate passage)
+    if (!deep) groups.forEach((g, i) => { if (!visible[i] && !underground && seenThrough(g, cam, o, true)) visible[i] = true; });
   }
   return { room, inside: room >= 0, deep: deep || underground, underground, visible };
 }

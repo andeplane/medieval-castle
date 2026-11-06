@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-11-06: things popping in the gate passage and courtyard (branch `claude/project-thread-ns4g2v-gate-popin`)
+
+Anders, on the live site (WebGPU): things in the gate passage pop in and out as he walks up (an iron bracket, a ring, a dark bar on the floor); in the courtyard a door leaf stands on the stair tower's wall beside a black slot, doors vanish or shift between two nearby poses, a big arch is a black void.
+
+Two causes, both "a cull that changes what exists":
+- Door leaves, the portcullis and its windlass are `BatchedMesh` instances (`interior/doorBatch.ts`) with three.js per-instance frustum culling. three.js keeps one instance-id table per batch (its indirect texture) but records draw ranges per pass. Under WebGPU the table written for the last camera of the frame (the sun's shadow camera or the view) is the one every pass reads, so the view drew leaf, grille and windlass parts with other instances' matrices: leaves beside their doorways, leaves missing, a pawl or strap on the passage floor, and a set that changes with every step. Fix: `perObjectFrustumCulled = false` (and no sorting), so the table depends only on `setVisibleAt`. `tests/doors.test.ts` drives the real BatchedMesh with two cameras in both draw formats and asserts one table.
+- Room culling (`world/visibility.ts`) from outside: a stair tower was shown only within 9.6 m and ignored its doorway, and every room was cut at 40 m even through an open doorway. Beyond 9.6 m the courtyard's stair door showed no reveal and no stair (a see-through slot, with its leaf standing alone on the wall). Now a group is drawn when one of its openings faces the camera: windows within 40 m (the dark fallback pane covers the rest), doorways within 120 m (nothing covers a hidden room behind a doorway); near a way out, the doorways of other buildings count from inside too.
+
+Tests
+- `tests/world.test.ts` (whole castle, same `createVisibility` and bake apertures as main.ts): from several hundred poses in front of every outdoor doorway (1.5–60 m, ±4 m aside, two eye heights) the room behind and the leaf are drawn; from the middle of every room, every room behind its doors is drawn; no real stone (any LOD level: the levels are one stone set) lies in a doorway. The old visibility fails it (stair tower at 12–20 m, gate passage at 40–60 m).
+- `tests/visibility.test.ts`: stair tower through its door, the 120 m doorway reach, inside-near-a-way-out.
+- AGENTS.md: rule "one model for visibility and LOD".
+
+Not changed: the light budget (`light/budget.ts`) still lights only the 8 strongest fires within 1.6 × range of the eye, fading in over its fade time, so a torch's glow on the passage wall still fades in as you walk up (its flame is always drawn). Assumption: this is LOD of the look, not of what exists.
+
 ## 2026-11-05: one owner per wall opening; door prompt and door clipping (branch `door-prompt-clipping`)
 
 Anders: "what door?" (`castle-plan/feedback/door-prompt-floor.png`: "Open door" while looking at the floor), "some clipping error on doors, please fix", then "rethink and redo. do better". The coordinator added `courtyard-door-cut.png` and `CLIPPING.md`.
