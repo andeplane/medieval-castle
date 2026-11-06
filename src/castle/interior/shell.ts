@@ -32,6 +32,15 @@ export interface ShellResult {
 export interface ShellDeps { heightAt?: (x: number, z: number) => number }
 
 const VAULT_K = 12;
+/**
+ * How far behind a room's walls the castle is carved away. The castle is overlapping shells, so tower
+ * drums and wing faces run through the wall masses, some flush with a room wall or a few cm behind it,
+ * facing the room. The stone materials push each pixel back to where its parallax ray hits (pixel depth
+ * offset, render/materials.ts, up to pom.depth = 6 cm behind the face), and in the deep joints such a
+ * hidden face won the depth test: sunlit exterior stone, white at the room's exposure, in specks along
+ * the line where it crossed the wall. Nothing the castle keeps may lie this close behind a room wall.
+ */
+export const BEHIND = 0.1;
 
 interface Hole { pts: V2[]; kind: 'door' | 'window'; id?: string }
 interface Edge { a: V2; b: V2; n: V2; L: number; holes: Hole[] }
@@ -124,7 +133,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const g = groupOf(r); g.rooms.push(r.id);
     if (r.zone === 'tunnel' && !P.round[r.id]) { tunnelRoom(g.B, r); tunnelCarve(r); continue; }
     cell(g.B, r);
-    carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.02, r.y1 + (P.vault[r.id] ? 0.02 : 0.02)));
+    carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.02, r.y1 + 0.02, BEHIND));
   }
   for (const s of P.stairs) { const r = room.get(s.id); buildStair(r ? groupOf(r).B : groupOf(room.get(s.spaces[0])!).B, s, stairOpts(P, s)); }
 

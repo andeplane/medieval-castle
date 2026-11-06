@@ -25,7 +25,7 @@ import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, type PlanX } from '../src/castle/interior/plan';
 import { placeLeaves, leafPoint, leafDepth, m4swing, headRise, LIP, type LeafPlace } from '../src/castle/interior/doorGeom';
-import { archOutline } from '../src/castle/interior/geom';
+import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
 import { mats, islandCastle } from './world';
@@ -200,6 +200,33 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
   return bad;
 }
 
+/**
+ * Castle surfaces lying just behind a room's walls (`depth` m or less, from 2 mm outside the face). The
+ * stone materials push each pixel back by up to their parallax depth (6 cm), so a castle face this close
+ * behind a room wall shows through its joints: white specks of sunlit stone in a firelit room. Sampled
+ * every 0.2 m over every wall of every room cell (tunnels are carved and drawn on their own).
+ */
+function hiddenFaceFaults(P: PlanX, tris: Tri[], depth: number): string[] {
+  const out = new Map<string, number>();
+  for (const r of P.rooms) {
+    if (r.zone === 'tunnel') continue;
+    const p = orient(r.poly);
+    for (let i = 0; i < p.length; i++) {
+      const a = p[i], b = p[(i + 1) % p.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (L < 0.2) continue;
+      const e: V2 = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], n: V2 = [e[1], -e[0]]; // outward of a CCW outline
+      const lo = [Math.min(a[0], b[0]) - 0.2, r.y0, Math.min(a[1], b[1]) - 0.2], hi = [Math.max(a[0], b[0]) + 0.2, r.y1, Math.max(a[1], b[1]) + 0.2];
+      const near = tris.filter((t) => t.hi[0] > lo[0] && t.lo[0] < hi[0] && t.hi[1] > lo[1] && t.lo[1] < hi[1] && t.hi[2] > lo[2] && t.lo[2] < hi[2]);
+      if (!near.length) continue;
+      for (let s = 0.1; s < L - 0.05; s += 0.2) for (let y = r.y0 + 0.1; y < r.y1 - 0.05; y += 0.2) {
+        const o: V3 = [a[0] + e[0] * s + n[0] * 0.002, y, a[1] + e[1] * s + n[1] * 0.002], d: V3 = [n[0] * depth, 0, n[1] * depth];
+        if (near.some((t) => crosses(o, d, t))) out.set(r.id, (out.get(r.id) ?? 0) + 1);
+      }
+    }
+  }
+  return [...out].map(([id, k]) => `${id}: castle surface within ${Math.round(depth * 100)} cm behind its walls at ${k} points`);
+}
+
 /** The triangles of interior groups (world space). */
 function groupTris(gs: InteriorGroup[]): Tri[] {
   const B = { bins: {} as Record<string, { pos: number[] }> };
@@ -335,6 +362,19 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   it('holds every invariant', () => {
     expect(openingFaults(walls, P, masses(), tris)).toEqual([]);
   }, 120_000);
+
+  it('leaves no castle surface just behind a room wall (it shows through the parallax joints)', () => {
+    expect(hiddenFaceFaults(P, tris, 0.08)).toEqual([]);
+  }, 120_000);
+
+  it('finds a castle face just behind a room wall', () => {
+    // a castle face 3 cm behind the first wall of the undercroft N0-2
+    const r = P.rooms.find((x) => x.id === 'N0-2')!, p = orient(r.poly);
+    const [a, b] = [p[0], p[1]], L = Math.hypot(b[0] - a[0], b[1] - a[1]), nn: V2 = [((b[1] - a[1]) / L) * 0.03, (-(b[0] - a[0]) / L) * 0.03];
+    const A: V3 = [a[0] + nn[0], r.y0 + 0.5, a[1] + nn[1]], B: V3 = [b[0] + nn[0], r.y0 + 0.5, b[1] + nn[1]], C: V3 = [b[0] + nn[0], r.y0 + 2, b[1] + nn[1]];
+    const shard: Tri = { a: A, b: B, c: C, lo: [0, 1, 2].map((j) => Math.min(A[j], B[j], C[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(A[j], B[j], C[j])) as V3 };
+    expect(hiddenFaceFaults(P, [...tris, shard], 0.08).some((x) => x.startsWith('N0-2: castle surface within 8 cm'))).toBe(true);
+  });
 
   it('lights each half of a reveal from one room', () => {
     expect(revealFaults(P, shell)).toEqual([]);
