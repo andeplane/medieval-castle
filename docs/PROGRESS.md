@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-11-06: the `gate-inner` arch's saw teeth (branch `claude/project-thread-ns4g2v-gate-arch`)
+
+The `gatepass` view showed triangular teeth round the head of the arch between the two gate-passage rooms (`castle-plan/gate-inner-teeth/before-gatepass.png`).
+
+Root cause: light, not geometry. The doorway's faces, hole and carve were whole: no gap, no overlap, the hole matches the outline. The reveal (shell.ts `ring`) drew each soffit segment as one quad from face to face, split into two triangles. The interior light tags each triangle with the room nearest its centre (`render/interiorMath.ts tagTriangles`). So one triangle of every quad was lit as gate-0 (sunlit through the gate) and the other as gate-1 (darker). The result was light and dark teeth in turn. Every door had this; it shows most where the two rooms are lit very differently.
+
+Done
+- **Reveals split at the wall's mid-plane** (`shell.ts`): a band that crosses it is drawn as two bands, so each triangle sits on one side and takes that side's room. The UVs run on across the split.
+- **Pointed heads below half the width are symmetric** (`geom.ts archOutline`). A 0.42 w pointed head has its two centres past the centre line. The outline's right arc stopped 0.55 m past the centre line and the left one 1.0 m short of it, so the gate-inner, gate-court and gate-main holes, reveals and carves were lopsided. The arc now ends on the centre line, as the leaves (`headTop`) and the castle's gate voussoirs (`builder.pointedArch`) already do. The head has a ~2.5 cm dip at the apex, the same shape as the voussoirs.
+- Tests: `world.test.ts` checks every door: no reveal triangle reaches both sides of the wall's mid-plane, and an injected face-to-face soffit triangle is reported. On main this lists every door. `interior-geom.test.ts` checks that a low pointed head is symmetric with its apex on the centre line, and covers the gate-inner size.
+
+Captures (`castle-plan/gate-inner-teeth/`): `before-*.png` and `after-*.png` for `gatepass`, `courtyard` and `gate`. The teeth are gone, and the head is symmetric.
+
+Cost (headless WebGL2): the interior grows from 239,714 to 245,082 triangles (+5,368, the split reveal bands). Draw calls are unchanged (gatepass 338, courtyard 732, gate 564). Frame triangles: gatepass 4,992,110 → 4,992,285, courtyard 5,670,568 → 5,675,922, gate 5,598,990 → 5,600,196.
+
+Note for captures: a long-running `vite` dev server served the old transformed modules after the sources changed (the first "after" run matched main to the triangle). Restart the server before capturing, and check `interior.triangles` in `__game.state()`.
+
+Not checked: WebGPU (the captures are headless WebGL2), and the walk-mode view close to the arch. The light seam at the mid-plane of each reveal is now a straight line: it shows where the two rooms' light differs strongly. No other door was looked at in a capture.
+
 ## 2026-11-05: one owner per wall opening; door prompt and door clipping (branch `door-prompt-clipping`)
 
 Anders: "what door?" (`castle-plan/feedback/door-prompt-floor.png`: "Open door" while looking at the floor), "some clipping error on doors, please fix", then "rethink and redo. do better". The coordinator added `courtyard-door-cut.png` and `CLIPPING.md`.
@@ -60,7 +79,7 @@ Still open
 - Shut leaves and the reveals round them render black from the courtyard (`after-court-*-out.png`; main is the same, `main-court-court_E0-2-out.png`). It is light, not culling: from that pose the room behind is shown (`isRoomVisible` true). The leaf has no room tag, so it gets the ambient floor and the sun, which a reveal over 1 m deep shades. The reveal's outer half is tagged to a room whose door aperture is shut, and the exposure is set for the sunlit courtyard. The fix belongs to the interior light (`src/render/interiorLight.ts`): give a door's outer reveal and the leaf's outer face the outdoor sky light.
 - A battered plinth strip still leans out beside the stair tower at the N wing junction. It is not a door.
 - The SE spiral's light slits were not touched.
-- The `gate-inner` arch (between the two gate-passage rooms) shows triangular teeth round its head in the `gatepass` view. It is the same on main (`castle-plan/doors-fix/main-view-gatepass.png`). Not fixed.
+- The `gate-inner` arch (between the two gate-passage rooms) shows triangular teeth round its head in the `gatepass` view. It is the same on main (`castle-plan/doors-fix/main-view-gatepass.png`). Fixed 2026-11-06 (see above).
 
 ## 2026-11-05: courtyard paving (branch `courtyard-paving`)
 
