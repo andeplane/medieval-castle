@@ -309,11 +309,15 @@ async function main() {
   // a batch has one material: leaves take their floor's interior material (as the furniture does; cellars
   // and tunnels have no sun), and so does the portcullis, for its windlass room
   const under = (d: { centre: number[] }) => d.centre[1] < GROUND - 1;
+  // doors to the courtyard or outside are seen in daylight: they take the exterior wood and iron, which the
+  // sun and sky light (an interior material left them flat black from the sunlit courtyard)
+  const outdoor = (d: { spaces: string[] }) => d.spaces.includes('courtyard') || d.spaces.includes('outside');
   const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
   const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined };
   const doors = joinDoors([
-    buildDoors(doorSets.active.filter((d) => !under(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
-    buildDoors(doorSets.active.filter(under), inMats(IMu), physics, doorOpts),
+    buildDoors(doorSets.active.filter((d) => !under(d) && !outdoor(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
+    buildDoors(doorSets.active.filter((d) => under(d) && !outdoor(d)), inMats(IMu), physics, doorOpts),
+    buildDoors(doorSets.active.filter(outdoor), { wood: M.wood, iron: M.iron }, physics, doorOpts),
   ]);
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs
