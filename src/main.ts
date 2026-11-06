@@ -355,8 +355,8 @@ async function main() {
   // a courtyard doorway is seen from the courtyard, or from above the lowest wing's parapet
   const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) });
   // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
-  // rig lights the nearest ones in shown groups, and the interior materials take its light pool
-  const groupOf = new Map<string, string>(), groupIx = new Map(lit.groups.map((g, i) => [g.key, i]));
+  // rig lights the nearest ones (whatever is drawn), and the interior materials take its light pool
+  const groupOf = new Map<string, string>();
   for (const g of lit.groups) for (const id of g.rooms) groupOf.set(id, g.key);
   // (?test=room brings its own plan: its torches have no holders)
   const fire = furniture ? fromFurniture(furniture.emitters, furniture.flames) : torches && lit.plan === iplan ? torches : wallTorches(lit.plan, (id) => groupOf.get(id));
@@ -368,7 +368,6 @@ async function main() {
   const flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
   const sprites = makeFlameSprites(flames);
   scene.add(sprites.group);
-  const fireShown = (id: number) => vis.state.visible[groupIx.get(fire.group[id]) ?? -1] ?? false;
   let fireT = 0;
   const fireGroups = lit.groups.map((g) => fire.group.includes(g.key));
   // door leaves follow their rooms: shown while either side is shown (outside counts when not deep)
@@ -386,7 +385,9 @@ async function main() {
     syncDoorVis();
     fireT += dt;
     winFlags.set(vis.state.visible, fireGroups);
-    fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z], fireShown);
+    // lights are picked by distance only, never by which rooms are drawn: a torch must not go out
+    // because the camera stepped through a doorway (tests/world.test.ts walks every doorway)
+    fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z]);
     sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);
   };
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
