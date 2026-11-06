@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-11-06: rooms and torchlight vanishing in doorways (branch `claude/project-thread-ns4g2v-roomlight`)
+
+- Cause: `visibleSet` (src/world/visibility.ts) put the camera in a room only within 0.9 m of its outline. In a thick wall's doorway it was in no room, so the "outside" rules ran and the room ahead (or behind) was culled: Anders saw straight through to the courtyard for 10-20 cm, then the room came back. Fire lights were picked only among drawn rooms, so torchlight also switched as you crossed a threshold.
+- Fix: `doorwayRooms` puts a camera standing in a doorway (its width and the wall's thickness, plus 30 cm) in both its rooms; the rig picks torches by distance only (main.ts), never by what is drawn.
+- Tests (tests/world.test.ts): every doorway walked from 1 m before to 1 m past in 5 cm steps (3 lines across), both rooms drawn at every step (failed at 60+ doors before); torches that reach the camera stay lit across every doorway walk.
+- Help: fly and orbit help lines now say "P walk".
+- Not checked: torch light still passes through walls within its 6.9 m range (as before; no fire shadows).
+
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
 Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.
