@@ -26,7 +26,8 @@ import { masses, convexOverlap, CLEAR, FRONT, type Mass } from '../src/castle/op
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
-import { createVisibility } from '../src/world/visibility';
+import { createVisibility, courtView } from '../src/world/visibility';
+import { WINGS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
@@ -237,7 +238,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   it('draws every room and leaf seen through an outdoor doorway, from every pose in front of it', () => {
     const bake = bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() });
     const cam = { position: { x: 0, y: 0, z: 0 } };
-    const vis = createVisibility(cam, inner.groups, P, { apertures: bake.apertures, ground: heightAt });
+    const vis = createVisibility(cam, inner.groups, P, { apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) }); // as main.ts
     const foot = outerFootprint(), court = courtyard(), tower = stairTowerPoly();
     const outdoors = (s: string, q: V2) => s === 'courtyard' ? pointInPoly(court, q[0], q[1]) && !pointInPoly(tower, q[0], q[1]) : !foot.some((f) => pointInPoly(f, q[0], q[1]));
     const faults: string[] = [];
@@ -260,6 +261,14 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     }
     expect(poses).toBeGreaterThan(300);
     expect(faults).toEqual([]);
+    // and no more: walking up to the gate, the rooms off the courtyard stay culled behind the walls
+    const gate = P.doors.find((d) => d.id === 'gate-main')!, courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
+    for (const dist of [5, 15, 30]) {
+      const q = on(gate, 0, -(gate.wall / 2 + dist));
+      cam.position = { x: q[0], y: gate.centre[1] + 1.6, z: q[1] };
+      vis.update();
+      expect(courtRooms.filter((r) => vis.isRoomVisible(r))).toEqual([]);
+    }
     // inside: every room joined to the camera's room by a door is drawn, from the middle of every room
     const shown: string[] = [];
     for (const r of P.rooms) {

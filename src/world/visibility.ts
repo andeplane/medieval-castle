@@ -2,8 +2,9 @@
 // occlusion indoors). Each frame: find the camera's room, then show
 //   inside:  its group, the groups of rooms joined to it by a door or stair, stairs within 12 m, and,
 //            unless deep inside, every group seen through one of its doorways (below);
-//   outside: every group (stair towers too) with a window within 40 m or a doorway within 120 m facing
-//            the camera (the windows of the others show the dark fallback pane, render/windowGlass.ts).
+//   outside: every group with a window within 40 m or a doorway within 120 m facing the camera (the
+//            windows of the others, and of stair towers, show the dark fallback pane, render/windowGlass.ts);
+//            a doorway to the courtyard counts only from the courtyard or above the roofs (`inCourt`).
 // A doorway has no fallback: a room hidden behind one shows as a black hole, so whatever can be seen
 // through an opening is drawn, at every distance at which the opening itself is drawn. Culling never
 // adds, moves or removes an opening or a door (tests/visibility.test.ts checks the whole castle).
@@ -14,20 +15,28 @@
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import type { Aperture } from '../render/interiorMath';
 import { roomAt } from '../render/interiorMath';
+import { pointInPoly, type V2 } from '../core/math2d';
 
-export interface GroupInfo { key: string; zone: string; floor: number; min: V3; max: V3; rooms: number[]; apertures: { p: V3; n: V3; open: boolean }[] }
+export interface GroupInfo { key: string; zone: string; floor: number; min: V3; max: V3; rooms: number[]; apertures: { p: V3; n: V3; open: boolean; court?: boolean }[] }
 
-export interface VisOpts { far: number; farOpen: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number }
+export interface VisOpts {
+  far: number; farOpen: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number;
+  /** Can a camera at p see into the courtyard (stand in it, or look down from above the roofs)? Default: yes. */
+  inCourt?: (p: V3) => boolean;
+}
 const DEF: VisOpts = { far: 40, farOpen: 120, stairs: 12, deepClear: 40 };
 
 /** Is group g seen from p through one of its openings: one facing p, a window within `far`, a doorway within `farOpen`? */
-export function seenThrough(g: GroupInfo, p: V3, o: Pick<VisOpts, 'far' | 'farOpen'>, openOnly = false) {
+export function seenThrough(g: GroupInfo, p: V3, o: Pick<VisOpts, 'far' | 'farOpen' | 'inCourt'>, openOnly = false) {
   return g.apertures.some((a) => {
-    if (openOnly && !a.open) return false;
+    if ((openOnly && !a.open) || (a.court && o.inCourt && !o.inCourt(p))) return false;
     const dx = p[0] - a.p[0], dy = p[1] - a.p[1], dz = p[2] - a.p[2];
     return dx * a.n[0] + dy * a.n[1] + dz * a.n[2] > 0 && Math.hypot(dx, dy, dz) < (a.open ? o.farOpen : o.far);
   });
 }
+
+/** `inCourt` for the castle: in the courtyard's outline, or higher than the lowest roof around it. */
+export const courtView = (court: V2[], roofs: number) => (p: V3) => p[1] > roofs || pointInPoly(court, p[0], p[2]);
 
 const boxDist = (g: GroupInfo, p: V3) => Math.hypot(
   Math.max(g.min[0] - p[0], 0, p[0] - g.max[0]), Math.max(g.min[1] - p[1], 0, p[1] - g.max[1]), Math.max(g.min[2] - p[2], 0, p[2] - g.max[2]));
@@ -71,7 +80,8 @@ export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResul
       const d = boxDist(g, cam);
       if (d < 1) { visible[i] = true; return; }
       if (g.key === 'doors') { visible[i] = d < o.far; return; }
-      visible[i] = (g.key.startsWith('stairs:') && d < o.stairs * 0.8) || seenThrough(g, cam, o);
+      const stairs = g.key.startsWith('stairs:');
+      visible[i] = (stairs && d < o.stairs * 0.8) || seenThrough(g, cam, o, stairs);
     });
   }
   // deep inside: no open way out (door, grille) in the visible cells within reach
@@ -95,16 +105,17 @@ interface CamLike { position: { x: number; y: number; z: number } }
  * Per-frame visibility for the shell's InteriorGroups. `apertures` (from bakeInteriorLight) tell which
  * way each group's windows and doors face. Outdoor objects are looked up by name in `scene`.
  */
-export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan: InteriorPlan, opts: { scene?: SceneLike; apertures?: (Aperture & { group?: string })[]; ground?: (x: number, z: number) => number } = {}) {
+export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan: InteriorPlan, opts: { scene?: SceneLike; apertures?: (Aperture & { group?: string })[]; ground?: (x: number, z: number) => number; inCourt?: (p: V3) => boolean } = {}) {
   const index = new Map(plan.rooms.map((r, i) => [r.id, i]));
+  const court = new Set(plan.doors.filter((d) => d.spaces.includes('courtyard')).map((d) => d.id));
   const info: GroupInfo[] = groups.map((g) => ({
     key: g.key, zone: g.zone, floor: g.floor,
     min: [g.bounds.min.x, g.bounds.min.y, g.bounds.min.z], max: [g.bounds.max.x, g.bounds.max.y, g.bounds.max.z],
     rooms: g.rooms.map((id) => index.get(id)).filter((i): i is number => i !== undefined),
-    apertures: (opts.apertures ?? []).filter((a) => a.group === g.key && a.kind !== 'portal').map((a) => ({ p: a.c, n: a.n, open: a.kind !== 'glass' })),
+    apertures: (opts.apertures ?? []).filter((a) => a.group === g.key && a.kind !== 'portal').map((a) => ({ p: a.c, n: a.n, open: a.kind !== 'glass', court: a.door !== undefined && court.has(a.door) })),
   }));
   const ctx = visContext(plan, info);
-  const o: VisOpts = { ...DEF, ground: opts.ground };
+  const o: VisOpts = { ...DEF, ground: opts.ground, inCourt: opts.inCourt };
   const outdoor = [...new Set([...HIDE_UNDERGROUND, ...HIDE_DEEP])].map((n) => [n, opts.scene?.getObjectByName(n)] as const).filter((x): x is readonly [string, Obj] => !!x[1]);
   const base = new Map(outdoor.map(([, obj]) => [obj, obj.visible]));
   let last: VisResult = { room: -1, inside: false, deep: false, underground: false, visible: groups.map(() => true) };

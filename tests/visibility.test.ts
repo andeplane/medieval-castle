@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createVisibility, roomShown, visContext, visibleSet, type GroupInfo } from '../src/world/visibility';
+import { courtView, createVisibility, roomShown, visContext, visibleSet, type GroupInfo } from '../src/world/visibility';
 import type { InteriorGroup, InteriorPlan, RoomSpec, V3 } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
 import type { Aperture } from '../src/render/interiorMath';
@@ -79,6 +79,12 @@ describe('visibleSet', () => {
     expect(inDoor).toMatchObject({ room: 0, deep: false });
     expect(inDoor.visible).toEqual([true, true]);
     expect(visibleSet(c2, [21, 4.2, 3], { far: 40, farOpen: 120, stairs: 12, deepClear: 0.1 }).visible).toEqual([true, false]); // deep: no
+    // a courtyard doorway counts only from the courtyard or above the roofs (courtView, as main.ts)
+    const g3 = g2.map((g) => ({ ...g, apertures: g.apertures.map((a) => ({ ...a, court: true })) }));
+    const c3 = visContext(yard, g3), o3 = { far: 40, farOpen: 120, stairs: 12, deepClear: 40, inCourt: courtView([[-20, -10], [20, -10], [20, 20], [-20, 20]], 30) };
+    expect(visibleSet(c3, [0, 4.2, 3], o3).visible).toEqual([true, true]);    // in the yard
+    expect(visibleSet(c3, [0, 4.2, 40], o3).visible).toEqual([false, false]); // outside it, behind the walls
+    expect(visibleSet(c3, [0, 40, 40], o3).visible).toEqual([true, true]);    // looking down from above the roofs
   });
   test('underground hides the landscape', () => {
     const r = visibleSet(ctx, [2, -4, 30], { far: 60, farOpen: 60, stairs: 30, deepClear: 40, ground: () => 2.6 });
