@@ -305,6 +305,29 @@ describe('door system', () => {
     expect((b.object as THREE.BatchedMesh).geometry.getAttribute('interiorRoom').getX(0)).toBe(-1);
   });
 
+  it('draws the same leaves for every camera: no per-pass culling of a table every pass shares', () => {
+    // three.js keeps one instance-id table per batch but records draw ranges per pass; with per-instance
+    // culling the shadow camera's table was read by the view's pass (WebGPU), so leaves took other leaves' places
+    const b = threeBatch('x', M.wood, 3, 9), mesh = b.object as THREE.BatchedMesh;
+    const tri = { pos: [0, 0, 0, 1, 0, 0, 0, 1, 0], nor: [0, 0, 1, 0, 0, 1, 0, 0, 1], uv: [0, 0, 1, 0, 0, 1] };
+    const g0 = b.addGeometry(tri), g1 = b.addGeometry({ ...tri, pos: [0, 0, 0, 2, 0, 0, 0, 2, 0] });
+    const ids = [b.addInstance(g0), b.addInstance(g1), b.addInstance(g0)];
+    ids.forEach((i, k) => b.setMatrixAt(i, m4translate([0, 50, -50][k], 0, [-50, 0, 50][k])));
+    b.setVisibleAt(ids[2], false);
+    const look = (x: number, z: number) => { const c = new THREE.PerspectiveCamera(30, 1, 0.1, 500); c.lookAt(x, 0, z); c.updateMatrixWorld(); return c; };
+    type Drawn = { _updateDrawParameters(c: THREE.Camera, g: THREE.BufferGeometry, m: THREE.Material, f: string): void; _indirectTexture: THREE.DataTexture; _multiDrawCount: number };
+    const drawn = (c: THREE.Camera, f: string) => {
+      const m = mesh as unknown as Drawn;
+      m._updateDrawParameters(c, mesh.geometry, mesh.material as THREE.Material, f);
+      return [...(m._indirectTexture.image.data as Uint32Array).slice(0, m._multiDrawCount)];
+    };
+    for (const f of ['merged', 'multiDraw']) {
+      expect(drawn(look(0, -50), f)).toEqual([0, 1]);   // looking at instance 0 only: 1 is still drawn
+      expect(drawn(look(50, 0), f)).toEqual([0, 1]);    // the sun's view of the other side: the same table
+    }
+    expect(mesh.perObjectFrustumCulled).toBe(false);
+  });
+
   it('opens fast, settles slowly, and shuts with a thud and a latch', () => {
     const snd = fakeSound();
     const sys = buildDoors([single()], M, undefined, { sound: snd.sink, batch: fakeBatch().factory });

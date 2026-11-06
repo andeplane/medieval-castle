@@ -252,8 +252,10 @@ vec3 shade(Hit h, vec3 P, vec3 V) {
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
   float t = uTime * uMotion;
-  vec3 ro = vec3(0.08 * sin(t * 0.21), 1.5 + 0.015 * sin(t * 0.9), 1.6 - 0.9 * smoothstep(0.0, 40.0, t));
-  vec3 fw = normalize(vec3(0.06 * sin(t * 0.13) + uLook.x * 0.08, -0.03 + uLook.y * 0.05, -1.0));
+  // the pointer turns the head a little (about 10 degrees across, 6 up/down) and leans the body a
+  // hand's width, so the near torches shift against the far ones
+  vec3 ro = vec3(0.08 * sin(t * 0.21) + uLook.x * 0.12, 1.5 + 0.015 * sin(t * 0.9) + uLook.y * 0.05, 1.6 - 0.9 * smoothstep(0.0, 40.0, t));
+  vec3 fw = normalize(vec3(0.06 * sin(t * 0.13) + uLook.x * 0.18, -0.03 + uLook.y * 0.1, -1.0));
   vec3 rt = normalize(cross(fw, vec3(0, 1, 0))), up = cross(rt, fw);
   vec3 rd = normalize(fw * 1.25 + uv.x * rt + uv.y * up);
 

@@ -21,7 +21,7 @@ import { makeWater } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint } from './camera/controls';
 import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
-import { GATEHOUSE, GROUND } from './castle/spec';
+import { GATEHOUSE, GROUND, WINGS } from './castle/spec';
 import { bridgeInfo } from './physics/boundary';
 import { buildInterior } from './castle/interior';
 import { interiorViews } from './camera/interiorViews';
@@ -30,7 +30,7 @@ import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
 import { makeInteriorMaterials, tagGroups, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
-import { createVisibility } from './world/visibility';
+import { createVisibility, courtView } from './world/visibility';
 import { fromFurniture, wallTorches } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
 import { LightRig } from './light/rig';
@@ -340,7 +340,8 @@ async function main() {
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
   // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
-  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt });
+  // a courtyard doorway is seen from the courtyard, or from above the lowest wing's parapet
+  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) });
   // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
   // rig lights the nearest ones in shown groups, and the interior materials take its light pool
   const groupOf = new Map<string, string>(), groupIx = new Map(lit.groups.map((g, i) => [g.key, i]));

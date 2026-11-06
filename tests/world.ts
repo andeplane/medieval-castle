@@ -13,11 +13,11 @@ import { bridgeInfo } from '../src/physics/boundary';
 
 /** The castle, bridge and revetment in one Builder, exactly as main.ts lays them (before the interior). */
 export function islandCastle() {
-  const { builder } = buildCastle();
+  const { builder, lights } = buildCastle();
   const plan = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
   buildBridge(builder, plan, rngFor('bridge-stones'));
   buildRevetment(builder, revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(plan.footprint, x, z) }), rngFor('revetment-stones'));
-  return { builder, plan, bridge: bridgeInfo(plan.walkable, plan.d) };
+  return { builder, plan, lights, bridge: bridgeInfo(plan.walkable, plan.d) };
 }
 
 export const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'pave'] as BinKey[]).map((k) => [k, m])) as unknown as Record<BinKey, THREE.Material>; };
