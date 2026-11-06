@@ -16,6 +16,8 @@ Result: SE gets 5 slits (sills at 10.0, 17.5, 22.1, 31.0 and 35.9 m) and NE gets
 
 Checked in the built page (headless WebGL2, walk mode). On the tread past the 22.1 m slit, the splayed niche and the lit slit show. On main the same pose shows a plain wall. Captures are in `castle-plan/se-stair-slits/` (`before-` and `after-`: `se-in`, `se-out-slit`, `se-out-close`; after only: `courtyard`, `ward`, `gate`, `hero`).
 
+Bright slit (coordinator review of `after-se-out-close.png`): before the rebase, the stair group was drawn from outside only within 9.6 m (`visibility.ts`, `stairs * 0.8`). From 12 m the stairwell was hidden, so you saw through the slit to whatever lay behind it. Moving the stair group away reproduces this (`debug-stair-group-hidden.png`). On main after #42, stair groups show through open apertures within 120 m, and each slit is one, so the slit reads dark. I re-captured `after-se-out-close`, `-se-out-slit` and `-se-in` on the rebased branch with four different capture orders: all dark. The stair slits use the same `curvedOpening` surround as the drum's other slits (trim surround and sill).
+
 Cost (`__game.state()`): castle 127,527 → 128,187 triangles, interior 239,714 → 240,064, embrasures 135 → 145, window lights 222 → 233. Groups and meshes are unchanged (85 and 301), so the slits add no draw calls.
 
 Tests
