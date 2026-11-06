@@ -321,11 +321,13 @@ function wing(B: Builder, r: Rng, w: WingQuad, lights: WindowLight[], ctx: Ctx) 
   B.cap('lead', [a, b, ib, ia], w.top - 0.3, true);
   for (const p of plans) windowDressing(B, r, p.f, p.kind, p.s, p.y, w.phase, lights);
 
-  // battered plinth on the outer face and the (buried) ends; the courtyard face (edge 2, ib → ia) rises
-  // straight from the paving: a batter there was carved away along the faces but left a leaning slab
-  // where the carve stops short of the stair tower. Its plinth course stays inside the wall there too.
-  B.loft(mat, offsetPoly(w.quad, [1.1, 1.1, 0, 1.1]), G0, w.quad, BATTER_TOP, [2]);
-  B.prism('trim', offsetPoly(w.quad, [0.08, 0.08, -0.2, 0.08]), BATTER_TOP - 0.05, BATTER_TOP + 0.2);
+  // battered plinth on the outer face only. The courtyard face (edge 2, ib → ia) rises straight from the
+  // paving. The ends (edges 1 and 3) are the mitres shared with the neighbouring wings: a batter there
+  // leaned 1.1 m into the next wing, and where the stair tower's shaft is carved through the NE inner
+  // corner it showed as a leaning strip. The outer batters of two wings now meet on the mitre (inside the
+  // corner tower), and the plinth course stops there too.
+  B.loft(mat, offsetPoly(w.quad, [1.1, 0, 0, 0]), G0, w.quad, BATTER_TOP, [1, 2, 3]);
+  B.prism('trim', offsetPoly(w.quad, [0.08, 0, -0.2, 0]), BATTER_TOP - 0.05, BATTER_TOP + 0.2);
   // string courses over the undercroft and under the top floor
   stringCourse(B, w.quad, floorBase(1) - 0.2);
   if (w.phase === 'new') stringCourse(B, w.quad, floorBase(4) - 0.15, 0.1);
@@ -611,8 +613,10 @@ function gatehouseBatter(B: Builder, g: ReturnType<typeof gatehouseFrame>, p: V2
     const [sa, da] = sd(a), [sb, db] = sd(b);
     if (Math.abs(da - P) < 1e-6 && Math.abs(db - P) < 1e-6) for (const s of sa < sb ? [-gateW / 2, gateW / 2] : [gateW / 2, -gateW / 2]) inner.push(pt(s, P));
   }
+  // the back edge (1 m inside the S wing) has no batter: it would lean into the wing
+  const back = inner.map((a, i) => sd(a)[1] < 0 && sd(inner[(i + 1) % inner.length])[1] < 0);
   const T = new Builder();
-  T.loft('new', offsetPoly(inner, 1.2), G0, inner, BATTER_TOP);
+  T.loft('new', offsetPoly(inner, back.map((b) => (b ? 0 : 1.2))), G0, inner, BATTER_TOP, back.flatMap((b, i) => (b ? [i] : [])));
   const src = T.bins.new, dst = B.bins.new;
   for (let i = 0; i < src.pos.length; i += 9) {
     const c: V2 = [(src.pos[i] + src.pos[i + 3] + src.pos[i + 6]) / 3, (src.pos[i + 2] + src.pos[i + 5] + src.pos[i + 8]) / 3];
