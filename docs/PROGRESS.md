@@ -9,14 +9,15 @@ Root cause: each wing's battered plinth (`B.loft` in castle.ts `wing`) also ran 
 Fix
 - Wings: the batter is on the outer face only (`offsetPoly(w.quad, [1.1, 0, 0, 0])`, ends and courtyard face skipped). Two wings' outer batters now meet on the mitre, inside the corner tower. The plinth course (trim) stops on the mitre too.
 - Gatehouse: the same fault on its back edge, 1 m inside the S wing, where the batter leaned 1.2 m into the wing. That edge has no batter now; the front and sides keep theirs.
-- Castle 97,407 → 97,389 triangles (builder, before the interior); 8 battered stone faces fewer (1,336 → 1,328).
+- Cost (headless WebGL2, `__game.state()`): castleTriangles 127,527 → 127,157 (after the interior carve). Draw calls unchanged (court-stair 566, courtyard 734, court-ground 718); frame triangles about 2,200 fewer per view. 8 battered stone faces fewer (1,336 → 1,328).
 
 Whole-castle rule (`tests/batter.test.ts`): every sloped masonry triangle of the built castle, sampled over its area up to plinth height, lies outside the four wings, the courtyard and the stair tower, except within 1.6 m of a corner tower, the gatehouse or the east turret (their own batters run under the wing corners). On main it fails (the N wing's end batter in the E wing, then the gatehouse back batter in the S wing). A second test adds a batter inside the N wing and checks it is reported.
 
 Checked
 - `npm test`, `npm run coverage` (72 files, 702 tests, thresholds met), `npm run build`.
 - In a scratch test (not committed), the castle built and carved by the interior as in main.ts: five sloped batter triangles near the stair tower before, none after.
-- Captures before/after (headless WebGL2): `court-stair`, `courtyard`, `court-ground` in `castle-plan/plinth-strip/`.
+- Captures before/after (headless WebGL2): `court-stair`, `courtyard`, `court-ground` in `castle-plan/plinth-strip/`, plus `after-north`, `after-gate` and `after-ward` for the outer corners and the gatehouse. The courtyard views look the same before and after, as expected.
+- Note for captures: the dev server's file watcher missed an edit to castle.ts here, so a first "after" run showed main. Restart vite (`--force`) after editing and check `castleTriangles`.
 
 Not checked
 - I could not find a camera pose that shows the strip in a capture (courtyard junctions, inside the stair-tower shaft, from above); the evidence is the geometric check. The capture that first showed it (doors-fix) was not available here.
