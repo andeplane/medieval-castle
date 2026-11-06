@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-11-06: no batter on the wing mitres (branch `claude/project-thread-ns4g2v-plinth`)
+
+Open item from 2026-11-05: "a battered plinth strip still leans out beside the stair tower at the N wing junction".
+
+Root cause: each wing's battered plinth (`B.loft` in castle.ts `wing`) also ran down its two ends. The ends are the mitres shared with the neighbouring wing, so each end batter leaned 1.1 m into the next wing. Rooms carve it away inside their own volumes, but at the NE inner corner the stair tower stands over the mitre: after the interior carve, five sloped batter triangles (N wing's east end, E wing's north end) were left between the stair-tower shaft and the N0-5 / E0-0 rooms, from the paving to 5.2 m.
+
+Fix
+- Wings: the batter is on the outer face only (`offsetPoly(w.quad, [1.1, 0, 0, 0])`, ends and courtyard face skipped). Two wings' outer batters now meet on the mitre, inside the corner tower. The plinth course (trim) stops on the mitre too.
+- Gatehouse: the same fault on its back edge, 1 m inside the S wing, where the batter leaned 1.2 m into the wing. That edge has no batter now; the front and sides keep theirs.
+- Castle 97,407 → 97,389 triangles (builder, before the interior); 8 battered stone faces fewer (1,336 → 1,328).
+
+Whole-castle rule (`tests/batter.test.ts`): every sloped masonry triangle of the built castle, sampled over its area up to plinth height, lies outside the four wings, the courtyard and the stair tower, except within 1.6 m of a corner tower, the gatehouse or the east turret (their own batters run under the wing corners). On main it fails (the N wing's end batter in the E wing, then the gatehouse back batter in the S wing). A second test adds a batter inside the N wing and checks it is reported.
+
+Checked
+- `npm test`, `npm run coverage` (72 files, 702 tests, thresholds met), `npm run build`.
+- In a scratch test (not committed), the castle built and carved by the interior as in main.ts: five sloped batter triangles near the stair tower before, none after.
+- Captures before/after (headless WebGL2): `court-stair`, `courtyard`, `court-ground` in `castle-plan/plinth-strip/`.
+
+Not checked
+- I could not find a camera pose that shows the strip in a capture (courtyard junctions, inside the stair-tower shaft, from above); the evidence is the geometric check. The capture that first showed it (doors-fix) was not available here.
+- Corner-tower and east-turret batters still run up to 1.4 m under the wing corners (inside walls and carved rooms); the test allows that.
+
 ## 2026-11-06: things popping in the gate passage and courtyard (branch `claude/project-thread-ns4g2v-gate-popin`)
 
 Anders, on the live site (WebGPU): things in the gate passage pop in and out as he walks up (an iron bracket, a ring, a dark bar on the floor); in the courtyard a door leaf stands on the stair tower's wall beside a black slot, doors vanish or shift between two nearby poses, a big arch is a black void.
@@ -80,7 +102,7 @@ Assumptions (visible, for Anders to veto)
 
 Still open
 - Shut leaves and the reveals round them render black from the courtyard (`after-court-*-out.png`; main is the same, `main-court-court_E0-2-out.png`). It is light, not culling: from that pose the room behind is shown (`isRoomVisible` true). The leaf has no room tag, so it gets the ambient floor and the sun, which a reveal over 1 m deep shades. The reveal's outer half is tagged to a room whose door aperture is shut, and the exposure is set for the sunlit courtyard. The fix belongs to the interior light (`src/render/interiorLight.ts`): give a door's outer reveal and the leaf's outer face the outdoor sky light.
-- A battered plinth strip still leans out beside the stair tower at the N wing junction. It is not a door.
+- ~~A battered plinth strip still leans out beside the stair tower at the N wing junction.~~ Fixed 2026-11-06 (no batter on the wing mitres).
 - The SE spiral's light slits were not touched.
 - The `gate-inner` arch (between the two gate-passage rooms) shows triangular teeth round its head in the `gatepass` view. It is the same on main (`castle-plan/doors-fix/main-view-gatepass.png`). Not fixed.
 
