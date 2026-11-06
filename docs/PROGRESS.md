@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-11-06: a courtyard door glowing white in its dim room (branch `claude/project-thread-ns4g2v-doorlight`)
+
+Anders: "what is this MEGA BRIGHT door?" (a round-headed plank leaf, seen from inside its room, near-white beside leaves lit by the fire).
+
+Cause: #40 gave every leaf of a courtyard or outside door the exterior wood and iron (`main.ts`, the third `buildDoors(doorSets.active.filter(outdoor), { wood: M.wood, iron: M.iron }, …)`). A batch has one material, so the leaf's room face got it too: the sun, the outdoor hemisphere and the sky environment, none of the room's darkening, under the room's +2.5 stop exposure. The four such leaves are `court>N0-4`, `court>W0-2` (round heads), `court>E0-2` and `court>stairtower`; all swing into their rooms.
+
+Fix (one owner: `doors.ts`):
+- `buildDoors(…, { outdoor })` splits a leaf whose two sides are lit differently into its back faces (local −z) and the rest (`splitBySide`). The swing-side faces and edges take the swing space's set; the back faces take the other side's set while the leaf is shut, and the swing space's once it is open past `BACK_SIDE_SWING` (45°), when they stand in that space. Jamb iron splits the same way and does not move. Cell visibility still hides a door's instances together.
+- `buildCastleDoors` (new, used by main.ts) does main.ts's door assembly: leaves above ground in the interior set with the outdoor set for their outward faces, cellar leaves in the underground set (no sun shadow), the portcullis above ground. The outdoor pair now lives in the above-ground system, so the doors keep 6 batches (same as before: 2 + 2 + 2, plus the locked pair). Draw calls: +0.
+
+Tests: `tests/doorLight.test.ts` builds every active leaf of the castle through `buildCastleDoors`, shut and wide open, and checks every drawn leaf triangle: shut, a face looking through the doorway into a room (|n·normal| > 0.5) is in an interior batch and one looking into the courtyard or outside in the outdoor one; wide open, every face is in its swing space's set. On main's assembly it lists the four courtyard doors (their room faces in the outdoor material). A second case walks one courtyard leaf through the switch and `setVisible`.
+
+Captures (headless WebGL2, `castle-plan/door-light/`, `main-*` = origin/main, `after-*` = branch): `n04-in` and `w02-in` look at the shut round-headed leaves from inside their rooms (main: near-white; branch: the room's dim warm light), `n04-out` the same door from the courtyard (unchanged), `court` a courtyard pose. Draw calls and frame triangles are equal on main and the branch at every pose (e.g. n04-in 283 / 3.59 M, n04-out 335 / 4.63 M). The bright hairlines inside are the courtyard seen through the gaps between boards, the same on main.
+
+Not checked: real WebGPU (captures are headless WebGL2); a leaf between 0° and 90° is lit by one side's set on its back face, chosen at 45°, so an ajar leaf's back face changes light at once as it passes 45°.
+
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
 Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.

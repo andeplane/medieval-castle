@@ -46,7 +46,7 @@ import { Footsteps, browserAudio } from './player/footsteps';
 import { systemClock } from './core/clock';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { setupPlay, playDoors } from './player/setup';
-import { buildDoors, joinDoors, inDoorway } from './castle/interior/doors';
+import { buildDoors, buildCastleDoors, inDoorway } from './castle/interior/doors';
 import { portcullisInPlan } from './castle/interior/portcullis';
 import { planInterior } from './castle/interior/plan';
 import { createInteraction } from './game/interact';
@@ -311,21 +311,11 @@ async function main() {
   const doorSets = playDoors([], interior?.plan.doors ?? []);
   const port = gateDoor ? [portcullisInPlan(gateDoor, plan!.rooms)] : [];
   // a batch has one material: leaves take their floor's interior material (as the furniture does; cellars
-  // and tunnels have no sun), and so does the portcullis, for its windlass room
-  const under = (d: { centre: number[] }) => d.centre[1] < GROUND - 1;
-  // doors to the courtyard or outside are seen in daylight: they take the exterior wood and iron, which the
-  // sun and sky light (an interior material left them flat black from the sunlit courtyard)
-  const outdoor = (d: { spaces: string[] }) => d.spaces.includes('courtyard') || d.spaces.includes('outside');
+  // and tunnels have no sun), and so does the portcullis, for its windlass room; a courtyard or outside
+  // door's faces that look out take the exterior wood and iron, which the sun and sky light
   const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
-  const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined };
-  // cellar and tunnel leaves never see the sun: they cast no sun shadow, as the interior shell does not,
-  // so the near shadow map does not draw them
-  const noSun = <S extends { object: THREE.Object3D }>(s: S): S => { s.object.traverse((o) => { o.castShadow = false; }); return s; };
-  const doors = joinDoors([
-    buildDoors(doorSets.active.filter((d) => !under(d) && !outdoor(d)), inMats(IM), physics, { ...doorOpts, portcullis: port }),
-    noSun(buildDoors(doorSets.active.filter((d) => under(d) && !outdoor(d)), inMats(IMu), physics, doorOpts)),
-    buildDoors(doorSets.active.filter(outdoor), { wood: M.wood, iron: M.iron }, physics, doorOpts),
-  ]);
+  const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined, portcullis: port };
+  const doors = buildCastleDoors(doorSets.active, { above: inMats(IM), under: inMats(IMu), outdoor: { wood: M.wood, iron: M.iron } }, GROUND, physics, doorOpts);
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs
   const locked = buildDoors(doorSets.locked, inMats(IMu), physics, { ajar: 0, initial: 0 });

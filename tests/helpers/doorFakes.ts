@@ -6,9 +6,9 @@ import type { BatchFactory } from '../../src/castle/interior/doorBatch';
 import type { DoorSound, Vec3Like } from '../../src/castle/interior/doors';
 
 export function fakeBatch() {
-  const made: { name: string; geoms: PartBin[]; inst: number[]; mats: Map<number, number[]>; cols: Map<number, V3>; hidden: Set<number> }[] = [];
-  const factory: BatchFactory = (name) => {
-    const b = { name, geoms: [] as PartBin[], inst: [] as number[], mats: new Map<number, number[]>(), cols: new Map<number, V3>(), hidden: new Set<number>() };
+  const made: { name: string; material?: THREE.Material; geoms: PartBin[]; inst: number[]; mats: Map<number, number[]>; cols: Map<number, V3>; hidden: Set<number> }[] = [];
+  const factory: BatchFactory = (name, material) => {
+    const b = { name, material, geoms: [] as PartBin[], inst: [] as number[], mats: new Map<number, number[]>(), cols: new Map<number, V3>(), hidden: new Set<number>() };
     made.push(b);
     return {
       object: new THREE.Object3D(),
