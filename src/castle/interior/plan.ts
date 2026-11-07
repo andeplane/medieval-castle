@@ -42,6 +42,8 @@ export const MOAT_TUNNEL_Y = -6.5;
 export const SPIRAL_R = 1.9;
 /** Clear width of the doors that open off a spiral's landings (the stair plans its landings for this). */
 export const STAIR_DOOR_W = 1.0;
+/** Going of a straight flight's treads (the cellar stair); the rest of its run is the top landing. */
+export const STRAIGHT_GOING = 0.26;
 /** Distance from a shaft's centre to the flat it gets where its doors open (keeps a 1.6 m chord). */
 const chordH = (r: number) => r * Math.cos(Math.asin(Math.min(0.95, 0.8 / r)));
 /** Courtyard doors into the wings: clear width, and the rebate either side that must stay on the face too. */
@@ -570,9 +572,10 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     const bot = connect('N-cellarstair>N-c1', 'N-cellarstair', nc1, { pref: local(N.o, N.u, N.v, lo + 0.1, dMid), w: 0.95, h: 2.05, head: 'round' });
     if (top) top.centre[1] = floorBase(0);
     if (bot) bot.centre[1] = CELLAR_Y;
-    const run = (GROUND - CELLAR_Y) / 0.2 * 0.26;
+    const run = (GROUND - CELLAR_Y) / 0.2 * STRAIGHT_GOING;
     const sTop = hi - 0.7, sBot = sTop - run;
-    const p0 = local(N.o, N.u, N.v, sBot, dMid), p1 = local(N.o, N.u, N.v, sTop, dMid);
+    // the flight ends at the strip's far wall: the treads stop at sTop and the rest is the top landing the door opens onto
+    const p0 = local(N.o, N.u, N.v, sBot, dMid), p1 = local(N.o, N.u, N.v, sb, dMid);
     stairs.push({
       id: 'N-cellarstair', kind: 'straight', zone: 'N', spaces: [nc1, 'N0-3'], start: [p0[0], CELLAR_Y, p0[1]], end: [p1[0], GROUND, p1[1]], width: stripW,
       landings: [{ y: CELLAR_Y, at: [...(local(N.o, N.u, N.v, lo, dMid))].splice(0, 1).concat([CELLAR_Y]).concat([local(N.o, N.u, N.v, lo, dMid)[1]]) as V3, door: bot?.id }, { y: GROUND, at: [local(N.o, N.u, N.v, hi, dMid)[0], GROUND, local(N.o, N.u, N.v, hi, dMid)[1]], door: top?.id }],
@@ -827,7 +830,7 @@ export function doorUnderSteps(sp: SpiralPlan, d: DoorSpec, rise = headRise(d.he
 /** Options the shell builds a plan's stair with (and the validator checks it with). */
 export function stairOpts(P: InteriorPlan, s: StairSpec): StairOpts {
   const r = P.rooms.find((x) => x.id === s.id);
-  return { doorWidth: STAIR_DOOR_W, drumPoly: s.kind === 'spiral' ? r?.poly : undefined, ceiling: r ? r.y1 : undefined, mural: false };
+  return { doorWidth: STAIR_DOOR_W, drumPoly: s.kind === 'spiral' ? r?.poly : undefined, ceiling: r ? r.y1 : undefined, mural: false, going: s.kind === 'straight' ? STRAIGHT_GOING : undefined };
 }
 
 /** The spiral stairs in the round towers' walls, as their light slits see them (openings.ts stairSlits). */

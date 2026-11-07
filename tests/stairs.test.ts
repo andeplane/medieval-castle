@@ -300,4 +300,26 @@ describe('straight stairs', () => {
     checkProbe({ ...MURAL, id: 'forced-open' }, { mural: false });
     expect(stairCollisionRamp(mid)!.getAttribute('position').count).toBeGreaterThan(30);
   });
+
+  it('keeps a set going and gives the rest of the run to a top landing closed at its far end', () => {
+    // the cellar stair's shape: an open flight in a stairwell whose top door opens off the landing's side
+    const s: StairSpec = { ...STEPS, id: 'cellar', start: [0, -1.8, 0], end: [7.02, 2.6, 0], width: 1.25, landings: [{ y: -1.8 }, { y: 2.6 }] };
+    const o: StairOpts = { going: 0.26, mural: false };
+    const { plan } = checkProbe(s, o);
+    if (plan.kind !== 'straight') throw new Error('kind');
+    const top = plan.steps[plan.steps.length - 1];
+    expect(plan.steps.slice(0, -1).every((x) => Math.abs(x.s1 - x.s0 - 0.26) < 1e-9)).toBe(true);
+    expect(top.s1 - top.s0).toBeCloseTo(7.02 - 22 * 0.26, 6);
+    // its far end is a stone face from below the floor up to the landing, facing out of the flight
+    const B = new Builder();
+    buildStair(B, s, o);
+    const pos = B.bins.trim.pos, nor = B.bins.trim.nor;
+    let end = 0;
+    for (let i = 0; i < pos.length; i += 3) if (Math.abs(pos[i] - 7.02) < 1e-6 && nor[i] > 0.99) end = Math.max(end, pos[i + 1]);
+    expect(end).toBeCloseTo(2.6, 6);
+    // without a set going the same run is spread over the treads, with no landing
+    const loose = planStair(s, { mural: false });
+    if (loose.kind !== 'straight') throw new Error('kind');
+    expect(loose.steps[loose.steps.length - 1].s1 - loose.steps[loose.steps.length - 1].s0).toBeCloseTo(0, 6);
+  });
 });
