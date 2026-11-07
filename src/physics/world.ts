@@ -205,6 +205,27 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
 
     addBoundary(outline, y0, y1) { addSoup(ribbon(outline, y0, y1), 'boundary', G.boundary); },
 
+    addStaticBoxes(boxes, tag = 'box') {
+      const made: RAPIER.Collider[] = [];
+      for (let i = 0; i + 7 <= boxes.length; i += 7) {
+        const s = Math.sin(boxes[i + 6] / 2), c = Math.cos(boxes[i + 6] / 2);
+        const desc = RAPIER.ColliderDesc.cuboid(boxes[i + 3], boxes[i + 4], boxes[i + 5]).setTranslation(boxes[i], boxes[i + 1], boxes[i + 2]).setRotation({ x: 0, y: s, z: 0, w: c }).setCollisionGroups(G.world).setFriction(0.8);
+        const col = timed(() => world.createCollider(desc));
+        tags.set(col.handle, tag);
+        made.push(col);
+      }
+      if (made.length) dirty = true;
+      let alive = true;
+      return {
+        remove() {
+          if (!alive) return;
+          alive = false;
+          for (const col of made) { tags.delete(col.handle); world.removeCollider(col, false); }
+          if (made.length) dirty = true;
+        },
+      };
+    },
+
     addKinematicBox(half: V3, tag = 'kinematic') {
       const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
       const c = world.createCollider(RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]).setCollisionGroups(G.door), body);

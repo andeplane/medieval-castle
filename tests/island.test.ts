@@ -1,7 +1,6 @@
 // The real island in Node: castle + bridge + revetment colliders, the terrain from heightAt, the
 // boundary, the ?test=walk course and the spawn, driven through setupPlay() exactly as main.ts does.
 import { describe, it, expect, beforeAll } from 'vitest';
-import * as THREE from 'three/webgpu';
 import { Builder } from '../src/castle/builder';
 import { footprints, gatehouseFrame, outerPoly } from '../src/castle/layout';
 import { ISLAND, heightAt } from '../src/world/terrain';
@@ -21,6 +20,7 @@ import { buildDoors } from '../src/castle/interior/doors';
 import { portcullisInPlan } from '../src/castle/interior/portcullis';
 import { planInterior } from '../src/castle/interior/plan';
 import { buildInterior } from '../src/castle/interior';
+import { createFurnisher, BOX_FLOATS } from '../src/props/roomFurniture';
 import { fakeClock, fakeView } from './helpers';
 import { mats, doorMats, terrainObject, islandCastle, ROCK } from './world';
 import type { BridgeInfo } from '../src/physics/boundary';
@@ -53,10 +53,10 @@ describe('walking the island', { timeout: 60_000 }, () => {
     play = await setupPlay({
       castle, terrain: terrainObject(), bridge, input, view, footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
       interior: { collision: interior.collision, terrainHoles: [] },
-      furniture: [new THREE.BoxGeometry(1, 1, 1).translate(-200, 5, -200)],
       extra: { object: cb.build(mats()), holes: course.holes },
     });
     play.player.setActive(true);
+    play.physics.addStaticBoxes(new Float32Array([-200, 5, -200, 0.5, 0.5, 0.5, 0.3]), 'furniture'); // streamed furniture's colliders
   }, 120_000);
 
   it('builds colliders for castle, terrain and course', () => {
@@ -92,6 +92,37 @@ describe('walking the island', { timeout: 60_000 }, () => {
     expect(play.npcs).toEqual([]);
     expect(play.characters()).toEqual([]);
     stand(s.x, s.z, s.yaw);
+  });
+
+  it('streamed furniture blocks you while its room is in, and not once it is taken out', () => {
+    // a room's boxes as the streamer adds them (props/roomFurniture.ts → PhysicsApi.addStaticBoxes)
+    const plan = planInterior(), hall = plan.rooms.find((r) => r.kind === 'hall')!;
+    const f = createFurnisher(plan, { maxRooms: 1024 })(hall.id);
+    const boxes = Array.from({ length: f.boxes.length / BOX_FLOATS }, (_, i) => f.boxes.subarray(i * BOX_FLOATS, (i + 1) * BOX_FLOATS));
+    // the widest floor box with a clear run up to it from inside the room
+    const tries: { b: Float32Array; from: V2; yaw: number; reach: number }[] = [];
+    for (const b of boxes) {
+      if (b[1] - b[4] > hall.y0 + 0.3) continue; // standing on the floor
+      const reach = Math.max(b[3], b[5]) + 1.6;
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2, from: V2 = [b[0] + Math.cos(a) * reach, b[2] + Math.sin(a) * reach];
+        if (!pointInPoly(hall.poly, from[0], from[1]) || edgeDist(hall.poly, from[0], from[1]).d < 0.6) continue;
+        // no other box near the run
+        const clear = boxes.every((o) => o === b || Math.hypot(o[0] - (from[0] + b[0]) / 2, o[2] - (from[1] + b[2]) / 2) > Math.max(o[3], o[5]) + 1);
+        if (clear) tries.push({ b, from, yaw: face(from, [b[0], b[2]]), reach });
+      }
+    }
+    expect(tries.length).toBeGreaterThan(0);
+    const t = tries.sort((p, q) => Math.max(q.b[3], q.b[5]) - Math.max(p.b[3], p.b[5]))[0];
+    const closest = () => { let m = 1e9; for (let i = 0; i < 4 * 60; i++) { play.physics.tick(); m = Math.min(m, Math.hypot(play.player.feet[0] - t.b[0], play.player.feet[2] - t.b[2])); } return m; };
+    const handle = play.physics.addStaticBoxes(f.boxes, `furniture:${hall.id}`);
+    play.player.teleport(t.from[0], hall.y0, t.from[1], t.yaw, 0);
+    input.hold(['KeyW']); const blocked = closest(); input.hold([]);
+    expect(blocked).toBeGreaterThan(Math.min(t.b[3], t.b[5]) + 0.2); // stopped at the prop
+    handle.remove();
+    play.player.teleport(t.from[0], hall.y0, t.from[1], t.yaw, 0);
+    input.hold(['KeyW']); const free = closest(); input.hold([]);
+    expect(free).toBeLessThan(0.3); // walks right through where it stood
   });
 
   it('walls stop you elsewhere too', () => {

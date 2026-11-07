@@ -27,6 +27,7 @@ export function fakePhysics() {
     bodies,
     api: {
       addStaticMesh() {},
+      addStaticBoxes: () => ({ remove() {} }),
       addKinematicBox(half: V3, tag?: string) {
         const b = { half, tag, removed: false } as (typeof bodies)[number];
         bodies.push(b);

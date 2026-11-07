@@ -291,3 +291,6 @@ export function paintAtlas(N = 1024): PropTex {
     return furPx(n, ...loc(u, v, ATLAS.fur));
   }, 2);
 }
+
+/** Every prop texture (render.ts PropTextures); ~1 s of CPU, so the page has a worker make them. */
+export const propTextures = () => ({ wood: woodTex(), iron: ironTex(), cloth: clothTex(), straw: strawTex(), ceramic: ceramicTex(), brass: brassTex(), stone: stoneTex(), paint: paintAtlas() });
