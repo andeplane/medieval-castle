@@ -212,8 +212,14 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       for (let i = 0; i < o.length; i++) {
         const p = o[i], q = o[(i + 1) % o.length];
         const mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
-        const nn = norm3([al[0] * (cx - mx), cy - my, al[1] * (cx - mx)]);
+        // the face's own normal (perpendicular to the segment, turned into the opening). Pointing at the
+        // outline's centroid instead tilted a tall jamb ~60° up (the centroid sits up in the arch), so the
+        // jamb took afternoon sun it faces away from: a lit strip down it (great-0 by its door to W0-4).
         const seg = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (seg < 1e-9) continue;
+        let pu = (q[1] - p[1]) / seg, py = -(q[0] - p[0]) / seg;
+        if (pu * (cx - mx) + py * (cy - my) < 0) { pu = -pu; py = -py; }
+        const nn = norm3([al[0] * pu, py, al[1] * pu]);
         const crosses = (u: number) => Math.min(tA(u), tB(u)) < -0.01 && Math.max(tA(u), tB(u)) > 0.01;
         const cuts = crosses(p[0]) && crosses(q[0]) ? [tA, () => 0, tB] : [tA, tB];
         let v0 = 0;

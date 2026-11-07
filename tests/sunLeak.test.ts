@@ -67,12 +67,42 @@ function through(ap: Aperture, o: V3, d: V3, t: number) {
   return Math.abs(ax) < hw + PAD && uy > -hh - PAD && uy < hh + (ap.rise ?? 0) + PAD ? s : -1;
 }
 
-describe('sun indoors', () => {
-  test('direct sun reaches a room only through its openings (whole castle, three times of day)', () => {
+let built: { lights: ReturnType<typeof islandCastle>['lights']; res: ReturnType<typeof buildInterior>; castle: THREE.Object3D } | null = null;
+/** the castle as main.ts builds and carves it (once for this file) */
+function world() {
+  if (!built) {
     const { builder, lights } = islandCastle();
     const M = mats();
     const res = buildInterior(M, builder, { heightAt: () => 2.6 });
-    const castle = builder.build(M);
+    built = { lights, res, castle: builder.build(M) };
+  }
+  return built;
+}
+
+describe('sun indoors', () => {
+  test('no reveal is shaded as facing the sky more than it does (a jamb tilted 60° up took sun it faces away from)', () => {
+    let tris = 0, bad = 0;
+    const g = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+    for (const grp of world().res.groups) grp.object.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.name.endsWith('-trim')) return;
+      const p = m.geometry.attributes.position as THREE.BufferAttribute, nr = m.geometry.attributes.normal as THREE.BufferAttribute;
+      for (let i = 0; i < p.count; i += 3) {
+        a.fromBufferAttribute(p, i); b.fromBufferAttribute(p, i + 1); c.fromBufferAttribute(p, i + 2);
+        g.crossVectors(e1.subVectors(b, a), e2.subVectors(c, a));
+        if (g.length() < 1e-6) continue;
+        g.normalize(); n.fromBufferAttribute(nr, i);
+        tris++;
+        if (g.dot(n) < 0) g.negate();
+        if (n.y - g.y > 0.3) bad++; // shaded as if facing the sky more than it does
+      }
+    });
+    expect(tris).toBeGreaterThan(1000);
+    expect(bad).toBe(0);
+  }, 120_000);
+
+  test('direct sun reaches a room only through its openings (whole castle, three times of day)', () => {
+    const { lights, res, castle } = world();
     const occ = bvhOccluder([castle, ...res.groups.map((g) => g.object)]);
     const rooms = res.plan.rooms;
     const sun = { dir: sunAt(15.5), irradiance: [3, 3, 3] as V3 };

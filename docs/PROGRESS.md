@@ -8,6 +8,7 @@ Root cause: interior materials get direct sun only from the shadow map, and indo
 - the skins (a quad 0.22 m inside each room wall, facing the room) stopped the sun from one side only: of the two skins in a wall between two rooms, the one facing the sun cast nothing;
 - each door passage and window embrasure had no caster at all between the two holes the skins leave there; the reveals don't cast, and the castle faces round a thick wall look at the sun, so they don't cast either. The sun went through the wall mass into the passage and out through the skin's hole: the strip on the jamb and floor.
 - the ceiling skins grew their corners towards the centroid, so their sides fell short of the wall skins and a grazing ray slipped over the top of a wall skin (N6-0 at noon).
+- what was left after that (a lit strip down the jamb at the room end of the passage) was a wrong normal: `shell.ts` gave each door-reveal band the direction from its midpoint to the outline's centroid. The centroid sits up in the arch, so a 2 m jamb was shaded as if it faced ~60° up, and at 15.5 h it took sun it faces away from (the tube behind it is 5 cm back, inside the sun shadow's depth bias of ≈ 0.13 m near / 0.26 m far).
 Room culling (`world/visibility.ts`) is not involved: the culled groups never cast, and the skins and the exterior are never culled above ground.
 
 Fix (one owner: the shadow skins, `render/interiorMath.ts` + `buildShadowSkins`)
@@ -15,13 +16,14 @@ Fix (one owner: the shadow skins, `render/interiorMath.ts` + `buildShadowSkins`)
 - `passageSkins`: a tube round every door passage (sides and lid, as wide and high as the skins' door hole, the head from `headRise`) and every window embrasure (its splay from just behind the room face to the glass, then the outer reveal). Doors to the outside stop just inside the outer face, so nothing casts outdoors.
 - The skins' door holes now stop at the real head (`headRise` + 5 cm) instead of 0.6 × width.
 - `ceilingSkins` moves every side out by `inset + 0.1` (exact offset; rooms are convex).
+- `shell.ts` door reveals: each band's normal is its own face normal (perpendicular to the band, turned into the opening). This changes how every door jamb and head is shaded (jambs no longer read as up-facing, so they are a little darker in daylight).
 - Cost: skins 8,185 → 13,201 triangles (+5,016), still one mesh and one draw call that writes no colour; it is now drawn double-sided in the two sun shadow maps. No other change to draw calls or visible triangles.
 
-Test: `tests/sunLeak.test.ts`, "direct sun reaches a room only through its openings": the whole castle as main.ts builds it, at 9, 12 and 15.5 h, sample points on every room floor and every sun-facing wall (not cellars); the casters are ray-cast as the shadow pass draws them (single-sided exterior, skins by their `shadowSide`); a lit point must see the sun through both faces of one of its room's openings, room to room until outside. On main: 93 room × time failures (615 lit points, of which 92 through an opening). On the branch: none, 93 lit, all through an opening.
+Test: `tests/sunLeak.test.ts`, "direct sun reaches a room only through its openings": the whole castle as main.ts builds it, at 9, 12 and 15.5 h, sample points on every room floor and every sun-facing wall (not cellars); the casters are ray-cast as the shadow pass draws them (single-sided exterior, skins by their `shadowSide`); a lit point must see the sun through both faces of one of its room's openings, room to room until outside. On main: 93 room × time failures (615 lit points, of which 92 through an opening). On the branch: none, 93 lit, all through an opening. Second case, "no reveal is shaded as facing the sky more than it does": every interior trim triangle's shading normal may not point more than 0.3 further up than its face (3,148 on main, 0 on the branch). It does not look at the 96 window-embrasure triangles whose shading normal tilts *down* (twisted quads; darker, never lit wrongly).
 
-Captures (headless WebGL2, `castle-plan/sun-leak/`): great-0 by the W0-4 door before/after, the gatehouse windlass room's window patch (unchanged), the passage at 15.5 h and 12 h, bookmarks courtyard, hero, gate.
+Captures (headless WebGL2, `castle-plan/sun-leak/`): great-0 by the W0-4 door before/after, looking down that passage, the jamb from 0.5 m, the gatehouse windlass room's window patch (unchanged), bookmarks courtyard, hero, gate.
 
-Not checked: WebGPU; door leaves are left out of the test (they only block more); the gate passage and portcullis slot (rays through the gate are allowed as openings); the furniture build.
+Not checked: WebGPU; the shadow depth bias (≈ 0.13 m / 0.26 m along the sun) still lets light past a caster closer than that, which the skins avoid by sitting 0.22 m back; door leaves are left out of the test (they only block more); the gate passage and portcullis slot (rays through the gate are allowed as openings); the furniture build.
 
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
