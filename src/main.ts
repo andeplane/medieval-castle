@@ -11,6 +11,8 @@ import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
 import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
+import { layoutStonesOffThread, browserStoneWorker } from './castle/stones/offThread';
+import { precompile } from './render/precompile';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
 import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
@@ -67,6 +69,8 @@ const params = new URLSearchParams(location.search);
 // in proportion to how long the step took on this device last time (src/loading/timeline.ts).
 let screen: LoadingScreen;
 const say = (s: string) => screen.step(s);
+// between two pieces of one step: input and a paint, so the pieces are separate tasks (no frozen mouse look)
+const breathe = () => screen.breathe();
 if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
 
 async function main() {
@@ -115,6 +119,7 @@ async function main() {
     builder = new Builder(); lights = [];
   } else {
     ({ builder, lights } = buildCastle(undefined, params.get('interior') === '0' ? [] : undefined)); // no doorways without interiors
+    await breathe();
     bridge = bridgePlan({ island: ISLAND, moatOuter: MOAT_OUTER, gate: gatehouseFrame(), groundAt: heightAt, rng: rngFor('bridge') });
     bridgeTriangles = buildBridge(builder, bridge, rngFor('bridge-stones'));
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
@@ -124,9 +129,15 @@ async function main() {
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
   // built by the shell into each room's group, their flames and lights fed to the light rig below
+  await breathe();
   const iplan = params.get('interior') === '0' || test === 'stairs' ? null : planInterior();
   const torches = iplan && params.get('furniture') !== '1' ? wallTorches(iplan, (id) => groupKey(iplan.rooms.find((r) => r.id === id)!)) : null;
   const interior = iplan ? buildInterior(mats, builder, { heightAt, plan: iplan, torches: torches?.holders }) : null;
+  // every stone of the castle (D.1) is laid out in a worker while the land, trees and floors are made
+  // (castle/stones/offThread.ts); the faces are final once the interior has carved its doorways
+  const tStones = performance.now();
+  const stonesLaid = layoutStonesOffThread(builder.stoneFaces, builder.stoneExcl, browserStoneWorker());
+  await breathe();
   const castle = builder.build(mats);
   scene.add(castle);
   if (interior) { for (const g of interior.groups) scene.add(g.object); VIEWS.push(...interiorViews(interior.plan)); }
@@ -138,14 +149,6 @@ async function main() {
     const pm = makePropMaterials({ wood: T.woodTex(), iron: T.ironTex(), cloth: T.clothTex(), straw: T.strawTex(), ceramic: T.ceramicTex() });
     furniture = furnish(interior.plan, pm);
   }
-  const tStones = performance.now();
-  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl); // every stone of the castle (D.1), queryable with stonesNear()
-  const layoutMs = Math.round(performance.now() - tStones);
-  // real stones on silhouettes (parapets, corners, buttresses); flat walls get their depth from parallax.
-  // ?stones=all: every stone near the camera, as before (A/B)
-  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }, params.get('stones') === 'all' ? { ...LOD, plain: Infinity } : LOD);
-  scene.add(stones.group);
-  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
   let course: { info: CourseInfo; object: THREE.Object3D } | null = null;
   if (test === 'walk') {
     const cb = new Builder();
@@ -157,9 +160,11 @@ async function main() {
 
   await say('Shaping the land…');
   const sky = makeSky(renderer, scene);
+  await breathe();
   // no ground in the rooms: world/terrain.ts groundHole, plus the interior's own (the sally port's housing)
   const terrain = buildTerrain(M.terrain, undefined, { holes: interior?.groundHoles.terrain });
   scene.add(terrain);
+  await breathe();
   if (revetment) {
     // turf over the rim, with the same noise as the terrain's ground weights (world/terrain.ts 'terrain-b')
     const rimNoise = defaultTerrain().deps.noise2('terrain-b');
@@ -195,9 +200,11 @@ async function main() {
     VIEWS.push(...t.views);
     lit = t;
   }
+  await breathe();
   const tB = performance.now();
   const occluder = bvhOccluder([...shells, ...lit.groups.map((g) => g.object)]);
   const bvhMs = performance.now() - tB;
+  await breathe();
   const bake = bakeInteriorLight(lit.groups, occluder, { plan: lit.plan, windows: lit.windows, sun: sunStateOf(sky.sun), light: interiorLight });
   if (lit.plan.rooms.length) scene.add(buildShadowSkins(lit.plan, bake.apertures));
   console.info(`interior light: ${bake.rooms} rooms, ${bake.apertures.length} apertures, ${bake.triangles} tris tagged, bake ${bake.ms.toFixed(1)} ms, BVH ${bvhMs.toFixed(1)} ms over ${occluder.triangles} tris`);
@@ -227,6 +234,7 @@ async function main() {
     tagGroups(tagged, rooms, index, 4.5);
     console.info(`furniture: interior materials + room tags in ${(performance.now() - tf).toFixed(0)} ms`);
   }
+  await breathe();
   // exterior windows (render/windowGlass.ts): see-through into rooms that are shown, a dark pane
   // (warm at night when the room has firelight) while their group is culled
   const winFlags = createWindowFlags(Math.max(1, lit.groups.length));
@@ -246,12 +254,14 @@ async function main() {
   const pipeline = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
   let aoTex: THREE.Node | null = null;
+  let prePass: ReturnType<typeof pass> | null = null;
   if (params.get('ao') !== '0') {
     const pre = pass(scene, camera, { samples: 0 });
     pre.setMRT(mrt({ output: normalView }));
     // the AO is computed at half resolution, so its normal/depth pre-pass needs no more (it was a full
     // second drawing of the scene at full size: ~7 ms of a 20 ms frame on an M4 at retina 2×)
     pre.setResolutionScale(0.5);
+    prePass = pre;
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
     // the AO target must be texel for texel the pre-pass (GTAONode rounds where PassNode floors: a seam
@@ -278,6 +288,15 @@ async function main() {
   } else pipeline.outputNode = scenePass;
   if (params.has('aoview') && aoTex) { pipeline.outputColorTransform = true; pipeline.outputNode = aoTex; }
   void output;
+
+  // the stones from the worker: the set is queryable with stonesNear(); real stones are drawn on silhouettes
+  // (parapets, corners, buttresses), flat walls get their depth from parallax. ?stones=all: every stone
+  // near the camera, as before (A/B)
+  const stoneSet = new StoneSet(builder.stoneFaces, builder.stoneExcl, {}, await stonesLaid);
+  const layoutMs = Math.round(performance.now() - tStones); // wall time to the worker's answer
+  const stones = new StoneField(stoneSet, { old: M.old, new: M.new }, params.get('stones') === 'all' ? { ...LOD, plain: Infinity } : LOD);
+  scene.add(stones.group);
+  stones.group.visible = params.get('stones') !== '0'; // ?stones=0: textured walls only, for A/B
 
   // physics + player (G.1): colliders are built here, before the ready flag
   await say('Laying the floors…');
@@ -411,8 +430,22 @@ async function main() {
   addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
   await say('Lighting the halls…');
+  // what the first frame adds to the scene (the stones, tree levels and grass near the camera) is there before
+  // the compile; the rooms are all still shown, so their shaders are built too
+  rig.update(0); // the camera where the first frame puts it (walk mode: on the player at the spawn)
   stones.update(camera.position, Infinity);
-  await renderer.compileAsync(scene, camera);
+  veg?.update(camera);
+  await breathe();
+  // shaders in pieces (render/precompile.ts): each pass compiles for its own target, then two warm-up
+  // frames build what that cannot reach, first without the water (shadow maps, post passes), then with
+  // it (its reflection of the scene)
+  const frameState = () => { stones.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
+  const pre = prePass;
+  await precompile({
+    passes: [...(pre ? [() => pre.compileAsync(renderer)] : []), () => scenePass.compileAsync(renderer)],
+    warm: [() => { water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { frameState(); pipeline.render(); exposure.measure(); }],
+    breathe,
+  });
 
   const info = renderer.info;
   const hooks = installHooks({

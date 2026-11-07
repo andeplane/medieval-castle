@@ -15,7 +15,7 @@ page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') 
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 for (const p of list) {
   await page.goto(`${URL}?loading=${p}`);
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(Number(process.env.WAIT ?? 2500));
   await page.screenshot({ path: `${OUT}/loading-${p}.png` });
   console.log('shot', p);
 }

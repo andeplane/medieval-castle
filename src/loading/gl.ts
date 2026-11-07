@@ -12,7 +12,7 @@ export type GLLike = Pick<WebGL2RenderingContext,
 
 export interface Frame {
   w: number; h: number; time: number;
-  torches: Float32Array; fill: number; day: number; look: readonly [number, number];
+  torches: Float32Array; fill: number; day: number; exposure: number; look: readonly [number, number];
 }
 export interface TunnelRenderer { draw(f: Frame): void; dispose(): void }
 export interface Palette { stone: readonly (readonly [number, number, number])[]; mortar: readonly [number, number, number] }
@@ -40,7 +40,7 @@ export function createTunnelRenderer(gl: GLLike, pal: Palette, reduced: boolean,
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   const u = (n: string) => gl.getUniformLocation(prog, n);
-  const uRes = u('uRes'), uTime = u('uTime'), uI = u('uI'), uFill = u('uFill'), uLook = u('uLook'), uDay = u('uDay');
+  const uRes = u('uRes'), uTime = u('uTime'), uI = u('uI'), uFill = u('uFill'), uLook = u('uLook'), uDay = u('uDay'), uExposure = u('uExposure');
   gl.uniform3fv(u('uStone'), pal.stone.flat());
   gl.uniform3fv(u('uMortar'), [...pal.mortar]);
   gl.uniform1f(u('uMotion'), reduced ? 0 : 1);
@@ -52,6 +52,7 @@ export function createTunnelRenderer(gl: GLLike, pal: Palette, reduced: boolean,
       gl.uniform1fv(uI, f.torches);
       gl.uniform1f(uFill, f.fill);
       gl.uniform1f(uDay, f.day);
+      gl.uniform1f(uExposure, f.exposure);
       gl.uniform2f(uLook, f.look[0], f.look[1]);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },

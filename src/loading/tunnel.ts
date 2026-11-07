@@ -19,6 +19,9 @@ export interface LoadingScreen {
   step(label: string): Promise<void>;
   /** Set load progress 0..1 directly and an optional caption, then yield a frame so the page can paint. */
   progress(p: number, label?: string): Promise<void>;
+  /** Between two pieces of one boot step: let the page take input (the mouse look) and paint, so the
+   *  pieces do not run as one long task. The caption and progress do not change. */
+  breathe(): Promise<void>;
   /** Light the rest, hold a moment, fade out and free the GPU context. */
   finish(): Promise<void>;
   /** Remove at once (captures, errors). */
@@ -142,6 +145,7 @@ export function createLoadingScreen(root: HTMLElement, opts: { fixed?: number } 
       syncLabel();
       await d.nextFrame();
     },
+    breathe: () => d.nextFrame(),
     async progress(p, l) {
       be.progress(p);
       if (l) label = l;
