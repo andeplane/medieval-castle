@@ -192,6 +192,12 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   const planks = boards.map(() => Math.floor(r() * 6)), vOffs = boards.map(() => r() * 4);
   // whole boards, each shaped to the head
   boards.forEach(([x0, x1], i) => slab(g.wood, underTop(x0, x1, 0, top, o.flat, o.apexX), zb, zf, bev, boardUV(x0, x1, planks[i], vOffs[i])));
+  // a tongue in every joint, set back from both faces: the grooves read, but no light shows through
+  const tz = (zf - zb) * 0.3;
+  for (let i = 0; i + 1 < boards.length; i++) {
+    const a = boards[i][1] - 0.01, b = boards[i + 1][0] + 0.01;
+    slab(g.wood, underTop(a, b, 0, (x) => top(x) - 0.01, o.flat, o.apexX), zb + tz, zf - tz, 0, boardUV(a, b, planks[i], vOffs[i]));
+  }
   const edgeTop = Math.min(top(0.04), top(W - 0.04));
   const rows = ledgeRows(edgeTop, kind);
   const lx0 = 0.04, lx1 = W - lx0;

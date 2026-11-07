@@ -21,6 +21,15 @@ Test: `tests/groundInRooms.test.ts`, "no terrain, water or paving inside any roo
 Captures (headless WebGL2, `castle-plan/cellar-treads/`, `main-*` = origin/main, `after-*` = branch): the stair from its top landing at 14 h and 22 h and from the stair itself (`stair-down*`, `stair-close`: now the treads and the cellar landing, in the walls' brightness), the gate passage (`ab-gate-passage-14h`), bookmarks hero, gate, courtyard (differ from main only in clouds and water ripples, which move with time, and the gate threshold).
 
 Not checked: WebGPU (headless shows WebGL2 only); the treads now read as dark stone lit only by the floor term and the doorways, so from the top landing the lower flight is dim; whether a step edge is easy to see there on a real screen; the stair-tower and great-tower spirals and the sally-port tunnel were checked by the test only (my capture poses there missed); the rim turf is not in the test.
+## 2026-11-07: thin white lines down shut doors (branch `claude/project-thread-ns4g2v-boardgaps`)
+
+Anders: "some white line split here? very thin but there". Plank leaves left a 4 mm joint open right through the leaf between boards, so a shut door against daylight showed hairline white verticals (seen live on WebGPU at the courtyard door of the room east of the great hall).
+
+- `doorParts.ts` `plankLeaf`: a tongue in every joint, 1 cm into each board and set back 30 % of the thickness from both faces. The V-grooves still read; no light passes. Board seeds and widths are unchanged.
+- `tests/doors.test.ts` "lets no light through any plank leaf": rays straight through every plank leaf class the castle uses, every 1.3 mm across, 3 cm clear of the outline (50,280 went through on main, 0 now).
+
+Not checked: whether this was the exact line in Anders' screenshot (his was at the screen centre; the #54 AO sizing fix is the other candidate).
+
 ## 2026-11-06: sunlight from nothing indoors (branch `claude/project-thread-ns4g2v-sunleak`)
 
 Anders: "this sunlight there comes from nothing": a sharp strip of sun on a room floor and up a door jamb by a thick-walled doorway (great-0 by its 3 m door to W0-4 reproduces it at the default 15.5 h).
