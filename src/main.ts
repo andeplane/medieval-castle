@@ -390,7 +390,7 @@ async function main() {
   // streamed furniture: rooms in from the workers, a few per frame, out again when no longer wanted.
   // The wanted rooms are a stand-in until the room graph (world/visibility.ts) gives the rooms near the
   // player: the room you are in, then every room of every group drawn now
-  let furnStream: FurnitureStreamer | null = null;
+  let furnStream: FurnitureStreamer | null = null, syncFires: (() => void) | null = null;
   const wanted: WantedRooms = {
     wantedRooms() {
       const s = new Set<SpaceId>();
@@ -404,6 +404,7 @@ async function main() {
     const groupByKey = new Map(interior.groups.map((g) => [g.key, g]));
     const roomOrder = new Map(interior.plan.rooms.map((r, i) => [r.id, i]));
     const fires = createRoomFires(fireRig, (fs: FlameInstance[]) => { flames = fs; flameK = new Float32Array(fs.length); sprites.set(fs); });
+    syncFires = fires.sync;
     const fm = furnMats;
     furnStream = createFurnitureStreamer({
       jobs: furnitureJobs, now: () => performance.now(), onError: (id, e) => console.error(`furniture: room ${id} failed`, e),
@@ -419,7 +420,7 @@ async function main() {
       }),
     });
   }
-  const updateFurniture = () => { if (!furnStream) return; furnStream.setWanted(wanted.wantedRooms()); furnStream.update(); };
+  const updateFurniture = () => { if (!furnStream) return; furnStream.setWanted(wanted.wantedRooms()); furnStream.update(); syncFires?.(); };
   // door leaves follow their rooms: shown while either side is shown (outside counts when not deep)
   // the portcullis follows the gate's spaces and its windlass the room it stands in (doors.setVisible)
   const portCells = port.flatMap((p) => [{ id: p.id, spaces: gateDoor!.spaces }, ...(p.winch?.room ? [{ id: p.id + ':winch', spaces: [p.winch.room, p.winch.room] }] : [])]);
@@ -501,7 +502,7 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     // captures wait for the furniture of every room they show (settle), before the frame's counters reset
-    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); } info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),

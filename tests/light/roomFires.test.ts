@@ -17,6 +17,9 @@ describe('room fires', () => {
     expect(rig.count).toBe(3);
     expect(F.rooms()).toEqual(['a', 'b']);
     expect(F.flames()).toHaveLength(1);
+    expect(seen).toHaveLength(0); // flames go out once a frame, on sync
+    F.sync(); F.sync();
+    expect(seen).toHaveLength(1);
     expect(seen.at(-1)![0].seed).toBe(rig['sources'][0].seed); // linked to its own torch
     rig.update(0, 0.016, [0, 2, 0]);
     expect(rig.stats().lit).toBe(3);
@@ -24,7 +27,8 @@ describe('room fires', () => {
     rig.update(0.1, 0.016, [0, 2, 0]);
     expect(rig.stats().lit).toBe(1);
     F.clear('b'); // twice: nothing
-    expect(seen).toHaveLength(3);
+    F.sync();
+    expect(seen).toHaveLength(2);
     F.set('b', [torch(5), torch(6)], []);
     expect(rig.count).toBe(3);
     rig.update(0.2, 0.016, [0, 2, 0]);
