@@ -314,7 +314,9 @@ describe('buildInterior', () => {
     expect(res.triangles).toBeLessThan(400_000);
     const meshes = res.groups.reduce((s, g) => s + g.object.children.length, 0);
     expect(meshes).toBeLessThan(400);
-    expect(res.groups.length).toBe(res.collision.length);
+    // one soup per group, then one walking ramp per stair
+    expect(res.collision.length).toBe(res.groups.length + P.stairs.length);
+    expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual(P.stairs.map((s) => `ramp:${s.id}`));
     for (const g of res.groups) {
       const names = g.object.children.map((m) => (m as THREE.Mesh).material);
       expect(new Set(names).size).toBe(names.length);

@@ -17,6 +17,11 @@ export interface CharacterBody {
   /** Resolve a desired translation against the world; the body moves there on the next world step. */
   move(desired: V3): MoveResult;
   teleport(feet: V3): void;
+  /**
+   * Optional: the first surface straight down from (x, top, z) within `depth` (static world and doors,
+   * never characters), for following slopes and stair ramps without pressing into them.
+   */
+  probe?(x: number, z: number, top: number, depth: number): { y: number; normal: V3; tag?: string } | null;
   /** Change the capsule's total height, keeping the feet in place. */
   setHeight(height: number): void;
   /** Would a capsule of this height fit at the current feet (head room to stand up)? */
