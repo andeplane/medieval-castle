@@ -1,5 +1,31 @@
 # Progress
 
+## 2026-11-07: furniture streams in by room from workers (branch `claude/project-thread-ns4g2v-furnworker`, still behind `?furniture=1`)
+
+Anders: "be smart about web worker … and chunking". Until now `furnish(plan)` dressed all 206 rooms (1,400 props, 740k triangles) and then `tagGroups` room-tagged them, synchronously on the page's thread at load: measured headless 4.9 s + 3.7 s (another run 7.4 s for the tags alone) in one block.
+
+Now:
+- `props/roomFurniture.ts` `createFurnisher(plan)` (pure, no three.js): one room → dress (dress.ts, seeded by the room id as before) → one bin per material as `Float32Array`s, the interior-light room tag per vertex (`tagTriangles`, the rule `tagGroups` applies, with the group's rooms preferred), box colliders (7 floats: centre, half, yaw), emitters, flames.
+- `props/furnishWorker.ts` + `furnish.worker.ts`: a Vite module worker answers `room` (arrays transferred, not copied) and `textures` (the prop textures, ~1 s of CPU, also moved off the page). `workerJobs` is the pool: `poolSize(hardwareConcurrency)` = cores − 1, 1..2 workers, each job to the least busy one; `inlineJobs` runs the same inline for tests.
+- `props/streamer.ts` `createFurnitureStreamer({ jobs, sink, now })`: `setWanted(rooms)` queues new rooms in the order given (≤ 4 jobs in flight, no duplicates, queued rooms that drop out are dropped); `update()` per frame adds finished rooms until 4 ms are spent (always at least one), then unloads rooms unwanted for 5 s with what is left of the budget; `settle()` for captures (`renderNow` waits for it). `WantedRooms` is the interface for the room set.
+- `props/roomMeshes.ts` `createRoomSink`: wraps the arrays into one mesh per material (interior material clones, sun or no sun by the group's floor, as before) under the room's visibility group; colliders through the new `PhysicsApi.addStaticBoxes(boxes, tag) → { remove }` (Rapier cuboids, removable; `physics/world.ts`); fires through `light/roomFires.ts` (each room's emitters join the rig once, then `setScale` 0/1, so the rig's pools are never reset; `makeFlameSprites` got `set(flames)` with growing buffers).
+- main.ts: stand-in for the room graph: the room the camera is in, then every room of every group drawn now (`vis.state.visible` × `groups[i].rooms`). Swapping in the graph is the `wanted` object. Furniture materials and the flame sprites are compiled on stand-in meshes before the first frame, so the first room in does not compile shaders.
+- Removed: `props/furnish.ts` (and its test), `fromFurniture`, `setupPlay`'s `furniture` soups.
+
+Tests (`tests/props-stream.test.ts`, `light/roomFires.test.ts`, `physics.test.ts`, `island.test.ts`):
+- equal to the old path: for a hall, cellar, chamber-floor and tunnel group, the rooms' arrays concatenated equal `dressPlan → mergePlaced → meshFromProp → tagGroups` bit for bit (position, normal, uv, colour, room tag), the same emitters and flames, the boxes span the old collider soup (< 1e-4 m);
+- order independence: every 9th room furnished forwards and backwards by two furnishers is deep-equal;
+- worker protocol through `structuredClone` with transfer, 2-worker pool, errors, crashed worker, textures;
+- streamer with fakes: dedupe, bounded in flight, order, dropping, hysteresis, time slicing, unload budget, stale results, failures, settle, dispose;
+- walked: a hall's boxes added through `addStaticBoxes` stop the player walking into the widest table; removed, the player walks through where it stood (`island.test.ts`, same physics as the game).
+
+Measured headless (WebGL2 / SwiftShader, 4 cores at load average ~20, so slow and noisy):
+- load: furniture work on the page thread was 8.6 s (furnish 4.9 s + tags 3.7 s); now 2–29 ms (prop materials) plus posting the plan to the workers. The longest load tasks (up to 100–230 s) are shader compiles in SwiftShader (`getProgramParameter`) in both builds.
+- walking (40-room fly tour, CPU profile): the streamer's updates took 37 ms of page thread in all, the longest ≈ 14 ms by the profile (`maxUpdateMs` 27 ms, which includes a GC pause on this loaded machine); before, a walk did no furniture work. The tour's long tasks (up to 28 s) are SwiftShader shader compiles of castle materials as new views come up, in both builds; none is in the furniture code.
+- `__game.state()` (live loop, 640×360, AO on) after: hall 392 calls / 4.04 M triangles (8 rooms, 25.9k furniture triangles), chamber 323 / 3.69 M (7 rooms, 27.3k), undercroft 355 / 3.71 M (14 rooms, 21.5k). Before (all 206 rooms built at load): hall 346 / 4.12 M, chamber 294 / 3.77 M, undercroft 330 / 3.81 M. So triangles drop a little (far groups' furniture is no longer drawn) but draw calls rise by 25–46: furniture is now one mesh per material per *room* instead of per visibility group. Merging a group's loaded rooms into one mesh would win them back; not done.
+
+Not checked: WebGPU (headless has WebGL2 only); a real GPU's frame times; the visual result beyond the hall capture (furniture, lights and flames as before); windows at night glow only for rooms that have been loaded once (the furniture's fires are known only after a room is furnished); a collider appearing on top of the player when a room loads around them; memory over a long walk.
+
 ## 2026-11-07: doors open away from whoever opens them (branch `claude/project-thread-ns4g2v-doorsaway`)
 
 Anders: "also doors should always open away from player. just makes it nicer".

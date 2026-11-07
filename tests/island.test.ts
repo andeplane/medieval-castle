@@ -106,7 +106,7 @@ describe('walking the island', { timeout: 60_000 }, () => {
       const reach = Math.max(b[3], b[5]) + 1.6;
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2, from: V2 = [b[0] + Math.cos(a) * reach, b[2] + Math.sin(a) * reach];
-        if (!pointInPoly(hall.poly, from[0], from[1]) || edgeDist(hall.poly, from[0], from[1]) < 0.6) continue;
+        if (!pointInPoly(hall.poly, from[0], from[1]) || edgeDist(hall.poly, from[0], from[1]).d < 0.6) continue;
         // no other box near the run
         const clear = boxes.every((o) => o === b || Math.hypot(o[0] - (from[0] + b[0]) / 2, o[2] - (from[1] + b[2]) / 2) > Math.max(o[3], o[5]) + 1);
         if (clear) tries.push({ b, from, yaw: face(from, [b[0], b[2]]), reach });
