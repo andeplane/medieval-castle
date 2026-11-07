@@ -13,8 +13,31 @@ import { dressRoom, groupKey, variantPool, type Role } from './dress';
 import { mergePlaced, yawXZ, type Placed } from './place';
 import type { Prop } from './kit';
 
-/** One material's triangles: non-indexed xyz, normals, uv, vertex colour, and the room index per vertex. */
-export interface BinArrays { pos: Float32Array; nor: Float32Array; uv: Float32Array; col: Float32Array; room: Float32Array }
+/** A bounding sphere: centre xyz, radius. */
+export type Sphere = [number, number, number, number];
+
+/** One material's triangles: non-indexed xyz, normals, uv, vertex colour, the room index per vertex,
+ * and their bounding sphere (so the page can bound a merged group without walking its vertices). */
+export interface BinArrays { pos: Float32Array; nor: Float32Array; uv: Float32Array; col: Float32Array; room: Float32Array; sphere: Sphere }
+
+/** Bounding sphere of xyz points: the box centre and the farthest point from it (as three's computeBoundingSphere). */
+export function sphereOf(pos: ArrayLike<number>): Sphere {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pos.length; i += 3) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], pos[i + a]); hi[a] = Math.max(hi[a], pos[i + a]); }
+  const c = [0, 1, 2].map((a) => (lo[a] + hi[a]) / 2);
+  let r2 = 0;
+  for (let i = 0; i < pos.length; i += 3) r2 = Math.max(r2, (pos[i] - c[0]) ** 2 + (pos[i + 1] - c[1]) ** 2 + (pos[i + 2] - c[2]) ** 2);
+  return [c[0], c[1], c[2], Math.sqrt(r2)];
+}
+
+/** The smallest sphere holding both. */
+export function unionSphere(a: Sphere, b: Sphere): Sphere {
+  const d = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  if (d + b[3] <= a[3]) return a;
+  if (d + a[3] <= b[3]) return b;
+  const r = (d + a[3] + b[3]) / 2, t = (r - a[3]) / d;
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, r];
+}
 
 export interface RoomFurniture {
   room: SpaceId;
@@ -77,7 +100,7 @@ export function createFurnisher(plan: InteriorPlan, o: FurnisherOptions): (room:
       const b = mesh.bins[k];
       if (!b.pos.length) continue;
       const pos = new Float32Array(b.pos), nor = new Float32Array(b.nor);
-      bins[k] = { pos, nor, uv: new Float32Array(b.uv), col: new Float32Array(b.col), room: tagTriangles(pos, nor, rooms, o.maxWall ?? 4.5, prefer.get(d.key)) };
+      bins[k] = { pos, nor, uv: new Float32Array(b.uv), col: new Float32Array(b.col), room: tagTriangles(pos, nor, rooms, o.maxWall ?? 4.5, prefer.get(d.key)), sphere: sphereOf(pos) };
     }
     return { room: id, key: d.key, role: d.role, props: d.placed.length, triangles: mesh.triangles, bins, boxes: colliderBoxes(d.placed), emitters, flames: mesh.flames };
   };

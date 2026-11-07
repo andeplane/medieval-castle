@@ -42,7 +42,9 @@ export interface StreamerDeps<H> {
 
 export interface StreamerStats { loaded: number; inFlight: number; queued: number; ready: number; failed: number; props: number; triangles: number; emitters: number; added: number; removed: number;
   /** Longest single update so far (ms): the frame cost of streaming. */
-  maxUpdateMs: number }
+  maxUpdateMs: number;
+  /** Median of the last 1024 updates that did any work (ms). */
+  medianUpdateMs: number }
 
 export interface FurnitureStreamer {
   setWanted(rooms: Set<SpaceId>): void;
@@ -66,6 +68,7 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
   const loaded = new Map<SpaceId, { h: H; r: RoomFurniture }>();
   const failed = new Set<SpaceId>();
   let added = 0, removed = 0, disposed = false, maxUpdateMs = 0, flushing = false;
+  const busyMs: number[] = [];
   let wake: (() => void) | null = null;
 
   const known = (id: SpaceId) => loaded.has(id) || inFlight.has(id) || failed.has(id) || ready.some((r) => r.room === id);
@@ -95,7 +98,9 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
       const t0 = d.now(), over = () => d.now() - t0 >= o.budgetMs;
       const stale = (id: SpaceId) => !wanted.has(id) && t0 - lastWanted.get(id)! > o.unloadAfter;
       start();
-      // rooms in first (one at least), then rooms out with what is left of the budget
+      const before = added + removed;
+      // rooms in first (one at least), then rooms out with what is left of the budget, then the sink's
+      // deferred work (one step at least when nothing else was done this frame)
       while (ready.length) {
         const r = ready.shift()!;
         if (stale(r.room)) continue; // came back after nobody wanted it any more
@@ -103,8 +108,12 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
         if (over()) break;
       }
       for (const id of [...loaded.keys()]) { if (over()) break; if (stale(id)) unload(id); }
-      if (d.sink.flush) flushing = d.sink.flush(over);
-      maxUpdateMs = Math.max(maxUpdateMs, d.now() - t0);
+      const worked = added + removed > before;
+      if (worked && d.sink.flush) flushing = true;
+      if (flushing && (!worked || !over())) flushing = d.sink.flush!(over);
+      const ms = d.now() - t0;
+      maxUpdateMs = Math.max(maxUpdateMs, ms);
+      if (worked || flushing || ms > 0) { busyMs.push(ms); if (busyMs.length > 1024) busyMs.shift(); }
     },
     isLoaded: (id) => loaded.has(id),
     idle: () => !queue.length && !inFlight.size && !ready.length && !flushing,
@@ -119,7 +128,7 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
     stats() {
       let props = 0, triangles = 0, emitters = 0;
       for (const { r } of loaded.values()) { props += r.props; triangles += r.triangles; emitters += r.emitters.length; }
-      return { loaded: loaded.size, inFlight: inFlight.size, queued: queue.length, ready: ready.length, failed: failed.size, props, triangles, emitters, added, removed, maxUpdateMs };
+      return { loaded: loaded.size, inFlight: inFlight.size, queued: queue.length, ready: ready.length, failed: failed.size, props, triangles, emitters, added, removed, maxUpdateMs, medianUpdateMs: busyMs.length ? [...busyMs].sort((a, b) => a - b)[busyMs.length >> 1] : 0 };
     },
     dispose() {
       disposed = true;

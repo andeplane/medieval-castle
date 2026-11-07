@@ -10,7 +10,7 @@ import { mergePlaced, colliderSoup } from '../src/props/place';
 import { meshFromProp, makePropMaterials } from '../src/props/render';
 import { tagGroups } from '../src/render/interiorLight';
 import { PROP_MATS } from '../src/props/geom';
-import { createFurnisher, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
+import { createFurnisher, sphereOf, unionSphere, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
 import { serveFurnish, workerJobs, inlineJobs, poolSize, type FurnishScope, type WorkerPort, type ToFurnisher, type FromFurnisher, type FurnitureJobs } from '../src/props/furnishWorker';
 import { createFurnitureStreamer, type RoomSink } from '../src/props/streamer';
 import { meshesFromBins, mergeBins, createRoomSink } from '../src/props/roomMeshes';
@@ -272,6 +272,7 @@ describe('furniture streamer', () => {
     s.update(); expect(S.live.size).toBe(3); // one, even though it alone is over budget
     s.update(); s.update(); expect(S.live.size).toBe(5);
     expect(s.stats().maxUpdateMs).toBe(13); // 10 + the sink's own 3
+    expect(s.stats().medianUpdateMs).toBe(13); // updates of 6, 13, 13, 13 ms
   });
 
   it('unloads within what is left of the budget, and drops results nobody wants any more', async () => {
@@ -298,13 +299,16 @@ describe('furniture streamer', () => {
     s.setWanted(new Set(['a']));
     J.calls[0].resolve(); await flush();
     s.update();
-    expect(work).toBe(2); expect(s.idle()).toBe(false);
+    expect(work).toBe(3); expect(s.idle()).toBe(false); // the add took this frame's budget
+    s.update();
+    expect(work).toBe(2);
     await s.settle();
     expect(work).toBe(0); expect(s.idle()).toBe(true);
     work = 2; // dispose finishes whatever is left, with no budget
     s.dispose();
     expect(work).toBe(0);
     expect(calls).toBe(4);
+    expect(s.stats().medianUpdateMs).toBe(0);
   });
 
   it('records failed rooms without retrying them, and settles', async () => {
@@ -375,8 +379,16 @@ describe('room meshes', () => {
     expect(parent.children).toHaveLength(0);
     expect(boxes).toHaveLength(ids.length);
     expect(fire.length).toBe(furnished.filter((r) => r.emitters.length || r.flames.length).length);
-    expect(sink.flush(() => true)).toBe(false); // one group: done in one piece
+    // no budget: one step per flush (start, one room per step, swap), so a big group spans frames
+    let steps = 0;
+    while (sink.flush(() => true)) { steps++; expect(parent.children).toHaveLength(0); }
+    expect(steps + 1).toBe(ids.length + 1); // start, then one room per step (the last one swaps)
     const g = sink.objectOf(key)!;
+    // the bounding sphere comes from the rooms' spheres and holds every vertex
+    for (const m of g.children as THREE.Mesh[]) {
+      const sp = m.geometry.boundingSphere!, p = m.geometry.getAttribute('position');
+      for (let i = 0; i < p.count; i++) expect(sp.center.distanceTo(new THREE.Vector3().fromBufferAttribute(p, i))).toBeLessThanOrEqual(sp.radius + 1e-4);
+    }
     expect(parent.children).toEqual([g]);
     expect(g.name).toBe(`furniture:${key}`);
     const names = (o: THREE.Object3D) => o.children.map((c) => c.name.split('-').pop());
@@ -395,8 +407,16 @@ describe('room meshes', () => {
     sink.remove(big);
     expect(boxes[handles.indexOf(big)].removed).toBe(true);
     expect(fire.at(-1)).toBe(`-${big.room}`);
+    // while the rebuild runs, step by step, the old mesh stays drawn: nothing vanishes in between
+    for (let i = 0; i < 3; i++) { expect(sink.flush(() => true)).toBe(true); expect(parent.children).toEqual([g]); expect(disposed).toBe(0); }
+    // a room arriving mid-rebuild restarts it; the old mesh is still there
+    const back = sink.add(furnished[handles.indexOf(big)]);
+    sink.flush(() => true);
+    expect(parent.children).toEqual([g]);
+    sink.remove(back);
     sink.flush(() => false);
     expect(disposed).toBe(g.children.length);
+    expect(parent.children).toEqual([sink.objectOf(key)]);
     expect(sink.objectOf(key)!.userData.triangles).toBe(ref.userData.triangles - bigTris);
     // all go: nothing left under the group
     for (const h of handles) if (h !== big) sink.remove(h);
@@ -406,11 +426,17 @@ describe('room meshes', () => {
     // two dirty groups and no budget: one per flush; a group without an object to hang on is still built
     sink.add({ ...room('x'), key: 'none', bins: furnished[0].bins });
     sink.add(furnished[1]);
-    expect(sink.flush(() => true)).toBe(true);
-    expect(sink.flush(() => true)).toBe(false);
+    expect(sink.flush(() => false)).toBe(false);
     expect(sink.objectOf('none')!.parent).toBeNull();
     const flame = meshesFromBins('f', { flame: furnished[0].bins.wood ?? Object.values(furnished[0].bins)[0] }, mats).children[0] as THREE.Mesh;
     expect(flame.castShadow).toBe(false); expect(flame.receiveShadow).toBe(false);
     expect(mergeBins([])).toEqual({});
+  });
+
+  it('bounds points and unions spheres', () => {
+    expect(sphereOf([0, 0, 0, 2, 0, 0])).toEqual([1, 0, 0, 1]);
+    expect(unionSphere([0, 0, 0, 1], [3, 0, 0, 1])).toEqual([1.5, 0, 0, 2.5]);
+    expect(unionSphere([0, 0, 0, 5], [1, 0, 0, 1])).toEqual([0, 0, 0, 5]);
+    expect(unionSphere([1, 0, 0, 1], [0, 0, 0, 5])).toEqual([0, 0, 0, 5]);
   });
 });
