@@ -29,7 +29,7 @@ import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
 import { mats, islandCastle } from './world';
-import { planStair, spiralNosingY, type SpiralPlan } from '../src/castle/interior/stairs';
+import { planStair, spiralNosingY, STAIR_RULES, type SpiralPlan, type StraightPlan } from '../src/castle/interior/stairs';
 import type { DoorSpec } from '../src/castle/interior/types';
 import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../src/castle/openings';
 import { pointInPoly, type V2 } from '../src/core/math2d';
@@ -229,6 +229,88 @@ function hiddenFaceFaults(P: PlanX, tris: Tri[], depth: number): string[] {
   return [...out].map(([id, k]) => `${id}: castle surface within ${Math.round(depth * 100)} cm behind its walls at ${k} points`);
 }
 
+/** Highest surface under (x, z) between `top` and `top - depth` among `tris`, or -Infinity. */
+function floorUnder(tris: Tri[], x: number, z: number, top: number, depth: number): number {
+  let best = -Infinity;
+  for (const t of tris) {
+    if (t.lo[0] > x || t.hi[0] < x || t.lo[2] > z || t.hi[2] < z || t.lo[1] > top || t.hi[1] < top - depth) continue;
+    const o: V3 = [x, top, z], d: V3 = [0, -depth, 0];
+    if (!crosses(o, d, t)) continue;
+    // height of the plane at (x, z)
+    const e1 = [t.b[0] - t.a[0], t.b[1] - t.a[1], t.b[2] - t.a[2]], e2 = [t.c[0] - t.a[0], t.c[1] - t.a[1], t.c[2] - t.a[2]];
+    const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    if (Math.abs(n[1]) < 1e-9) continue;
+    best = Math.max(best, t.a[1] - (n[0] * (x - t.a[0]) + n[2] * (z - t.a[2])) / n[1]);
+  }
+  return best;
+}
+
+/**
+ * Every door opens onto floor on both sides: 0.35 m past each wall face, across the doorway, the first surface
+ * under the sill is within a step (0.3 m, the motor's autostep) of the sill. A door onto a void (the top of a
+ * flight with no landing, 2026-11-06) is a fall. Outdoor sides use the terrain where the castle has no floor.
+ */
+function doorFloorFaults(P: PlanX, solid: Tri[], ground: (x: number, z: number) => number): string[] {
+  const out: string[] = [];
+  for (const d of P.doors) {
+    if (d.spaces.includes('farbank')) continue;
+    const r = Math.hypot(d.width, d.wall) + 1.5, near = solid.filter((t) => t.hi[0] > d.centre[0] - r && t.lo[0] < d.centre[0] + r && t.hi[2] > d.centre[2] - r && t.lo[2] < d.centre[2] + r);
+    const y = d.centre[1];
+    for (const [k, sgn] of [[0, -1], [1, 1]] as const) {
+      const sp = d.spaces[k];
+      for (const u of [-d.width / 4, 0, d.width / 4]) {
+        const q = on(d, u, sgn * (d.wall / 2 + 0.35));
+        let f = floorUnder(near, q[0], q[1], y + 0.35, 6);
+        if (OUTDOOR.has(sp)) f = Math.max(f, ground(q[0], q[1]));
+        if (!(f > y - 0.3)) { out.push(`${d.id}: no floor on the ${sp} side (${f === -Infinity ? 'none' : `${(f - y).toFixed(2)} m`} under the sill)`); break; }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A straight flight is closed underneath: from points in the space under its treads, rays forward, back,
+ * sideways and up meet the stair's own stone from behind (its outer faces), never a room face or nothing. So
+ * nobody can stand under it and no camera outside sees its treads from below (see-through treads, 2026-11-06).
+ */
+function flightFaults(P: PlanX, tris: { p: V3[]; n: V3 }[]): string[] {
+  const out: string[] = [];
+  const Tn = tris.map((t) => ({ ...t, a: t.p[0], b: t.p[1], c: t.p[2] }));
+  for (const s of P.stairs) {
+    if (s.kind !== 'straight') continue;
+    const sp = planStair(s, stairOpts(P, s)) as StraightPlan;
+    const ends = [sp.o, [sp.o[0] + sp.d[0] * sp.run, 0, sp.o[2] + sp.d[1] * sp.run]], m = sp.width + 1;
+    const T = Tn.filter((t) => t.p.some((q) => q[0] > Math.min(ends[0][0], ends[1][0]) - m && q[0] < Math.max(ends[0][0], ends[1][0]) + m && q[2] > Math.min(ends[0][2], ends[1][2]) - m && q[2] < Math.max(ends[0][2], ends[1][2]) + m));
+    const dirs: [string, V3][] = [['forward', [sp.d[0], 0, sp.d[1]]], ['back', [-sp.d[0], 0, -sp.d[1]]], ['left', [sp.side[0], 0, sp.side[1]]], ['right', [-sp.side[0], 0, -sp.side[1]]], ['up', [0, 1, 0]], ['up-forward', [sp.d[0] * 0.7, 0.7, sp.d[1] * 0.7]]];
+    let bad = 0, first = '';
+    for (const st of sp.steps) {
+      const yTop = st.y - STAIR_RULES.lip - 0.05;
+      if (yTop - sp.yFloor < 0.4) continue;
+      for (const f of [0.25, 0.5, 0.75]) for (const t of [0.3, 0.7]) {
+        const sc = st.s0 + (Math.max(st.s1, st.s0 + 0.02) - st.s0) * t, v = (f - 0.5) * sp.width;
+        const o: V3 = [sp.o[0] + sp.d[0] * sc + sp.side[0] * v, (sp.yFloor + 0.2 + yTop) / 2, sp.o[2] + sp.d[1] * sc + sp.side[1] * v];
+        for (const [name, dir] of dirs) {
+          const L = 20, D: V3 = [dir[0] * L, dir[1] * L, dir[2] * L];
+          let tNear = Infinity, behind = false;
+          for (const tr of T) {
+            if (!crosses(o, D, tr as unknown as Tri)) continue;
+            const e1 = [tr.b[0] - tr.a[0], tr.b[1] - tr.a[1], tr.b[2] - tr.a[2]], e2 = [tr.c[0] - tr.a[0], tr.c[1] - tr.a[1], tr.c[2] - tr.a[2]];
+            const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            const den = n[0] * D[0] + n[1] * D[1] + n[2] * D[2];
+            const tt = (n[0] * (tr.a[0] - o[0]) + n[1] * (tr.a[1] - o[1]) + n[2] * (tr.a[2] - o[2])) / den;
+            const away = tr.n[0] * dir[0] + tr.n[1] * dir[1] + tr.n[2] * dir[2] > 0;
+            if (tt < tNear - 0.01 / L) { tNear = tt; behind = away; } else if (Math.abs(tt - tNear) <= 0.01 / L) behind ||= away;
+          }
+          if (!behind) { bad++; if (!first) first = `${name} from ${o.map((x) => x.toFixed(2))}`; }
+        }
+      }
+    }
+    if (bad) out.push(`${s.id}: open under the flight (${bad} rays, e.g. ${first})`);
+  }
+  return out;
+}
+
 /** The triangles of interior groups (world space). */
 function groupTris(gs: InteriorGroup[]): Tri[] {
   const B = { bins: {} as Record<string, { pos: number[] }> };
@@ -353,6 +435,24 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const door = P.doors.find((d) => d.spaces.includes(sp.id))!;
     const onDoor = slitFaults([{ ...c, c: [door.centre[0] - Math.cos(c.a) * c.R, door.centre[2] - Math.sin(c.a) * c.R], y: door.centre[1] + 0.5 }], P, tris, stairTris);
     expect(onDoor.some((x) => x.includes(`against door ${door.id}`))).toBe(true);
+  }, 120_000);
+
+  it('opens every door onto floor on both sides, never onto a drop', () => {
+    const solid = [...tris, ...groupTris(inner.groups)];
+    expect(doorFloorFaults(P, solid, heightAt)).toEqual([]);
+    // what it is for: the cellar stair cut back to its last tread leaves its top door over the cellar floor
+    const s = P.stairs.find((x) => x.kind === 'straight')!, d = P.doors.find((x) => x.id === s.landings[s.landings.length - 1].door)!;
+    const cut = solid.filter((t) => !(Math.hypot((t.lo[0] + t.hi[0]) / 2 - d.centre[0], (t.lo[2] + t.hi[2]) / 2 - d.centre[2]) < 1.6 && t.lo[1] > d.centre[1] - 0.6 && t.hi[1] < d.centre[1] + 0.05));
+    expect(doorFloorFaults({ ...P, doors: [d] }, cut, heightAt)).toEqual([`${d.id}: no floor on the N-cellarstair side (-4.40 m under the sill)`]);
+  }, 120_000);
+
+  it('closes the space under every straight flight', () => {
+    const st = shellTriangles(inner.groups.filter((g) => g.key.startsWith('stairs:')));
+    expect(flightFaults(P, st)).toEqual([]);
+    // what it is for: the same flight without its outer faces at the top end
+    const s = P.stairs.find((x) => x.kind === 'straight')!, sp = planStair(s, stairOpts(P, s)) as StraightPlan;
+    const end = st.filter((t) => !(t.n[0] * sp.d[0] + t.n[2] * sp.d[1] > 0.9 && t.c && Math.abs((t.c[0] - sp.o[0]) * sp.d[0] + (t.c[2] - sp.o[2]) * sp.d[1] - sp.run) < 0.02));
+    expect(flightFaults(P, end)[0]).toMatch(/^N-cellarstair: open under the flight/);
   }, 120_000);
 
   it('checks every castle wall, window and plan door', () => {
