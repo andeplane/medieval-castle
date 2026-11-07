@@ -157,14 +157,15 @@ async function main() {
 
   await say('Shaping the land…');
   const sky = makeSky(renderer, scene);
-  const terrain = buildTerrain(M.terrain);
+  // no ground in the rooms: world/terrain.ts groundHole, plus the interior's own (the sally port's housing)
+  const terrain = buildTerrain(M.terrain, undefined, { holes: interior?.groundHoles.terrain });
   scene.add(terrain);
   if (revetment) {
     // turf over the rim, with the same noise as the terrain's ground weights (world/terrain.ts 'terrain-b')
     const rimNoise = defaultTerrain().deps.noise2('terrain-b');
     scene.add(rimTurfMesh(rimTurf(revetment, heightAt, rimMask({ footDist, noise: rimNoise, gate: gatehouseFrame() })), M.terrain));
   }
-  const water = makeWater(sky.sunDir);
+  const water = makeWater(sky.sunDir, interior?.groundHoles.water);
   scene.add(water);
 
   // interior light (render/interiorLight.ts): the shell's meshes switch to the sun-only interior
@@ -284,7 +285,7 @@ async function main() {
   const scripted = new ScriptedInput();
   const footsteps = new Footsteps(browserAudio(window));
   const play = await setupPlay({
-    castle, terrain, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, interior: interior ? { collision: interior.collision } : null, furniture: furniture ? [...furniture.collision.values()] : [], input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
+    castle, terrain, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, interior: interior ? { collision: interior.collision, terrainHoles: interior.groundHoles.terrain } : null, furniture: furniture ? [...furniture.collision.values()] : [], input: new MergedInput([input, scripted]), view: camera, footsteps, clock: systemClock,
     extra: course ? { object: course.object, holes: course.info.holes } : null,
   });
   const { physics, player } = play;

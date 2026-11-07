@@ -29,7 +29,12 @@ export interface ShellResult {
   droppedHoles: string[];
   /** The exterior opening behind each embrasure built: room, outward plan normal, centre on the face, sill. */
   embrasures: { room: string; dir: V2; mid: V2; s0: number; s1: number; yb: number }[];
+  /** Where the outdoor ground must not be drawn although world/terrain.ts groundHole keeps it: the
+   * sally port's last flight, which rises out of the outer bank into its housing (terrain), and from where
+   * its crown is above the water to the end (water: the moat plane runs on under the bank). */
+  groundHoles: GroundHoles;
 }
+export interface GroundHoles { terrain: V2[][]; water: V2[][] }
 export interface ShellDeps {
   heightAt?: (x: number, z: number) => number;
   /** Wall torches placed by render/interiorFire.ts wallTorches: each holder is built into its room's group. */
@@ -147,9 +152,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
 
   // ------------------------------------------------ exterior clean-up volumes
   courtyardPlinth(carveVols);
-  if (P.sallyPort) portal(ext, P, deps, carveVols);
+  const groundHoles: GroundHoles = P.sallyPort ? portal(ext, P, deps, carveVols) : { terrain: [], water: [] };
 
-  return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped, embrasures };
+  return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped, embrasures, groundHoles };
 
   // ================================================ helpers (closures over the plan)
 
@@ -577,7 +582,7 @@ function courtyardPlinth(vols: Volume[]) {
 }
 
 /** Sally port on the far bank: a low stone housing where the moat tunnel's last flight leaves the ground. */
-function portal(ext: Builder, P: PlanX, deps: ShellDeps, vols: Volume[]) {
+function portal(ext: Builder, P: PlanX, deps: ShellDeps, vols: Volume[]): GroundHoles {
   const sp = P.sallyPort!, t = P.tunnels.find((x) => x.room === sp.room)!;
   const h = deps.heightAt ?? (() => 3.0);
   const end = t.path[t.path.length - 1], dir = sp.dir, side: V2 = [-dir[1], dir[0]];
@@ -604,4 +609,8 @@ function portal(ext: Builder, P: PlanX, deps: ShellDeps, vols: Volume[]) {
   // their boundaries, which left the face across the tunnel's last flight
   const bw = t.width / 2;
   vols.push(prismVolume([q(tH - 0.5, -bw), q(tH + 0.5, -bw), q(tH + 0.5, bw), q(tH - 0.5, bw)], floorAt(tH - 0.5) - 0.05, floorAt(tH + 0.5) + t.crown + 0.02));
+  // no ground inside the housing, no water from where the crown comes up past the water level
+  let tW = tH;
+  for (let s = sp.moatEdge; s < tH; s += 0.25) if (floorAt(s) + t.crown > -0.3) { tW = s; break; }
+  return { terrain: [poly], water: [[q(tW, -hw), q(tEnd, -hw), q(tEnd, hw), q(tW, hw)]] };
 }

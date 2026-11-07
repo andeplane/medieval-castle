@@ -3,8 +3,11 @@
 import * as THREE from 'three/webgpu';
 import { texture, positionWorld, time, vec2, vec3, normalize, reflector, cameraPosition, dot, max, pow, float, mix, transformNormalToView, uniform } from 'three/tsl';
 import { waterNormalData } from '../render/materials';
+import { offsetPoly } from '../castle/builder';
+import { ISLAND } from './terrain';
+import type { V2 } from '../core/math2d';
 
-export function makeWater(sunDir: THREE.Vector3) {
+export function makeWater(sunDir: THREE.Vector3, holes: V2[][] = []) {
   const tex = new THREE.DataTexture(waterNormalData!, 512, 512, THREE.RGBAFormat, THREE.UnsignedByteType);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
@@ -36,7 +39,7 @@ export function makeWater(sunDir: THREE.Vector3) {
   mat.emissiveNode = mix(deep.mul(0.2), refl.rgb.mul(0.92), fres.mul(0.85).add(0.08));
   mat.envMapIntensity = 0.2;
 
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), mat);
+  const water = new THREE.Mesh(waterGeometry(9000, ISLAND, holes), mat);
   water.rotation.x = -Math.PI / 2;
   water.position.y = 0;
   water.add(refl.target);
@@ -44,4 +47,17 @@ export function makeWater(sunDir: THREE.Vector3) {
   water.name = 'water';
   const sunDirection = uniform(sunDir.clone());
   return Object.assign(water, { sunDirection });
+}
+
+/**
+ * The water surface in the mesh's local x, y (the mesh is turned flat: world z = -y): a square with the
+ * island cut out, 0.5 m inside its edge, where the bank is already above the water. A plane under the
+ * whole island ran through every room below y 0: cellars, tunnels and the stairs down to them, where it
+ * showed as a pale floor of sky reflection (tests/groundInRooms.test.ts). `holes`: more of them, apart
+ * from the island and each other (the interior's groundHoles.water).
+ */
+export function waterGeometry(size = 9000, island: V2[] = ISLAND, holes: V2[][] = []) {
+  const h = size / 2, shape = new THREE.Shape([new THREE.Vector2(-h, -h), new THREE.Vector2(h, -h), new THREE.Vector2(h, h), new THREE.Vector2(-h, h)]);
+  for (const p of [offsetPoly(island, -0.5), ...holes]) shape.holes.push(new THREE.Path(p.map(([x, z]) => new THREE.Vector2(x, -z))));
+  return new THREE.ShapeGeometry(shape);
 }
