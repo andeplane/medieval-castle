@@ -17,21 +17,25 @@ type Field = (typeof FIELDS)[number];
 
 /** A merge in progress: arrays sized for every room, filled a slice per step. `next` is the room
  * being copied, `part` its (material, field) pair and `off` how far into that array. */
-export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>> }
+export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>>; size: Partial<Record<PropMat, Record<Field, number>>> }
 
 /** Floats copied per step (256 KB; 1 MB took ~10 ms on the loaded headless box, fresh pages): a big room spans several steps. */
 export const MERGE_CHUNK = 1 << 16;
 
 export function startMerge(rooms: RoomFurniture[]): BinMerge {
-  const bins: Partial<Record<PropMat, BinArrays>> = {}, at: BinMerge['at'] = {};
+  // only sizes here: each array is allocated by the step that first writes it (a big group's arrays
+  // are megabytes, and fresh memory costs time to hand out)
+  const bins: Partial<Record<PropMat, BinArrays>> = {}, at: BinMerge['at'] = {}, size: BinMerge['size'] = {};
+  const none = new Float32Array(0);
   for (const k of PROP_MATS) {
     const parts = rooms.map((r) => r.bins[k]).filter((b): b is BinArrays => !!b);
     if (!parts.length) continue;
-    const size = (f: Field) => new Float32Array(parts.reduce((n, b) => n + b[f].length, 0));
-    bins[k] = { pos: size('pos'), nor: size('nor'), uv: size('uv'), col: size('col'), room: size('room'), sphere: parts.map((b) => b.sphere).reduce(unionSphere) };
+    const n = (f: Field) => parts.reduce((t, b) => t + b[f].length, 0);
+    bins[k] = { pos: none, nor: none, uv: none, col: none, room: none, sphere: parts.map((b) => b.sphere).reduce(unionSphere) };
     at[k] = { pos: 0, nor: 0, uv: 0, col: 0, room: 0 };
+    size[k] = { pos: n('pos'), nor: n('nor'), uv: n('uv'), col: n('col'), room: n('room') };
   }
-  return { rooms, next: 0, part: 0, off: 0, bins, at };
+  return { rooms, next: 0, part: 0, off: 0, bins, at, size };
 }
 
 const PARTS = PROP_MATS.flatMap((k) => FIELDS.map((f) => [k, f] as const));
@@ -42,6 +46,8 @@ export function stepMerge(m: BinMerge, chunk = MERGE_CHUNK): boolean {
   while (m.next < m.rooms.length && left > 0) {
     const [k, f] = PARTS[m.part], src = m.rooms[m.next].bins[k]?.[f];
     if (src) {
+      // allocating counts against the step a quarter as much as copying
+      if (m.bins[k]![f].length !== m.size[k]![f]) { m.bins[k]![f] = new Float32Array(m.size[k]![f]); left -= m.size[k]![f] >> 2; if (left <= 0) break; }
       const n = Math.min(left, src.length - m.off);
       m.bins[k]![f].set(src.subarray(m.off, m.off + n), m.at[k]![f]);
       m.at[k]![f] += n; m.off += n; left -= n;
