@@ -180,6 +180,25 @@ describe('key paths', { timeout: 120_000 }, () => {
     expect(w.feet[1]).toBeCloseTo(top.y0, 1);
   });
 
+  it('N0-3 → the cellar stair door → its top landing (not the cellar floor 4.4 m below) → down the flight to the N cellar', () => {
+    const p = path('N0-3', 'N-c1');
+    const d = plan.doors.find((x) => x.id === 'N0-3>N-cellarstair')!, top = room('N0-3'), bot = room('N-c1');
+    expect(p.doors[0]).toBe(d.id);
+    const n = G.nodes.get('room:N0-3')!.pos;
+    start(n[0], top.y0, n[2]);
+    // through the door Anders used: 0.6 m past its inner face, on the stair side
+    const landing: V3 = [d.centre[0] + d.normal[0] * (d.wall / 2 + 0.6), d.centre[1], d.centre[2] + d.normal[1] * (d.wall / 2 + 0.6)];
+    const a = follow([...route(['room:N0-3', `door:${d.id}`]), landing]);
+    expect(a.reached, JSON.stringify(a)).toBe(a.of);
+    expect(a.feet[1]).toBeCloseTo(top.y0, 1); // standing on the landing at the sill…
+    expect(a.minY).toBeGreaterThan(top.y0 - 0.1); // …never dropped into the stairwell
+    // and on down the flight to the cellar
+    const w = follow(route(p.nodes.slice(2))); // from the top landing's nosing
+    expect(w.reached, JSON.stringify(w)).toBe(w.of);
+    expect(pointInPoly(bot.poly, w.feet[0], w.feet[2])).toBe(true);
+    expect(w.feet[1]).toBeCloseTo(bot.y0, 1);
+  });
+
   it('a cellar → the moat tunnel → stops at the locked sally-port grille', () => {
     const p = path('great-c', 'tunnel-5');
     const t = plan.tunnels.find((x) => x.id === 'tunnel-5')!, g = plan.doors.find((d) => d.id === 'sallyport-grille')!;
