@@ -195,6 +195,33 @@ describe('leaf geometry', () => {
     }
   });
 
+  it('lets no light through any plank leaf of the castle: every joint between boards is backed', () => {
+    // Anders, 2026-11-06: "some white line split here?" (4 mm see-through joints showing daylight)
+    const covered = (tris: number[][], x: number, y: number) => tris.some(([ax, ay, bx, by, cx, cy]) => {
+      const d1 = (x - bx) * (ay - by) - (ax - bx) * (y - by), d2 = (x - cx) * (by - cy) - (bx - cx) * (y - cy), d3 = (x - ax) * (cy - ay) - (cx - ax) * (y - ay);
+      return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+    });
+    const seen = new Set<string>();
+    let holes = 0, checked = 0;
+    const where: string[] = [];
+    for (const d of planInterior().doors) for (const pl of placeLeaves(d)) {
+      if (pl.kind === 'grille' || seen.has(pl.classKey)) continue;
+      seen.add(pl.classKey);
+      const cls = leafClassFor(d, pl.kind), g = leafGeometry(cls, mulberry32(1));
+      // faces a ray straight through the leaf can meet (not the edge-on sides)
+      const tris: number[][] = [];
+      for (let i = 0; i < g.wood.pos.length; i += 9) if (Math.abs(g.wood.nor[i + 2]) > 0.3) tris.push([0, 1, 3, 4, 6, 7].map((k) => g.wood.pos[i + k]));
+      const topO = headTop(cls.head, cls.ow, cls.oh, -GROW), top = (x: number) => topO(cls.sOff + x) - KIND[pl.kind].sill;
+      for (let x = 0.03; x < g.width - 0.03; x += 0.0013) for (let y = 0.05; y < Math.min(top(x - 0.03), top(x), top(x + 0.03)) - 0.03; y += 0.37) {
+        checked++;
+        if (!covered(tris, x, y)) { holes++; if (where.length < 5) where.push(`${pl.classKey} x=${x.toFixed(3)} y=${y.toFixed(2)}`); }
+      }
+    }
+    expect(seen.size).toBeGreaterThan(3);
+    expect(checked).toBeGreaterThan(10000);
+    expect(holes, where.join('\n')).toBe(0);
+  }, 60_000);
+
   it('makes a grille of iron bars under the head', () => {
     const cls = leafClassFor(spec({ kind: 'grille', head: 'round' }), 'grille');
     const g = leafGeometry(cls, mulberry32(1));
