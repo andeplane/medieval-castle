@@ -8,21 +8,46 @@ export interface StoneRef { stone: Stone; face: StoneFace; centre: V3; normal: V
 
 export interface StoneSetOpts { specFor?: SpecFor; salt?: number; cell?: number }
 
+/** Lay out every stone of every face (the slow part of a StoneSet: ~0.6 s for the castle on an M-series Mac). */
+export function layoutStones(faces: StoneFace[], exclusions: Exclusion[], o: Pick<StoneSetOpts, 'specFor' | 'salt'> = {}): Stone[] {
+  const specFor = o.specFor ?? masonrySpec, out: Stone[] = [];
+  const index = new ExclusionIndex(exclusions);
+  faces.forEach((f, fi) => {
+    const [lo, hi] = faceBounds(f);
+    for (const st of layoutFace(f, fi, exclusionShapes(f, index.query(lo, hi)), specFor(f.mat), o.salt ?? STONE_SALT)) out.push(st);
+  });
+  return out;
+}
+
+const FIELDS = ['face', 'a', 'b', 'ya', 'yb', 'course', 'flags', 'id', 'bulge', 'tilt', 'seed'] as const;
+
+/** Stones as one flat Float64Array (transferable from a worker without cloning 140k objects). */
+export function packStones(stones: Stone[]): Float64Array {
+  const n = FIELDS.length, out = new Float64Array(stones.length * n);
+  stones.forEach((st, i) => { for (let k = 0; k < n; k++) out[i * n + k] = st[FIELDS[k]]; });
+  return out;
+}
+
+export function unpackStones(buf: Float64Array): Stone[] {
+  const n = FIELDS.length, out: Stone[] = new Array(buf.length / n);
+  for (let i = 0, j = 0; i < out.length; i++, j += n) {
+    out[i] = { face: buf[j], a: buf[j + 1], b: buf[j + 2], ya: buf[j + 3], yb: buf[j + 4], course: buf[j + 5], flags: buf[j + 6], id: buf[j + 7], bulge: buf[j + 8], tilt: buf[j + 9], seed: buf[j + 10] };
+  }
+  return out;
+}
+
 export class StoneSet {
-  readonly stones: Stone[] = [];
+  readonly stones: Stone[];
   readonly centres: Float64Array;
   private cells = new Map<string, number[]>();
   private cell: number;
   readonly specFor: SpecFor;
 
-  constructor(readonly faces: StoneFace[], exclusions: Exclusion[], o: StoneSetOpts = {}) {
+  /** `laid`: the stones already laid out by layoutStones (e.g. in a worker) for these faces and options. */
+  constructor(readonly faces: StoneFace[], exclusions: Exclusion[], o: StoneSetOpts = {}, laid?: Stone[]) {
     this.specFor = o.specFor ?? masonrySpec;
     this.cell = o.cell ?? 4;
-    const index = new ExclusionIndex(exclusions);
-    faces.forEach((f, fi) => {
-      const [lo, hi] = faceBounds(f);
-      for (const st of layoutFace(f, fi, exclusionShapes(f, index.query(lo, hi)), this.specFor(f.mat), o.salt ?? STONE_SALT)) this.stones.push(st);
-    });
+    this.stones = laid ?? layoutStones(faces, exclusions, o);
     this.centres = new Float64Array(this.stones.length * 3);
     this.stones.forEach((st, i) => {
       const p = faceToWorld(faces[st.face], (st.a + st.b) / 2, (st.ya + st.yb) / 2, 0);

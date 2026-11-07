@@ -18,7 +18,7 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const views = process.argv.slice(2);
 const t0 = Date.now();
 await page.goto(`${URL}?webgl&shot${QUERY ? '&' + QUERY : ''}`);
-await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 600_000, polling: 1000 });
+await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 1_800_000, polling: 1000 });
 console.log('ready in', ((Date.now() - t0) / 1000).toFixed(1), 's');
 console.log(JSON.stringify(await page.evaluate(() => window.__game.state())));
 const list = views.length ? views : await page.evaluate(() => window.__game.views());
