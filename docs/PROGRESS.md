@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-11-07: why the Mac counts 4.6x the draw calls; door instances grouped by geometry (branch `claude/project-thread-ns4g2v-dc`)
+
+Anders' Mac (WebGPU, live a6364bd) shows 1298 draw calls at eye (11.6, 4.3, -1.2) → (14.2, 4.0, -3.3) (doors shut, no furniture, 15 groups shown); headless WebGL2 shows 279. Measured on his Mac (Playwright, the backend's `draw` wrapped for one live frame, read-only):
+- Passes are the same on both backends: AO pre-pass 347, water reflection 343, scene 346, sun shadow 261, post 1, exposure 1 (= 1298). No extra passes, shadow maps or cascades on WebGPU.
+- The door BatchedMeshes are 1067 of the 1298: 273 per view pass (8 batches) and 248 in the shadow. Everything else is 74 / 70 / 73 / 13, the same as headless.
+- Cause: WebGPU has no multi-draw in three r187 (Chrome 157 on his Mac has `indirect-first-instance` but no multi-draw-indirect feature). `WebGPUBackend.draw` issues one `drawIndexed` per run of consecutive visible instances sharing a geometry, and counts each; WebGL2 issues one `multiDrawElements` per batch and counts it once (ANGLE expands it into the same draws underneath). So it is mostly a counting difference: the GPU draws the same triangles either way. The WebGPU draws are real API calls but cheap: all door draws together took 0.065 ms of CPU per frame on his Mac (frame 8.3 ms).
+- Instances were added leaf by leaf, so nearly every part was its own run: doors-iron showed 163 visible instances in 163 runs but only 113 distinct geometries; doors-wood 71 runs, 56 geometries.
+
+Fix (`castle/interior/doors.ts`, `instancesByGeometry`): leaf instances are added sorted by geometry (stable), so each shown geometry is one run whatever is hidden. Same instances, matrices, colours and visibility keys; nothing is culled or added. Expected at the eye pose on the Mac (from the live instance tables): door draws 273 → 192 per view pass, 248 → 183 shadow, total 1298 → about 990. Headless WebGL2 counts are unchanged (multi-draw counted once).
+
+Tests: `doors.test.ts` "adds instances grouped by geometry": over every castle door, each batch has one run per geometry, also with a random 70% of doors hidden (fails on main); `instancesByGeometry` is stable.
+
+Not checked: the after-count on the Mac (needs the deploy; the ≈990 is computed from his live instance tables, not measured); GPU time per pass on the Mac; the portcullis winch parts (ropes and coils alternate, 4 runs for 2 geometries per winch, left as is).
+
 ## 2026-11-07: a cheaper precompile; interior meshes culled by room (branch `claude/project-thread-ns4g2v-trim`)
 
 Anders, on his Mac (WebGPU, live build): ready went from 13.6 s to 16.9 s after #60 (longest freeze 2.4 → 0.9 s, keep that), and 914–1335 draw calls at the hall, chamber, tower room (`?furniture=1`) and at eye (11.6, 4.3, -1.2) looking at (14.2, 4.0, -3.3).

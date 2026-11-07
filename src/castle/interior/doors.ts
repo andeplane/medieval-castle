@@ -178,6 +178,11 @@ function toLocal(m: M4, mirrored: boolean, x: number, y: number, z: number): V3 
   return [mirrored ? -lx : lx, m[4] * dx + m[5] * dy + m[6] * dz, m[8] * dx + m[9] * dy + m[10] * dz];
 }
 
+/** The order to add instances in: by geometry id, stable (leaf order within one geometry). */
+export function instancesByGeometry<T extends { g: number }>(items: T[]): T[] {
+  return items.map((it, k) => ({ it, k })).sort((a, b) => a.it.g - b.it.g || a.k - b.k).map((x) => x.it);
+}
+
 export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi, opts: DoorOptions = {}): DoorSystem {
   const object = new THREE.Group(); object.name = 'doors';
   const sound = (s: DoorSound, p: V3, w: number) => opts.sound?.play(s, p, w);
@@ -281,6 +286,12 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     if (!m.has(bin)) m.set(bin, b.addGeometry(bin));
     return m.get(bin)!;
   };
+  // Instances go in grouped by geometry (instancesByGeometry): WebGPU has no multi-draw, so three issues one
+  // draw per run of consecutive visible instances that share a geometry; in leaf order nearly every leaf
+  // part was its own run (≈ 273 draws per pass at Anders' eye pose). Same instances, same matrices.
+  const items = pending.flatMap(({ leaf }, n) => wants[n].map((w) => ({ leaf, w, b: batches[slot(w)], g: geomOf(batches[slot(w)], w.bin), i: -1 })));
+  for (const it of instancesByGeometry(items)) it.i = it.b.addInstance(it.g);
+  let next = 0;
   pending.forEach(({ leaf, vks, d }, n) => {
     const v = variants.get(vks[d.swingInto]!)!;
     tris += vcount(v.whole.wood, v.whole.iron, v.whole.fixed) / 3; // one seat is drawn at a time
@@ -289,7 +300,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     const tint: V3 = [k * (1 - grey * 0.12), k * (0.9 - grey * 0.02), k * (0.8 + grey * 0.12)];
     const own = part([leaf.place.door]);
     for (const w of wants[n]) {
-      const b = batches[slot(w)], i = b.addInstance(geomOf(b, w.bin));
+      const { b, i } = items[next++];
       if (w.part === 'wood') b.setColorAt(i, tint);
       if (!w.moves) b.setMatrixAt(i, leafMatrix(leaf.places[w.seat]!, m4swing(0)));
       const dr: Draw = { b, i, moves: w.moves, shut: w.shut, leaf, seat: w.seat };
