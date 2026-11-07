@@ -98,3 +98,6 @@ export function ceramicTex(N = 256): PropTex {
     return { c: [0.8 * k, 0.78 * k, 0.74 * k], h: 0.5 + m * 0.1 - pin * 0.2, r: 0.35 + 0.3 * (1 - m) + pin * 0.3 };
   }, 1.5);
 }
+
+/** Every prop texture (render.ts PropTextures); ~1 s of CPU, so the page has a worker make them. */
+export const propTextures = () => ({ wood: woodTex(), iron: ironTex(), cloth: clothTex(), straw: strawTex(), ceramic: ceramicTex() });

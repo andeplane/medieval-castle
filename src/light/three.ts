@@ -35,25 +35,36 @@ export function threeLightFactory(parent: THREE.Object3D, o: Partial<ThreeLightO
 }
 
 /** Instanced quad: x in [-0.5, 0.5], y in [0, 1], several rows so the cylindrical billboard can bend. */
-function quad(rows: number, attrs: Record<string, [Float32Array, number]>, count: number) {
+function quad(rows: number, count: number) {
   const g = new THREE.InstancedBufferGeometry();
   const p = new THREE.PlaneGeometry(1, 1, 1, rows); p.translate(0, 0.5, 0);
   g.index = p.index; g.setAttribute('position', p.getAttribute('position')); g.setAttribute('uv', p.getAttribute('uv'));
-  for (const [k, [a, n]] of Object.entries(attrs)) g.setAttribute(k, new THREE.InstancedBufferAttribute(a, n));
   g.instanceCount = count;
   return g;
 }
 
-/** `update` takes this frame's flame brightness and the clock (seconds) that drives the flame motion. */
-export interface FlameSprites { group: THREE.Group; update(brightness: Float32Array, time: number): void; count: number }
+/** `update` takes this frame's flame brightness and the clock (seconds) that drives the flame motion;
+ * `set` replaces the flames (streamed rooms), growing the buffers when they are too small. */
+export interface FlameSprites { group: THREE.Group; update(brightness: Float32Array, time: number): void; set(fs: FlameInstance[]): void; count: number }
 
 /** Flames (cylindrical billboards around their up axis), halos (camera-facing) and torch smoke. */
-export function makeFlameSprites(fs: FlameInstance[]): FlameSprites {
-  const P = packFlames(fs);
-  const flick = new Float32Array(P.count).fill(1);
-  const flickAttr = new THREE.InstancedBufferAttribute(flick, 1); flickAttr.setUsage(THREE.DynamicDrawUsage);
-  const attrs = { iBase: [P.base, 3], iUp: [P.up, 3], iShape: [P.shape, 4], iLook: [P.look, 4], iGlow: [P.glow, 4] } as Record<string, [Float32Array, number]>;
-  const geo = (rows: number) => { const g = quad(rows, attrs, P.count); g.setAttribute('iFlick', flickAttr); return g; };
+export function makeFlameSprites(fs: FlameInstance[], capacity = 0): FlameSprites {
+  let P = packFlames(fs), cap = Math.max(1, capacity, P.count);
+  // instance buffers hold `cap` flames; the first P.count are drawn
+  const SIZES = { iBase: 3, iUp: 3, iShape: 4, iLook: 4, iGlow: 4, iFlick: 1 } as const;
+  type Key = keyof typeof SIZES;
+  const alloc = () => Object.fromEntries(Object.entries(SIZES).map(([k, n]) => {
+    const a = new THREE.InstancedBufferAttribute(new Float32Array(cap * n).fill(k === 'iFlick' ? 1 : 0), n);
+    a.setUsage(THREE.DynamicDrawUsage);
+    return [k, a];
+  })) as Record<Key, THREE.InstancedBufferAttribute>;
+  let A = alloc();
+  const fill = () => {
+    const src: Record<Exclude<Key, 'iFlick'>, Float32Array> = { iBase: P.base, iUp: P.up, iShape: P.shape, iLook: P.look, iGlow: P.glow };
+    for (const k of Object.keys(src) as (keyof typeof src)[]) { (A[k].array as Float32Array).set(src[k]); A[k].needsUpdate = true; }
+  };
+  fill();
+  const geo = (rows: number) => { const g = quad(rows, P.count); for (const k of Object.keys(A) as Key[]) g.setAttribute(k, A[k]); return g; };
 
   const base = attribute<'vec3'>('iBase', 'vec3'), up = attribute<'vec3'>('iUp', 'vec3'), shape = attribute<'vec4'>('iShape', 'vec4');
   const look = attribute<'vec4'>('iLook', 'vec4'), glow = attribute<'vec4'>('iGlow', 'vec4'), fl = attribute<'float'>('iFlick', 'float');
@@ -129,20 +140,35 @@ export function makeFlameSprites(fs: FlameInstance[]): FlameSprites {
   void length; void vKind;
 
   const group = new THREE.Group(); group.name = 'flames';
-  const add = (g: THREE.InstancedBufferGeometry, m: THREE.Material, name: string, order: number, count = P.count) => {
-    g.instanceCount = count;
-    const mesh = new THREE.Mesh(g, m); mesh.name = name; mesh.frustumCulled = false; mesh.renderOrder = order;
+  const meshes: [THREE.Mesh, number][] = [];
+  const add = (rows: number, m: THREE.Material, name: string, order: number) => {
+    const mesh = new THREE.Mesh(geo(rows), m); meshes.push([mesh, rows]); mesh.name = name; mesh.frustumCulled = false; mesh.renderOrder = order;
     mesh.castShadow = mesh.receiveShadow = false;
     group.add(mesh);
   };
-  if (P.count) {
-    // smoke reads only for kinds with smoke > 0; others collapse to zero height
-    add(geo(6), smokeMat, 'flame-smoke', 1);
-    add(geo(8), flameMat, 'flame-body', 2);
-    add(geo(1), haloMat, 'flame-halo', 3);
-  }
-  return {
+  // smoke reads only for kinds with smoke > 0; others collapse to zero height
+  add(6, smokeMat, 'flame-smoke', 1);
+  add(8, flameMat, 'flame-body', 2);
+  add(1, haloMat, 'flame-halo', 3);
+  // no flames: no draw calls
+  const show = () => { for (const c of group.children) c.visible = P.count > 0; };
+  show();
+  const out: FlameSprites = {
     group, count: P.count,
-    update(b, t) { flick.set(b.subarray(0, flick.length)); flickAttr.needsUpdate = true; time.value = t; },
+    update(b, t) { const f = A.iFlick.array as Float32Array; f.set(b.subarray(0, Math.min(P.count, f.length))); A.iFlick.needsUpdate = true; time.value = t; },
+    set(next) {
+      P = packFlames(next);
+      if (P.count > cap) {
+        cap = Math.max(P.count, cap * 2);
+        A = alloc();
+        // new buffers mean new geometries (the renderer keys its buffers on the geometry)
+        for (const [m, rows] of meshes) { m.geometry.dispose(); m.geometry = geo(rows); }
+      }
+      fill();
+      for (const [m] of meshes) (m.geometry as THREE.InstancedBufferGeometry).instanceCount = P.count;
+      out.count = P.count;
+      show();
+    },
   };
+  return out;
 }

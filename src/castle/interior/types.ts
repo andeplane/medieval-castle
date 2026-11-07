@@ -68,6 +68,9 @@ export interface InteriorGroup {
 export interface PhysicsApi {
   /** Static triangle mesh collider (world space positions, indexed or not). */
   addStaticMesh(geometry: THREE.BufferGeometry, tag?: string): void;
+  /** Static boxes that can be taken out again (streamed furniture): 7 floats per box, centre xyz,
+   * half size xyz, yaw about +y (as place.ts yawXZ turns). */
+  addStaticBoxes(boxes: Float32Array, tag?: string): { remove(): void };
   /** Kinematic box for moving parts (door leaves). Pose = centre + rotation. */
   addKinematicBox(half: V3, tag?: string): { setPose(p: V3, q: Quat): void; remove(): void };
   /** Closest hit along a ray, against everything solid. */

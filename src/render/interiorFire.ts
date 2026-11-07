@@ -1,6 +1,6 @@
-// Interior fire sources for the shared light system (src/light): the furniture's fixtures when it is
-// built (?furniture=1), otherwise a few plain wall torches in the halls, gate rooms, undercrofts and
-// tunnels so the dark rooms still have firelight. Pure; main.ts feeds the result to LightRig and
+// Interior fire sources for the shared light system (src/light) without furniture: a few plain wall
+// torches in the halls, gate rooms, undercrofts and tunnels so the dark rooms still have firelight
+// (with ?furniture=1 the streamed rooms bring their own fires, light/roomFires.ts). Pure; main.ts feeds the result to LightRig and
 // makeFlameSprites(linkFlames(flames, emitters)).
 import type { InteriorPlan, RoomSpec, SpaceId } from '../castle/interior/types';
 import type { Flame, LightEmitter, V3 } from '../light/types';
@@ -15,14 +15,6 @@ export interface FireSources {
   group: string[];
   /** Each wall torch's holder (shaft and bracket), one per flame, for the shell to build; none for furniture. */
   holders: TorchHolder[];
-}
-
-/** Flatten the furniture's per-group maps. */
-export function fromFurniture(emitters: Map<string, LightEmitter[]>, flames: Map<string, Flame[]>): FireSources {
-  const out: FireSources = { emitters: [], flames: [], group: [], holders: [] };
-  for (const [k, es] of emitters) for (const e of es) { out.emitters.push(e); out.group.push(k); }
-  for (const fs of flames.values()) out.flames.push(...fs);
-  return out;
 }
 
 const TORCH_ROOMS = new Set(['hall', 'gate', 'undercroft']);

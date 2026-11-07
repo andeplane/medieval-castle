@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { floorAlong, fromFurniture, torchSpot, wallTorches } from '../src/render/interiorFire';
+import { floorAlong, torchSpot, wallTorches } from '../src/render/interiorFire';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
-import type { LightEmitter } from '../src/light/types';
 import type { V2 } from '../src/core/math2d';
 
 const sq = (x0: number, z0: number, x1: number, z1: number): V2[] => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
@@ -12,13 +11,6 @@ const door = (a: string, x: number, z: number): DoorSpec => ({
 } as unknown as DoorSpec);
 
 describe('interior fire sources', () => {
-  test('furniture maps flatten with their group keys', () => {
-    const e: LightEmitter = { kind: 'candle', position: [0, 1, 0], colour: [1, 1, 1], intensity: 1, flicker: 0.5 };
-    const f = fromFurniture(new Map([['N:0', [e, e]], ['E:1', [e]]]), new Map([['N:0', [{ kind: 'candle', base: [0, 1, 0], height: 0.05 }]]]));
-    expect(f.group).toEqual(['N:0', 'N:0', 'E:1']);
-    expect(f.flames).toHaveLength(1);
-  });
-
   test('a torch goes on the long wall away from the door, facing into the room', () => {
     const r = room('H', 'hall');
     const plan: InteriorPlan = { rooms: [r], doors: [door('H', 5, 0)], stairs: [] };
@@ -55,7 +47,6 @@ describe('interior fire sources', () => {
     const h = wallTorches(plan, () => 'N:0');
     expect(h.holders).toEqual([{ room: 'H', wall: [5, 2, 6], n: h.holders[0].n, base: h.flames[0].base }]);
     expect(h.flames[0].base[2]).toBeCloseTo(6 - 0.22);
-    expect(fromFurniture(new Map(), new Map()).holders).toEqual([]);
     // a 30 m tunnel whose floor drops 3 m in its middle third: torches 1.55 m over the floor where they hang
     const path: [number, number, number][] = [[0, 0, 1.5], [10, 0, 1.5], [20, -3, 1.5], [30, -3, 1.5]];
     const tun = { rooms: [room('L', 'passage', 'tunnel', sq(0, 0, 30, 3))], doors: [], stairs: [], tunnels: [{ id: 'L', room: 'L', path, width: 3, crown: 2.7 }] };

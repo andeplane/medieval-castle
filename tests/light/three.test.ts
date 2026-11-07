@@ -46,6 +46,34 @@ describe('three.js light adapter', () => {
     S.update(new Float32Array([0.5, 1.2, 9]), 3);
     expect(Array.from(attr.array as Float32Array).map((x) => +x.toFixed(2))).toEqual([0.5, 1.2]);
     expect(attr.version).toBeGreaterThan(v0);
-    expect(makeFlameSprites([]).group.children).toHaveLength(0);
+    const none = makeFlameSprites([]);
+    expect(none.group.children.every((c) => !c.visible)).toBe(true); // no flames, no draw calls
+  });
+
+  it('replaces its flames (streamed rooms), growing the buffers past their capacity', () => {
+    const one = linkFlames([{ kind: 'torch', base: [0, 1, 0], height: 0.3 }], []);
+    const S = makeFlameSprites([], 2);
+    const body = () => S.group.children[1] as THREE.Mesh;
+    const first = body().geometry as THREE.InstancedBufferGeometry;
+    S.set(one);
+    expect(S.count).toBe(1);
+    expect(body().geometry).toBe(first); // fits: same buffers
+    expect(first.instanceCount).toBe(1);
+    expect(S.group.children.every((c) => c.visible)).toBe(true);
+    expect(Array.from((first.getAttribute('iBase').array as Float32Array).slice(0, 3))).toEqual([0, 1, 0]);
+    const five = linkFlames([0, 1, 2, 3, 4].map((x) => ({ kind: 'candle' as const, base: [x, 1, 0] as [number, number, number], height: 0.03 })), []);
+    let disposed = false;
+    first.addEventListener('dispose', () => { disposed = true; });
+    S.set(five);
+    const grown = body().geometry as THREE.InstancedBufferGeometry;
+    expect(grown).not.toBe(first); expect(disposed).toBe(true);
+    expect(grown.instanceCount).toBe(5);
+    expect((grown.getAttribute('iBase') as THREE.InstancedBufferAttribute).count).toBeGreaterThanOrEqual(5);
+    expect((grown.getAttribute('iBase').array as Float32Array)[12]).toBe(4);
+    S.update(new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]), 1);
+    expect(Array.from((grown.getAttribute('iFlick').array as Float32Array).slice(0, 5)).map((x) => +x.toFixed(1))).toEqual([0.1, 0.2, 0.3, 0.4, 0.5]);
+    S.set([]);
+    expect(S.count).toBe(0);
+    expect(S.group.children.every((c) => !c.visible)).toBe(true);
   });
 });

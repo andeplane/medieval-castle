@@ -131,6 +131,22 @@ describe('physics world', () => {
     expect(P.raycast([0, 5, 8], [0, -1, 0], 5)?.tag).toBe('kinematic');
   });
 
+  it('static boxes: turned by yaw, hit by rays at once, removed together', () => {
+    // a 2 m × 0.2 m slab turned 90°: it now runs along z
+    const b = P.addStaticBoxes(new Float32Array([60, 1, 60, 1, 1, 0.1, Math.PI / 2, 63, 1, 60, 0.2, 0.2, 0.2, 0]), 'chest');
+    expect(P.raycast([60, 5, 60.8], [0, -1, 0], 10)?.tag).toBe('chest');
+    expect(P.raycast([60.8, 5, 60], [0, -1, 0], 10)).toBeNull();
+    expect(P.raycast([63, 5, 60], [0, -1, 0], 10)?.point[1]).toBeCloseTo(1.2);
+    b.remove(); b.remove();
+    expect(P.raycast([60, 5, 60.8], [0, -1, 0], 10)).toBeNull();
+    expect(P.raycast([63, 5, 60], [0, -1, 0], 10)).toBeNull();
+    const none = P.addStaticBoxes(new Float32Array(0));
+    none.remove();
+    const tagged = P.addStaticBoxes(new Float32Array([70, 1, 70, 0.5, 0.5, 0.5, 0]));
+    expect(P.raycast([70, 5, 70], [0, -1, 0], 10)?.tag).toBe('box');
+    tagged.remove();
+  });
+
   it('fixed step: accumulates frame time, caps catch-up, reports alpha, fixed callbacks and stats', () => {
     let n = 0;
     const off = P.onFixed(() => { n++; });
