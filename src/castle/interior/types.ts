@@ -34,8 +34,11 @@ export interface DoorSpec {
   head: 'round' | 'pointed' | 'flat' | 'segmental';
   leaf: boolean;               // false = open archway, no door leaf
   hinge: 'left' | 'right';     // hinge side, seen from spaces[0] looking along +normal
-  swingInto: 0 | 1;            // which space the leaf swings into
-  rebate: number;              // depth from the spaces[swingInto] face to where the closed leaf sits
+  swingInto: 0 | 1;            // which space the leaf swings into first (where it rests shut at the start)
+  rebate: number;              // depth from the face of the space it swings into to where the closed leaf sits
+  /** Hinge side when the leaf swings into the other space, spaces[1 - swingInto]: the doorway is rebated on
+   *  both faces and the leaf opens away from whoever opens it. Absent: it opens into spaces[swingInto] only. */
+  otherHinge?: 'left' | 'right';
   kind: 'plank' | 'gate' | 'postern' | 'grille';
 }
 
@@ -82,5 +85,6 @@ export interface Interactable {
   id: string;
   label: () => string;                         // 'Open door' / 'Close door'
   hit: (ray: THREE.Ray, maxDist: number) => number | null; // distance along ray or null
-  use: () => void;
+  /** `by`: who uses it (where they stand and look), e.g. so a door opens away from them. */
+  use: (by?: { pos: { x: number; y: number; z: number }; dir?: { x: number; y: number; z: number } }) => void;
 }

@@ -399,8 +399,11 @@ describe('the gate in the door system', () => {
     expect(sys.request('gate-main', true, { pos: world(spec, 0, 1, 60) })).toBe(false);
     run(sys, 10);
     expect(sys.isOpen('gate-main')).toBe(true);
+    const hiddenBefore = fb[0].made[0].hidden.size; // a two-way leaf's other seat is hidden already
     sys.setVisible('court>W0-2', false);
-    expect(fb[0].made[0].hidden.size).toBe(1);
+    expect(fb[0].made[0].hidden.size).toBe(hiddenBefore + 1);
+    expect(sys.seat('court>W0-2')).toBe(leaf.swingInto);
+    expect(sys.seat('gate-main')).toBeNull();
     expect(fb[1].made[0].hidden.size).toBe(0);
   });
 });

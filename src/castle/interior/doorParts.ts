@@ -306,7 +306,7 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
 /** Geometry for one leaf class. `r` seeds board widths and grain offsets. */
 export function leafGeometry(cls: LeafClass, r: Rng): LeafGeom {
   const kind = cls.kind;
-  const sill = KIND[kind].sill;
+  const sill = cls.sill;
   const topO = headTop(cls.head, cls.ow, cls.oh, -GROW);
   const top = (x: number) => topO(cls.sOff + x) - sill; // leaf local x → opening s
   const W = cls.width;
