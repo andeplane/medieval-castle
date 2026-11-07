@@ -1,5 +1,28 @@
 # Progress
 
+## 2026-11-06: smooth stair walking (branch `claude/project-thread-ns4g2v-stairwalk`)
+
+Anders: "walking in the stairs here is very hard. must be smoother. one often stops-ish, not sure why." (a spiral stair, walking up).
+
+Root cause (measured with the new test on main, every stair in the castle, W held along the walking line):
+- The capsule climbed the rendered treads only. Each tread is a small slope the KCC rides up over the nosing and then an autostep, so speed sawed between 0.5 and 2.5 m/s at every step and the eye jumped ~8 cm a tick at each one.
+- The stair ramp collider (`stairCollisionRamp()`, written for this in `interior-stairs`) was never added to physics.
+- The motor pressed 1 m/s straight down into the floor every grounded tick. On a slope the KCC projects that press onto the plane, which took about half the horizontal speed on a 35° ramp. On flat landings the same press made the KCC stall now and then: a zero move with only the floor as contact (a Rapier quirk when the capsule sits exactly at its skin offset over the floor). That is the "stops-ish": ~0.02 m/s for a tick or two on many landings and treads.
+
+Fix
+- `castle/interior/index.ts`: one invisible walking ramp per stair (`stairCollisionRamp`) is added to `collision` after the group soups, so characters glide over the nosings. Visible steps are unchanged; the newel, drum and walls still collide as rendered.
+- `character/motor.ts`: a grounded move follows the plane of the floor just ahead instead of pressing down. `CharacterBody.probe()` (optional, a downward ray in `physics/world.ts` that skips characters) gives the floor normal 10 cm ahead of the axis going up (where the capsule's round bottom meets a ramp) and under the axis going down. The 1 m/s press stays only while the capsule touches something too steep to walk on (a riser, an edge, a wall), so the KCC still cannot slide up 0.35 m steps. Bodies without a probe (test fakes) press as before. NPCs get all of it: it is in the motor.
+- `player/controller.ts`: the eye follows a smoothed climbing speed on the ground (`climbSmooth` 30/s), so the corners where a ramp meets a landing round off instead of jolting.
+
+Tests
+- `tests/stairwalk.test.ts`: all 6 stairs (5 spirals, 1 straight cellar flight), up and back down, through the player's own motor, controller and colliders. Asserts: reaches the far landing; horizontal speed ≥ 80 % of walk after 0.3 s; eye moves ≤ 6 cm a tick; change of climbing speed ≤ 3.5 cm a tick per tick. On main every walk fails (min speed 0.015-0.06 m/s, eye jump 8 cm, jolt 7-8 cm); now min speed 2.42-2.99 m/s, jump ≤ 5 cm, jolt ≤ 3.1 cm.
+- `tests/motor.test.ts`: a fake ramp body for the probed move (rise at full horizontal speed, press only against a wall, down under the axis, no rise standing still). The 0.30 m step lane now rides up over the nosings instead of reporting a single-tick step.
+- `tests/interior.test.ts`: collision is one soup per group plus one `ramp:<id>` per stair.
+
+Known issues / next
+- An open door leaf blocks the stair tower's walking line at the courtyard landing (`court>stairtower` swings into the stair): with it open, the walk from the tunnel landing up stops there (on main too). The test keeps leaves shut. For the door-swing work.
+- Entering a ramp from a flat floor still costs one or two ticks at ~2.4 m/s (80 %).
+- The ramp is steeper than 50° within ~0.65 m of the axis; hugging the newel the capsule falls back on the treads and autostep.
 ## 2026-11-06: wall torches get a holder (branch `claude/project-thread-ns4g2v-torch`)
 
 Anders: "wtf is this flying flame?" Without `?furniture=1` (the default), `wallTorches` (render/interiorFire.ts) gave the halls, gate rooms, undercrofts and tunnels a flame sprite and a light 0.22 m off the wall, but nothing built a torch, so the flame hung in the air. The moat tunnel's torches were also placed at the tunnel's lowest floor + 2 m, so near its ends they sat under the floor.

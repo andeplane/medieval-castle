@@ -22,6 +22,17 @@ export const shapeFrom = (t: Tuning = TUNING): CharacterShape => ({
   radius: t.radius, height: t.height, skin: t.skin, autostep: t.autostep, autostepMinWidth: t.autostepMinWidth, snap: t.snap, maxSlopeDeg: t.maxSlopeDeg,
 });
 
+/** How far above and below the feet a grounded character looks for the floor ahead (m). */
+const PROBE_UP = 0.4, PROBE_DOWN = 0.4;
+/** How far ahead of the capsule's axis the floor is probed (m): about where its round bottom meets a slope. */
+const LOOKAHEAD = 0.1;
+
+/**
+ * The rise (m/s) that keeps a horizontal velocity on a floor of normal n: 0 on flat ground, up or
+ * down the plane on a slope or a stair's walking ramp.
+ */
+export const riseAlong = (vel: [number, number], n: V3) => -(vel[0] * n[0] + vel[1] * n[2]) / n[1];
+
 export class CharacterMotor {
   feet: V3 = [0, 0, 0];
   prevFeet: V3 = [0, 0, 0];
@@ -43,9 +54,15 @@ export class CharacterMotor {
   onFootfall: ((f: Footfall) => void) | null = null;
 
   private timers = { coyote: 0, buffer: 0 };
+  /** Did the last move touch something too steep to walk on (a riser, an edge, a wall)? */
+  private touching = false;
+  private readonly cosMax: number;
   private airTime = 0;
 
-  constructor(readonly body: CharacterBody, readonly t: Tuning = TUNING) { this.feet = body.feet(); this.prevFeet = [...this.feet]; }
+  constructor(readonly body: CharacterBody, readonly t: Tuning = TUNING) {
+    this.feet = body.feet(); this.prevFeet = [...this.feet];
+    this.cosMax = Math.cos((t.maxSlopeDeg * Math.PI) / 180);
+  }
 
   /** Current capsule height (standing or crouched). */
   get height() { return this.crouched ? this.t.crouchHeight : this.t.height; }
@@ -74,12 +91,13 @@ export class CharacterMotor {
     else if (this.grounded) this.vy = -1;   // press into the ground so grounding and snapping hold
     else this.vy = Math.max(-t.maxFall, this.vy - t.gravity * dt);
 
-    const want3: V3 = [this.vel[0] * dt, this.vy * dt, this.vel[1] * dt];
-    const r = this.body.move(want3);
+    const r = this.body.move(this.grounded && !j.jump ? this.groundMove(dt) : [this.vel[0] * dt, this.vy * dt, this.vel[1] * dt]);
     const [mx, my, mz] = r.move;
     let floor: string | undefined;
+    this.touching = false;
     for (const h of r.hits) {
       const [nx, ny, nz] = h.normal;
+      if (ny > -0.5 && ny < this.cosMax) this.touching = true;
       if (Math.abs(ny) < 0.7) {
         // only a wall taller than a step eats velocity: the KCC rides a stair riser for a few ticks
         // before the autostep climbs it, and losing speed there would stall on the step
@@ -111,6 +129,30 @@ export class CharacterMotor {
       this.phase += dh / stride(this.running, this.crouched, t);
       if (Math.floor(this.phase) !== before) this.footfall(this.crouched ? 0.45 : this.running ? 1.25 : 0.9);
     }
+  }
+
+  /**
+   * A grounded tick's move. With a body that can probe the floor, the move follows the plane of the
+   * floor just ahead, and presses down only while the character touches something too steep to walk
+   * on (a riser, an edge, a wall): pressing 1 m/s straight down into a 35° stair ramp cost half the
+   * horizontal speed, and on flat landings it made the KCC stall now and then (a zero move with only
+   * the floor as contact). Without the press against a step's edge, though, the KCC slides up edges
+   * taller than the autostep. A body without a probe always presses.
+   */
+  private groundMove(dt: number): V3 {
+    const [vx, vz] = this.vel, f = this.feet, v = Math.hypot(vx, vz), body = this.body;
+    if (!body.probe) return [vx * dt, this.vy * dt, vz * dt];
+    const rise = (k: number) => {
+      const g = body.probe!(f[0] + vx * k, f[2] + vz * k, f[1] + PROBE_UP, PROBE_UP + PROBE_DOWN);
+      if (g?.tag) this.floorTag = g.tag;
+      return g && g.normal[1] >= this.cosMax ? riseAlong(this.vel, g.normal) : 0;
+    };
+    // going up, follow the floor where the capsule's round bottom meets it, a little ahead of its
+    // axis (else the KCC climbs the first ticks of a ramp by projection, at a third less speed);
+    // going down, the floor under the axis (else it presses into the landing before the ramp starts)
+    const up = v > 1e-6 ? rise(dt + LOOKAHEAD / v) : 0;
+    const dy = up > 0 ? up : Math.min(0, rise(dt));
+    return [vx * dt, (dy + (this.touching ? this.vy : 0)) * dt, vz * dt];
   }
 
   private footfall(strength: number) { this.onFootfall?.({ tag: this.floorTag, running: this.running, strength, feet: [...this.feet] }); }

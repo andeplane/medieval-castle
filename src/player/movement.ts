@@ -14,6 +14,7 @@ export const TUNING = {
   bobWalk: 0.032, bobRun: 0.055, swayWalk: 0.018, swayRun: 0.028,
   fov: 70, fovRunKick: 6,
   stepSmooth: 14,                        // 1/s: how fast the camera catches up after a step
+  climbSmooth: 30,                       // 1/s: how fast the eye takes up a change of climbing speed
   // camera vs walls: the eye stays on the capsule axis (sway ≤ skin) and below the capsule top, and the
   // near plane is small enough that its corners stay well inside the capsule (nearCorner < radius)
   near: 0.06, headroom: 0.1,
