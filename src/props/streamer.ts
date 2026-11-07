@@ -14,6 +14,9 @@ import type { RoomFurniture } from './roomFurniture';
 export interface RoomSink<H> {
   add(r: RoomFurniture): H;
   remove(h: H): void;
+  /** Deferred work (rebuilding merged meshes): do at least one piece, more while `over()` is false.
+   * Returns true while work is left. */
+  flush?(over: () => boolean): boolean;
 }
 
 /** What the streamer is told to keep: the rooms near the player (a room graph, or a stand-in). */
@@ -62,7 +65,7 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
   const ready: RoomFurniture[] = [];
   const loaded = new Map<SpaceId, { h: H; r: RoomFurniture }>();
   const failed = new Set<SpaceId>();
-  let added = 0, removed = 0, disposed = false, maxUpdateMs = 0;
+  let added = 0, removed = 0, disposed = false, maxUpdateMs = 0, flushing = false;
   let wake: (() => void) | null = null;
 
   const known = (id: SpaceId) => loaded.has(id) || inFlight.has(id) || failed.has(id) || ready.some((r) => r.room === id);
@@ -100,14 +103,15 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
         if (over()) break;
       }
       for (const id of [...loaded.keys()]) { if (over()) break; if (stale(id)) unload(id); }
+      if (d.sink.flush) flushing = d.sink.flush(over);
       maxUpdateMs = Math.max(maxUpdateMs, d.now() - t0);
     },
     isLoaded: (id) => loaded.has(id),
-    idle: () => !queue.length && !inFlight.size && !ready.length,
+    idle: () => !queue.length && !inFlight.size && !ready.length && !flushing,
     async settle() {
       api.update();
       while (!api.idle()) {
-        if (!ready.length) await new Promise<void>((r) => { wake = r; });
+        if (!ready.length && !flushing) await new Promise<void>((r) => { wake = r; });
         wake = null;
         api.update();
       }
@@ -120,6 +124,7 @@ export function createFurnitureStreamer<H>(d: StreamerDeps<H>, opts: Partial<Str
     dispose() {
       disposed = true;
       for (const id of [...loaded.keys()]) unload(id);
+      d.sink.flush?.(() => false);
       queue.length = 0; ready.length = 0;
       d.jobs.dispose();
     },

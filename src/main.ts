@@ -383,13 +383,15 @@ async function main() {
   if (furnMats && furnitureJobs && interior) {
     const [{ createFurnitureStreamer }, { createRoomSink }] = await Promise.all([import('./props/streamer'), import('./props/roomMeshes')]);
     const groupByKey = new Map(interior.groups.map((g) => [g.key, g]));
+    const roomOrder = new Map(interior.plan.rooms.map((r, i) => [r.id, i]));
     const fires = createRoomFires(fireRig, (fs: FlameInstance[]) => { flames = fs; flameK = new Float32Array(fs.length); sprites.set(fs); });
     const fm = furnMats;
     furnStream = createFurnitureStreamer({
       jobs: furnitureJobs, now: () => performance.now(), onError: (id, e) => console.error(`furniture: room ${id} failed`, e),
       sink: createRoomSink({
         parentOf: (k) => groupByKey.get(k)?.object,
-        matsFor: (r) => ((groupByKey.get(r.key)?.floor ?? 0) < 0 ? fm.under : fm.above),
+        matsFor: (k) => ((groupByKey.get(k)?.floor ?? 0) < 0 ? fm.under : fm.above),
+        order: (id) => roomOrder.get(id) ?? 0,
         physics,
         fire: {
           set(room, es, fs) { fires.set(room, es, fs); const i = lit.groups.findIndex((g) => g.rooms.includes(room)); if (i >= 0) fireGroups[i] = true; },

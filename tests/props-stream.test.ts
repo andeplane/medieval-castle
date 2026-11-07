@@ -9,11 +9,11 @@ import { dressPlan, groupKey } from '../src/props/dress';
 import { mergePlaced, colliderSoup } from '../src/props/place';
 import { meshFromProp, makePropMaterials } from '../src/props/render';
 import { tagGroups } from '../src/render/interiorLight';
-import { PROP_MATS, type PropMat } from '../src/props/geom';
+import { PROP_MATS } from '../src/props/geom';
 import { createFurnisher, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
 import { serveFurnish, workerJobs, inlineJobs, poolSize, type FurnishScope, type WorkerPort, type ToFurnisher, type FromFurnisher, type FurnitureJobs } from '../src/props/furnishWorker';
 import { createFurnitureStreamer, type RoomSink } from '../src/props/streamer';
-import { meshesFromRoom, createRoomSink } from '../src/props/roomMeshes';
+import { meshesFromBins, mergeBins, createRoomSink } from '../src/props/roomMeshes';
 import { yawXZ } from '../src/props/place';
 import type { PropTex } from '../src/props/textures';
 
@@ -291,6 +291,22 @@ describe('furniture streamer', () => {
     expect(s.isLoaded('d')).toBe(false);
   });
 
+  it('runs the sink\'s deferred work in the budget and is not idle or settled until it is done', async () => {
+    const J = manualJobs(), S = fakeSink();
+    let work = 3, calls = 0;
+    const s = createFurnitureStreamer({ jobs: J.jobs, sink: { ...S.sink, flush: (over) => { calls++; do work--; while (work > 0 && !over()); return work > 0; } }, now: () => 0 }, { budgetMs: 0 });
+    s.setWanted(new Set(['a']));
+    J.calls[0].resolve(); await flush();
+    s.update();
+    expect(work).toBe(2); expect(s.idle()).toBe(false);
+    await s.settle();
+    expect(work).toBe(0); expect(s.idle()).toBe(true);
+    work = 2; // dispose finishes whatever is left, with no budget
+    s.dispose();
+    expect(work).toBe(0);
+    expect(calls).toBe(4);
+  });
+
   it('records failed rooms without retrying them, and settles', async () => {
     const J = manualJobs(), S = fakeSink(), errors: SpaceId[] = [];
     const s = createFurnitureStreamer({ jobs: J.jobs, sink: S.sink, now: () => 0, onError: (id) => errors.push(id) });
@@ -336,36 +352,65 @@ describe('furniture streamer', () => {
 // ---------------------------------------------------------------- three.js sink
 
 describe('room meshes', () => {
-  it('wraps a room into one mesh per bin under its group, with colliders and fires, and takes it out again', () => {
-    const r = createFurnisher(plan, { maxRooms: MAX_ROOMS })(plan.rooms.find((x) => x.kind === 'hall')!.id);
+  it('merges a group\'s loaded rooms into one mesh per material, equal to the old per-group path, and rebuilds as rooms come and go', () => {
+    const old = dressPlan(plan);
+    const rooms = plan.rooms.slice(0, MAX_ROOMS), index = new Map(rooms.map((r, i) => [r.id, i] as [SpaceId, number]));
+    const key = groupKey(plan.rooms.find((x) => x.kind === 'hall')!);
+    const ids = plan.rooms.filter((r) => groupKey(r) === key).map((r) => r.id);
+    const ref = meshFromProp(mergePlaced(old.byGroup.get(key)!).mesh, mats, key);
+    tagGroups([{ key, rooms: ids, object: ref } as unknown as InteriorGroup], rooms, index, 4.5);
+    const furnish = createFurnisher(plan, { maxRooms: MAX_ROOMS });
+    const order = new Map(plan.rooms.map((r, i) => [r.id, i]));
     const parent = new THREE.Group(), boxes: { n: number; tag?: string; removed: boolean }[] = [], fire: string[] = [];
     const sink = createRoomSink({
-      parentOf: (k) => (k === r.key ? parent : undefined),
+      parentOf: (k) => (k === key ? parent : undefined),
       matsFor: () => mats,
+      order: (id) => order.get(id)!,
       physics: { addStaticBoxes: (b, tag) => { const e = { n: b.length / BOX_FLOATS, tag, removed: false }; boxes.push(e); return { remove: () => { e.removed = true; } }; } },
       fire: { set: (id, e) => fire.push(`+${id}:${e.length}`), clear: (id) => fire.push(`-${id}`) },
     });
-    const h = sink.add(r);
-    expect(parent.children).toEqual([h.object]);
-    const meshes = h.object.children as THREE.Mesh[];
-    expect(meshes.map((m) => m.name.split('-').pop()).sort()).toEqual((Object.keys(r.bins) as PropMat[]).sort());
-    expect(meshes.reduce((s, m) => s + m.geometry.getAttribute('position').count / 3, 0)).toBe(r.triangles);
-    expect(meshes[0].geometry.getAttribute('interiorRoom').count).toBe(meshes[0].geometry.getAttribute('position').count);
-    expect(h.object.userData.triangles).toBe(r.triangles);
-    expect(boxes).toEqual([{ n: r.boxes.length / BOX_FLOATS, tag: `furniture:${r.room}`, removed: false }]);
-    expect(fire).toEqual([`+${r.room}:${r.emitters.length}`]);
-    let disposed = 0;
-    for (const m of meshes) m.geometry.addEventListener('dispose', () => disposed++);
-    sink.remove(h);
+    // rooms arrive in any order; colliders and fires go in at once, meshes on flush
+    const furnished = [...ids].reverse().map((id) => furnish(id));
+    const handles = furnished.map((r) => sink.add(r));
     expect(parent.children).toHaveLength(0);
-    expect(disposed).toBe(meshes.length);
-    expect(boxes[0].removed).toBe(true);
-    expect(fire.at(-1)).toBe(`-${r.room}`);
-    // a room without fires or a drawn group still gets its colliders
-    const bare = sink.add({ ...room('x'), key: 'none' });
-    expect(bare.object.parent).toBeNull();
-    expect(fire).toHaveLength(2);
-    const flame = meshesFromRoom({ ...r, bins: { flame: r.bins.wood } }, mats).children[0] as THREE.Mesh;
+    expect(boxes).toHaveLength(ids.length);
+    expect(fire.length).toBe(furnished.filter((r) => r.emitters.length || r.flames.length).length);
+    expect(sink.flush(() => true)).toBe(false); // one group: done in one piece
+    const g = sink.objectOf(key)!;
+    expect(parent.children).toEqual([g]);
+    expect(g.name).toBe(`furniture:${key}`);
+    const names = (o: THREE.Object3D) => o.children.map((c) => c.name.split('-').pop());
+    expect(names(g)).toEqual(names(ref));
+    for (const [i, m] of (g.children as THREE.Mesh[]).entries()) {
+      const r = ref.children[i] as THREE.Mesh;
+      for (const a of ['position', 'normal', 'uv', 'color', 'interiorRoom']) expect(Array.from(m.geometry.getAttribute(a).array)).toEqual(Array.from(r.geometry.getAttribute(a).array));
+      expect(m.castShadow).toBe(r.castShadow); expect(m.receiveShadow).toBe(r.receiveShadow);
+    }
+    expect(g.userData.triangles).toBe(ref.userData.triangles);
+    // a room goes: the group is rebuilt without it, the old geometry disposed
+    let disposed = 0;
+    for (const m of g.children as THREE.Mesh[]) m.geometry.addEventListener('dispose', () => disposed++);
+    const big = handles.reduce((a, h, i) => (furnished[i].triangles > furnished[handles.indexOf(a)].triangles ? h : a), handles[0]);
+    const bigTris = furnished[handles.indexOf(big)].triangles;
+    sink.remove(big);
+    expect(boxes[handles.indexOf(big)].removed).toBe(true);
+    expect(fire.at(-1)).toBe(`-${big.room}`);
+    sink.flush(() => false);
+    expect(disposed).toBe(g.children.length);
+    expect(sink.objectOf(key)!.userData.triangles).toBe(ref.userData.triangles - bigTris);
+    // all go: nothing left under the group
+    for (const h of handles) if (h !== big) sink.remove(h);
+    expect(sink.flush(() => false)).toBe(false);
+    expect(parent.children).toHaveLength(0);
+    expect(sink.objectOf(key)).toBeUndefined();
+    // two dirty groups and no budget: one per flush; a group without an object to hang on is still built
+    sink.add({ ...room('x'), key: 'none', bins: furnished[0].bins });
+    sink.add(furnished[1]);
+    expect(sink.flush(() => true)).toBe(true);
+    expect(sink.flush(() => true)).toBe(false);
+    expect(sink.objectOf('none')!.parent).toBeNull();
+    const flame = meshesFromBins('f', { flame: furnished[0].bins.wood ?? Object.values(furnished[0].bins)[0] }, mats).children[0] as THREE.Mesh;
     expect(flame.castShadow).toBe(false); expect(flame.receiveShadow).toBe(false);
+    expect(mergeBins([])).toEqual({});
   });
 });
