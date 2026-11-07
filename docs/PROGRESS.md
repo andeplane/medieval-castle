@@ -26,6 +26,58 @@ Measured headless (WebGL2 / SwiftShader, 4 cores at load average ~20, so slow an
 
 Not checked: WebGPU (headless has WebGL2 only); a real GPU's frame times; the visual result beyond the hall capture (furniture, lights and flames as before); windows at night glow only for rooms that have been loaded once (the furniture's fires are known only after a room is furnished); a collider appearing on top of the player when a room loads around them; memory over a long walk.
 
+## 2026-11-07: furniture in 19th-century taste (branch `claude/project-thread-ns4g2v-furnstyle`)
+
+Anders asked for furnishing with "amazing results", based on real castle interiors from 1800 to 1900. The working assumption comes from `castle-plan/furnishing/style-guide.md`: a medieval shell refurnished in Gothic Revival / Victorian / Scottish Baronial taste. Old pieces stay on show as relics. Family rooms get comfort, and service and defence rooms stay plain. Behind `?furniture=1`, as before.
+
+New pieces (`src/props/period.ts`; helpers moved from `kit.ts` into `parts.ts`):
+- chimneypiece: stone, Tudor-arch opening, mantel shelf, fender, fire irons, dogs, logs, an ember bed and a hearth emitter. Also a hooded hearth for the hall and kitchen.
+- Lights: a candle sconce with a brass back plate, an oil lamp with a glowing globe, 3- and 5-light candelabra, and the candlestick restyled as a brass baluster.
+- Pictures: gilt portraits in 3 sizes with procedural canvases (4 sitters, plus 2 scenes: a glen with a stag, a castle on a crag) and an overmantel mirror.
+- Upholstery: a tester bed with toned hangings, armchair, sofa, footstool and a Gothic hall chair.
+- Tables and books: round table, side table, pedestal desk, and a bookcase with book spines.
+- Floor textiles: Turkey carpet, tartan carpet, runner, rug and an animal skin (bear or deer).
+- Wall trophies and armour: stag head, weapon trophy, and a suit of armour on a plinth.
+
+Each room draws one textile tone (crimson, green or blue), so its cloth matches.
+
+Textures are pure data (`textures.ts`): `brassTex`, `stoneTex` and a 1024² paint atlas (`ATLAS` in `geom.ts`) that holds the carpets, runner, canvases and fur. There are three new material bins: `brass`, `stone` and `paint`. That adds up to +3 draw calls per visibility group that uses them. `render.ts` makes the textures itself, so `main.ts` and `furnish.ts` are unchanged.
+
+Recipes (`dress.ts`):
+- `hearthGroup`: the hearth goes centred on the longest inner wall. A mirror or portrait hangs above it and a candlestick pair or candelabrum stands on the mantel. A skin or rug lies in front, with armchairs turned to the fire, a sofa facing it, and a lamp on a side table.
+- solar = drawing room. study = library with bookcases and a desk.
+- bedchamber: the bed goes towards a corner of an inner wall, so the hearth still has room.
+- hall: hooded hearth flanked by armour, the lord's table, heads and trophies.
+- passage: a gallery with a runner, armour and hall chairs, pictures and candle sconces. Tunnels keep their torches.
+- guard, kitchen and stores stay plain.
+- Torches remain only in passages, cellars and the gate.
+- props.html: the hall and chamber vignettes are restyled, and there is a new drawing-room vignette.
+
+Numbers (whole castle, `__game.state().furniture` in the capture): 1,782 props, 970,642 triangles, 609 emitters, 79 groups. On main it was 1,400 props, 740,362 triangles and 322 emitters. The largest group is N:2 at 46.7k triangles (about 41k on main). The dress budget test is now 1,000,000.
+
+Tests (`props-dress`, `props-kit`, `props-textures`, `props-geom`, `props-render`, `props-place`):
+- determinism and colliders;
+- family hearths on an inner wall with seats facing them (93 of 131 family rooms have a hearth);
+- hearth emitters inside their room;
+- torches only in passage, cellar and gate rooms;
+- door swings clear on both sides of every door;
+- one tone per room;
+- pictures, lights and textiles in more than 80% of family rooms;
+- glass and canvases face the room.
+
+`npm run coverage` and `npm run build` pass.
+
+Captures (headless WebGL2, `castle-plan/furnishing/captures/`): `after-*` (hall, chamber/study, bedchamber, solar, chapel, kitchen, and a close-range hearth), `before-*` from origin/main where the headless browser survived, and `props-*` vignettes.
+
+Assumptions Anders can veto: the 19th-century refit itself; crimson, green or blue per room; the bed towards a corner in narrow rooms; carpets bright rather than faded.
+
+Not done or not checked:
+- Window curtains: these need the embrasure list, which only the shell has (`buildInterior` does not expose it).
+- Refectory table, chapel set, kitchen range and copper.
+- WebGPU (headless shows WebGL2 only).
+- The ember bed reads slightly pink at close range.
+- 38 family rooms are too narrow or too cut up by doors for a hearth.
+- About 24 family rooms have no textile because door keep-outs cover the middle.
 ## 2026-11-07: doors open away from whoever opens them (branch `claude/project-thread-ns4g2v-doorsaway`)
 
 Anders: "also doors should always open away from player. just makes it nicer".

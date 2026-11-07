@@ -44,7 +44,7 @@ export function meshesFromBins(name: string, bins: Partial<Record<PropMat, BinAr
     g.computeBoundingSphere();
     const m = new THREE.Mesh(g, mats[k]);
     m.name = `${name}-${k}`;
-    m.castShadow = k !== 'flame' && k !== 'cloth'; // as render.ts meshFromProp
+    m.castShadow = k !== 'flame' && k !== 'cloth' && k !== 'paint'; // as render.ts meshFromProp
     m.receiveShadow = k !== 'flame';
     group.add(m);
     triangles += b.pos.length / 9;

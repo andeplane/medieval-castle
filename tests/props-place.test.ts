@@ -25,8 +25,8 @@ describe('placing props', () => {
     const L = previewLayout(1);
     const names = L.views.map((v) => v.name);
     expect(new Set(names).size).toBe(names.length);
-    for (const n of ['kit', 'hall', 'chamber', 'store', 'p-bed', 'p-sconce']) expect(names).toContain(n);
-    expect(L.stages).toHaveLength(3);
+    for (const n of ['kit', 'hall', 'chamber', 'store', 'drawing', 'p-bed', 'p-sconce', 'p-chimneypiece']) expect(names).toContain(n);
+    expect(L.stages).toHaveLength(4);
     const room = L.placed.slice(names.filter((n) => n.startsWith('p-')).length);
     for (const p of room) {
       const [x0, z0, x1, z1] = placedFootprint(p);

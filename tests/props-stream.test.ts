@@ -22,7 +22,7 @@ let plan: InteriorPlan;
 beforeAll(() => { plan = planInterior(); });
 
 const fakeTex = (): PropTex => ({ size: 2, albedo: new Uint8Array(16), normal: new Uint8Array(16), rough: new Uint8Array(16) });
-const mats = makePropMaterials({ wood: fakeTex(), iron: fakeTex(), cloth: fakeTex(), straw: fakeTex(), ceramic: fakeTex() });
+const mats = makePropMaterials({ wood: fakeTex(), iron: fakeTex(), cloth: fakeTex(), straw: fakeTex(), ceramic: fakeTex(), brass: fakeTex(), stone: fakeTex(), paint: fakeTex() });
 
 /** Concatenate float arrays. */
 const cat = (xs: Float32Array[]) => { const o = new Float32Array(xs.reduce((s, x) => s + x.length, 0)); let k = 0; for (const x of xs) { o.set(x, k); k += x.length; } return o; };
@@ -102,7 +102,7 @@ function soupOf(boxes: Float32Array): Float32Array {
 // ---------------------------------------------------------------- worker protocol
 
 /** A worker port and its scope wired back to back; messages are structured-cloned as postMessage does. */
-const tinyTex = () => { const t = (): PropTex => ({ size: 1, albedo: new Uint8Array(4), normal: new Uint8Array(4), rough: new Uint8Array(4) }); return { wood: t(), iron: t(), cloth: t(), straw: t(), ceramic: t() }; };
+const tinyTex = () => { const t = (): PropTex => ({ size: 1, albedo: new Uint8Array(4), normal: new Uint8Array(4), rough: new Uint8Array(4) }); return { wood: t(), iron: t(), cloth: t(), straw: t(), ceramic: t(), brass: t(), stone: t(), paint: t() }; };
 function fakeWorker(furnisherOf = createFurnisher) {
   const sent: ToFurnisher[] = [];
   let transferred = 0;
@@ -135,7 +135,7 @@ describe('furnish worker protocol', () => {
     // the prop textures come from a worker too, their pixels transferred
     const before = ports.map((p) => p.transferred());
     expect(await jobs.textures()).toEqual(tinyTex());
-    expect(ports.reduce((s, p, i) => s + p.transferred() - before[i], 0)).toBe(15);
+    expect(ports.reduce((s, p, i) => s + p.transferred() - before[i], 0)).toBe(24);
     jobs.dispose(); inline.dispose();
     expect(ports.every((p) => p.terminated)).toBe(true);
   });
@@ -168,7 +168,7 @@ describe('furnish worker protocol', () => {
 
   it('makes the real prop textures inline', async () => {
     const t = await inlineJobs(() => room('x')).textures();
-    expect(Object.keys(t)).toEqual(['wood', 'iron', 'cloth', 'straw', 'ceramic']);
+    expect(Object.keys(t)).toEqual(['wood', 'iron', 'cloth', 'straw', 'ceramic', 'brass', 'stone', 'paint']);
     expect(t.wood.albedo.length).toBe(t.wood.size * t.wood.size * 4);
   });
 
