@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-11-07: thin white lines down shut doors (branch `claude/project-thread-ns4g2v-boardgaps`)
+
+Anders: "some white line split here? very thin but there". Plank leaves left a 4 mm joint open right through the leaf between boards, so a shut door against daylight showed hairline white verticals (seen live on WebGPU at the courtyard door of the room east of the great hall).
+
+- `doorParts.ts` `plankLeaf`: a tongue in every joint, 1 cm into each board and set back 30 % of the thickness from both faces. The V-grooves still read; no light passes. Board seeds and widths are unchanged.
+- `tests/doors.test.ts` "lets no light through any plank leaf": rays straight through every plank leaf class the castle uses, every 1.3 mm across, 3 cm clear of the outline (50,280 went through on main, 0 now).
+
+Not checked: whether this was the exact line in Anders' screenshot (his was at the screen centre; the #54 AO sizing fix is the other candidate).
+
 ## 2026-11-06: sunlight from nothing indoors (branch `claude/project-thread-ns4g2v-sunleak`)
 
 Anders: "this sunlight there comes from nothing": a sharp strip of sun on a room floor and up a door jamb by a thick-walled doorway (great-0 by its 3 m door to W0-4 reproduces it at the default 15.5 h).
