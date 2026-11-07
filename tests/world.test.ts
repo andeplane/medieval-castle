@@ -633,7 +633,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
       const ops = openingsOf().map((o) => (open ? { ...o, leafT: undefined } : o));
       for (const d of P.doors) vis.setDoorOpen(d.id, open); // the doors system tells the graph (main.ts syncDoorLight)
       n = ops.length;
-      for (const { label, eye } of poses) {
+      poses.forEach(({ label, eye }, i) => {
         cam.position = { x: eye[0], y: eye[1], z: eye[2] };
         vis.update();
         for (const op of ops) {
@@ -645,18 +645,23 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
           }
           // a window seen from outside shows its dark fallback pane, not the room (windows lead out only)
           if (op.window && (eye[0] - op.p[0]) * op.n[0] + (eye[2] - op.p[2]) * op.n[1] > 0) need = [op.spaces[1]];
+          // A ray is only needed to tell whether an undrawn space is seen. Everything drawn is fine whether or not
+          // it is seen, so the ray is skipped (it costs ~100 ms per 1000 under coverage); every 8th pose still
+          // casts all of them, so the count of openings seen below shows the rays reach the openings.
+          const undrawn = need.filter((s) => !vis.isRoomVisible(s) && !faults.has(`${op.id}:${s}`));
+          if (!undrawn.length && i % 8) continue;
           const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
           if (dist > 220 || dist < 0.05) continue;
           ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
           if (occ.raycastFirst(ray, T3.DoubleSide, 0, dist - 0.02)) continue;
           seen++;
-          for (const s of need) if (!vis.isRoomVisible(s) && !faults.has(`${op.id}:${s}`)) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
+          for (const s of undrawn) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
         }
-      }
+      });
     }
     console.info(`openings seen: ${poses.length} poses, ${n} openings, ${seen} seen, ${faults.size} faults`);
     expect(poses.length).toBeGreaterThan(900);
-    expect(seen).toBeGreaterThan(5000);
+    expect(seen).toBeGreaterThan(600); // 876 measured: a sample of the 6822 openings seen from every pose
     expect([...faults.values()]).toEqual([]);
   }, 300_000);
 
