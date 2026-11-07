@@ -36,7 +36,7 @@ import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../s
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
-import { createVisibility } from '../src/world/visibility';
+import { createVisibility, drawnSpaces, roomGraph } from '../src/world/visibility';
 import { MeshBVH } from 'three-mesh-bvh';
 import * as T3 from 'three';
 import { buildTerrain } from '../src/world/terrain';
@@ -572,12 +572,12 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   };
   /** Every door (at its mid-plane) and every window and slit (at its glass), with the two spaces it joins. */
   const openingsOf = () => {
-    const ops: { id: string; spaces: [string, string]; p: V3; n: V2; leafT?: number }[] = P.doors.map((d) => ({
+    const ops: { id: string; spaces: [string, string]; p: V3; n: V2; leafT?: number; window?: boolean }[] = P.doors.map((d) => ({
       id: d.id, spaces: d.spaces.map((s) => (s === 'farbank' ? 'outside' : s)) as [string, string],
       p: [d.centre[0], d.centre[1] + Math.min(1.2, d.height / 2), d.centre[2]], n: d.normal, leafT: shutLeaf(d)?.t,
     }));
     for (const a of baked().apertures) if (a.door === undefined && a.kind !== 'portal') {
-      ops.push({ id: `${a.id} (${P.rooms[a.room].id})`, spaces: [P.rooms[a.room].id, inCourt(a.c[0] + a.n[0], a.c[2] + a.n[2]) ? 'courtyard' : 'outside'], p: a.c, n: [a.n[0], a.n[2]] });
+      ops.push({ id: `${a.id} (${P.rooms[a.room].id})`, spaces: [P.rooms[a.room].id, inCourt(a.c[0] + a.n[0], a.c[2] + a.n[2]) ? 'courtyard' : 'outside'], p: a.c, n: [a.n[0], a.n[2]], window: true });
     }
     return ops;
   };
@@ -643,6 +643,8 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
             target = [op.p[0] + op.n[0] * (op.leafT + side * 0.04), op.p[1], op.p[2] + op.n[1] * (op.leafT + side * 0.04)];
             need = [side < 0 ? op.spaces[0] : op.spaces[1]];
           }
+          // a window seen from outside shows its dark fallback pane, not the room (windows lead out only)
+          if (op.window && (eye[0] - op.p[0]) * op.n[0] + (eye[2] - op.p[2]) * op.n[1] > 0) need = [op.spaces[1]];
           const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
           if (dist > 220 || dist < 0.05) continue;
           ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
@@ -669,6 +671,14 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     }
     expect(by.has('courtyard') && by.has('outside') && by.has('gate-1')).toBe(true);
     expect(faults).toEqual([]);
+    // from outdoors no room is drawn only because of a window: the rooms are those its doors and stairs reach
+    const doorsOnly = roomGraph(P), outdoor: string[] = [];
+    for (const [key, { drawn }] of by) {
+      if (!key.split('+').every((s) => s === 'courtyard' || s === 'outside')) continue;
+      const reach = drawnSpaces(doorsOnly, key.split('+'));
+      outdoor.push(...drawn.split(',').filter((s) => !reach.has(s)).map((s) => `${s} drawn from ${key} through a window`));
+    }
+    expect(outdoor).toEqual([]);
     // what the graph is for: from the gate passage every room off the courtyard is drawn, from far outside too
     const courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
     const g = P.doors.find((d) => d.id === 'gate-court')!, q = on(g, 0, -(g.wall / 2 + 2));

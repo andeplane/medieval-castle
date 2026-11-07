@@ -41,11 +41,13 @@ describe('the room graph', () => {
     expect(graph.get('B')).toContainEqual({ to: 'C', open: true, leaves: [], window: false });
     expect(graph.get('tunnel')).toContainEqual({ to: 'outside', open: true, leaves: [], window: false }); // the grille to the far bank
     expect(graph.get('E')).toContainEqual({ to: 'outside', open: true, leaves: [], window: true });       // a window
+    expect(graph.get('outside')!.map((e) => e.to)).not.toContain('E');                                // one way: room → out
     expect(graph.has('ghost')).toBe(false);
     // a stair with its own room opens onto each landing without a door; several edges: open if any is
     const g2 = roomGraph({ rooms: [room('st', 'S', 0, sq(0, 0, 2, 2), 0), room('a', 'S', 0, sq(3, 0, 5, 2), 0), room('b', 'S', 1, sq(3, 0, 5, 2), 4)], doors: [door('st>a', ['st', 'a'], [2.5, 0, 1])], stairs: [{ id: 'st', kind: 'spiral', zone: 'S', spaces: ['a', 'b'], width: 1, landings: [{ y: 0, door: 'st>a' }, { y: 4 }] }] }, [{ room: 'a', side: 'outside' }, { room: 'a', side: 'outside' }]);
     expect(g2.get('st')).toEqual([{ to: 'a', open: false, leaves: ['st>a'], window: false }, { to: 'b', open: true, leaves: [], window: false }]);
     expect(g2.get('a')).toEqual([{ to: 'st', open: false, leaves: ['st>a'], window: false }, { to: 'outside', open: true, leaves: [], window: true }]);
+    expect(g2.get('outside')).toEqual([]);
   });
   test('draws two steps from the camera, then on through open doorways, then through the windows', () => {
     // A: courtyard, B, outside, cellar at 1; C, tunnel at 2; nothing open past them (C>D has a leaf)
@@ -58,8 +60,10 @@ describe('the room graph', () => {
     expect(ids(drawnSpaces(graph0, ['A'], 1))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
     expect(ids(drawnSpaces(graph0, ['farbank']))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
     expect(ids(drawnSpaces(graph0, ['ghost']))).toEqual([]);
-    // windows: the courtyard sees C, and the outside E, so from A both are a step nearer
-    expect(ids(drawnSpaces(graph, ['A']))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    // windows lead out only: from A, E's window does not bring E in from outside
+    expect(ids(drawnSpaces(graph, ['A']))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    // from E its window reaches outside at one step, the gate into A at two; C's window then the courtyard
+    expect(ids(drawnSpaces(graph, ['E']))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside', 'tunnel']);
   });
   test('the camera: its room, a doorway\'s two spaces, the courtyard, outside, above the roofs', () => {
     const o = { court: (x: number) => x < 0, roofs: 30 };

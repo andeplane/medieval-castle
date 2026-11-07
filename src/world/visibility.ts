@@ -5,7 +5,10 @@
 //   'outside' (the far bank counts as outside).
 // - Edges: every door (with or without a leaf), every stair, and every window or slit (the one opening
 //   model's apertures). An edge is `open` when nothing can shut it (a doorway without a leaf, a grille,
-//   the gate, a window, a slit, a stair) and leafed otherwise.
+//   the gate, a window, a slit, a stair) and leafed otherwise. Windows and slits run one way, from the room
+//   out: from inside you see out, from outside a window shows its dark fallback pane (render/windowGlass.ts)
+//   and draws nothing behind it (an assumption for Anders, 2026-11-07: two-way windows drew most of the
+//   castle from anywhere outdoors, 1298 draw calls at the hero view).
 // - The camera's spaces: the room it is in; both spaces of a doorway it stands in; else 'courtyard' in
 //   the courtyard outline and 'outside' elsewhere; above the roofs both.
 // - Drawn: every space within two steps of the camera's spaces; then on through every doorway that is open
@@ -36,7 +39,7 @@ export function roomGraph(plan: InteriorPlan, windows: WindowLink[] = []): RoomG
   const link = (a: SpaceId, b: SpaceId, open: boolean, leaf?: string, window = false) => {
     a = spaceNode(a); b = spaceNode(b);
     if (a === b || !g.has(a) || !g.has(b)) return;
-    for (const [x, y] of [[a, b], [b, a]]) {
+    for (const [x, y] of window ? [[a, b]] : [[a, b], [b, a]]) {
       let l = g.get(x)!.find((e) => e.to === y && e.window === window);
       if (!l) g.get(x)!.push(l = { to: y, open, leaves: [], window });
       l.open ||= open;
