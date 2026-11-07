@@ -3,74 +3,11 @@
 // on the floor at the centre of the footprint (or on the wall / ceiling for mounted props), +y up,
 // the front faces +z, metres. Sizes follow real medieval furniture (seat 0.45 m, table 0.76 m).
 import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } from './geom';
-import type { LightEmitter } from '../light/types';
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
-
-export type Placement = 'floor' | 'wall' | 'ceiling';
-
-/** A light source on a fixture; src/light turns these into flickering lights. Local space. */
-export type Emitter = LightEmitter;
-
-/** Solid parts for physics and NPC navigation, as boxes in local space. */
-export interface Collider { centre: V3; half: V3 }
-
-export interface PropMeta {
-  colliders: Collider[];
-  emitters: Emitter[];
-}
-
-export interface PropKind {
-  name: string;
-  placement: Placement;
-  /** Height above the floor for wall-mounted props (sconces, tapestries). */
-  mount?: number;
-  /** False for things you can walk over (rugs, straw). True props are navmesh obstacles. */
-  blocksNav: boolean;
-  build(m: PropMesh, r: Rng): PropMeta;
-}
-
-// ---------- palettes (vertex tints over the shared materials) ----------
-export const WOOD: Record<string, RGB> = { oak: [1, 1, 1], dark: [0.55, 0.5, 0.46], grey: [0.8, 0.78, 0.72], pale: [1.25, 1.15, 1.0] };
-export const CLOTH: Record<string, RGB> = {
-  linen: [0.72, 0.67, 0.56], undyed: [0.5, 0.44, 0.34], madder: [0.42, 0.14, 0.1], woad: [0.15, 0.2, 0.3],
-  weld: [0.5, 0.41, 0.2], green: [0.2, 0.26, 0.16], brown: [0.36, 0.26, 0.18], black: [0.09, 0.08, 0.08],
-  leather: [0.32, 0.2, 0.12],
-};
-const IRON: RGB = [1, 1, 1];
-const FLAME: Emitter['colour'] = [1, 1, 1]; // tint over the flame kind's black-body colour
-
-const jitterTint = (r: Rng, c: RGB, k = 0.08): RGB => { const f = 1 + (r() - 0.5) * 2 * k; return [c[0] * f, c[1] * f, c[2] * f]; };
-const woodTint = (r: Rng) => jitterTint(r, pick(r, [WOOD.oak, WOOD.oak, WOOD.dark, WOOD.grey]));
-const boxCollider = (min: V3, max: V3): Collider => ({ centre: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2], half: [(max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2] });
-/** One collider around everything built so far. */
-const hull = (m: PropMesh): Collider => { const b = m.bounds(); return boxCollider(b.min, b.max); };
-const none = (m: PropMesh): PropMeta => ({ colliders: [hull(m)], emitters: [] });
-
-/** A plank top made of several boards with small gaps and uneven thickness. */
-function planks(m: PropMesh, r: Rng, L: number, W: number, y: number, t: number, along: 0 | 2 = 0) {
-  const n = Math.max(2, Math.round(W / range(r, 0.22, 0.32)));
-  const gap = 0.004, bw = (W - gap * (n - 1)) / n;
-  for (let i = 0; i < n; i++) {
-    const off = -W / 2 + bw / 2 + i * (bw + gap), tt = t * range(r, 0.92, 1.05), dy = range(r, -0.003, 0.003);
-    const len = L * range(r, 0.985, 1);
-    const c: V3 = along === 0 ? [range(r, -0.01, 0.01), y + tt / 2 + dy, off] : [off, y + tt / 2 + dy, range(r, -0.01, 0.01)];
-    const s: V3 = along === 0 ? [len, tt, bw] : [bw, tt, len];
-    m.box('wood', c, s, { bevel: 0.006, grain: along, skew: [range(r, -0.002, 0.002), range(r, -0.002, 0.002)] });
-  }
-}
-
-/** A splayed leg from the floor to height h, foot pushed out by (dx, dz). */
-function leg(m: PropMesh, x: number, z: number, h: number, w: number, dx = 0, dz = 0, round = false) {
-  if (round) { m.tube('wood', [[x + dx, 0, z + dz], [x, h, z]], [w * 0.55, w * 0.48], 7, [false, false]); return; }
-  const len = Math.hypot(h, dx, dz), ax = Math.atan2(dz, h), az = -Math.atan2(dx, h);
-  m.with(compose(translate(x + dx / 2, h / 2, z + dz / 2), compose(rotZ(az), rotX(ax))), () => m.box('wood', [0, 0, 0], [w, len, w], { bevel: 0.006, grain: 1, noBottom: true }));
-}
-
-/** A charred wick or char stub and a flame marker; the flame itself is drawn by src/light. */
-const flame = (m: PropMesh, kind: Emitter['kind'], at: V3, size: number) => {
-  if (kind === 'candle') m.tinted([0.05, 0.04, 0.035], () => m.with(translate(at[0], at[1], at[2]), () => m.tube('iron', [[0, -0.004, 0], [0.001, size * 0.35, 0.0005]], 0.0012, 3)));
-  m.addFlame(kind, at, size * 1.6);
-};
+import { WOOD, CLOTH, IRON, FLAME, jitterTint, woodTint, boxCollider, hull, none, planks, leg, flame, jug, bowl, book, candle, v3dir, type PropKind, type PropMeta, type Emitter } from './parts';
+import { PERIOD } from './period';
+export { WOOD, CLOTH };
+export type { Placement, Emitter, Collider, PropMeta, PropKind } from './parts';
 
 // ---------- tables and seating ----------
 export const trestleTable: PropKind = {
@@ -199,30 +136,6 @@ export const bed: PropKind = {
   },
 };
 
-export const fourPoster: PropKind = {
-  name: 'four-poster', placement: 'floor', blocksNav: true,
-  build(m, r) {
-    const L = range(r, 2.05, 2.25), W = range(r, 1.4, 1.7), H = range(r, 2.15, 2.35), tint = woodTint(r);
-    bedBody(m, r, L, W, pick(r, [CLOTH.madder, CLOTH.woad, CLOTH.green]));
-    m.tinted(tint, () => {
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.045), H / 2, sz * (L / 2 - 0.045)], [0.09, H, 0.09], { bevel: 0.012, grain: 1, noBottom: true });
-      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.045), H - 0.06, 0], [0.07, 0.12, L], { bevel: 0.01, grain: 2 });
-      for (const sz of [-1, 1]) m.box('wood', [0, H - 0.06, sz * (L / 2 - 0.045)], [W, 0.12, 0.07], { bevel: 0.01 });
-    });
-    const curtain = jitterTint(r, pick(r, [CLOTH.madder, CLOTH.woad, CLOTH.green, CLOTH.weld]));
-    m.tinted(curtain, () => {
-      m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.1), H - 0.002, (t - 0.5) * (L - 0.1) + Math.sin(s * 3) * 0.002], 4, 4, [W, L], true); // tester
-      // curtains gathered at the head posts, folds as a sine
-      for (const sx of [-1, 1]) m.sheet('cloth', (s, t) => {
-        const z = -L / 2 + 0.05 + s * 0.55, y = H - 0.12 - t * (H - 0.2);
-        return [sx * (W / 2 + 0.01) + Math.sin(s * 22) * 0.03 * (0.5 + t * 0.5) * sx, y, z];
-      }, 16, 4, [0.7, H]);
-      m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.06) , H - 0.12 - t * (H - 0.6), -L / 2 - 0.01 + Math.sin(s * 30) * 0.025], 20, 3, [W, H]);
-    });
-    return none(m);
-  },
-};
-
 export const strawPallet: PropKind = {
   name: 'straw-pallet', placement: 'floor', blocksNav: false,
   build(m, r) {
@@ -282,23 +195,6 @@ export const cupboard: PropKind = {
     return none(m);
   },
 };
-
-function jug(m: PropMesh, r: Rng, h: number) {
-  const R = h * range(r, 0.3, 0.38), ph = r() * 6;
-  m.tinted(jitterTint(r, pick(r, [[0.62, 0.42, 0.3], [0.5, 0.48, 0.42], [0.35, 0.4, 0.3]] as RGB[])), () => {
-    m.lathe('ceramic', [[0, 0], [R * 0.7, 0], [R, h * 0.35], [R * 0.9, h * 0.6], [R * 0.45, h * 0.85], [R * 0.5, h], [R * 0.42, h]], 12,
-      { wobble: (th, y) => 1 + Math.sin(th * 3 + ph + y * 9) * 0.02 });
-    m.tube('ceramic', Array.from({ length: 6 }, (_, i) => { const a = (i / 5) * Math.PI; return [-R * 0.55 - Math.sin(a) * R * 0.45, h * 0.88 - (i / 5) * h * 0.45, 0] as V3; }), h * 0.035, 5, [false, false]);
-  });
-}
-function bowl(m: PropMesh, r: Rng, R: number) {
-  m.tinted(jitterTint(r, pick(r, [[0.6, 0.45, 0.32], [0.7, 0.66, 0.6]] as RGB[])), () =>
-    m.lathe('ceramic', [[0, 0], [R * 0.5, 0], [R, R * 0.45], [R * 0.93, R * 0.47], [R * 0.45, R * 0.06], [0, R * 0.06]], 12));
-}
-function book(m: PropMesh, r: Rng, w: number, h: number, t: number) {
-  m.tinted(jitterTint(r, pick(r, [CLOTH.leather, CLOTH.madder, CLOTH.brown, CLOTH.black])), () => m.box('cloth', [0, t / 2, 0], [w, t, h], { bevel: 0.004 }));
-  m.tinted([0.95, 0.88, 0.72], () => m.box('wax', [0.006, t / 2, 0], [w - 0.012, t - 0.012, h - 0.016]));
-}
 
 export const shelf: PropKind = {
   name: 'shelf', placement: 'floor', blocksNav: true,
@@ -421,19 +317,13 @@ export const tableware: PropKind = {
 };
 
 // ---------- lighting fixtures (meshes + emitters only) ----------
-function candle(m: PropMesh, r: Rng, at: V3, h: number, R: number, emit: Emitter[], intensity: number) {
-  m.tinted(jitterTint(r, [0.92, 0.86, 0.7], 0.05), () => m.with(translate(at[0], at[1], at[2]), () =>
-    m.lathe('wax', [[R, 0], [R, h * 0.85], [R * 0.9, h], [R * 0.3, h * 0.97], [0, h * 0.97]], 8, { wobble: (th, y) => 1 + Math.sin(th * 2 + y * 30) * 0.06 * (y / h) })));
-  flame(m, 'candle', [at[0], at[1] + h * 0.97, at[2]], R * 1.6);
-  emit.push({ kind: 'candle', position: [at[0], at[1] + h + R * 1.2, at[2]], colour: FLAME, intensity, flicker: 0.12 });
-}
-
 export const candlestick: PropKind = {
   name: 'candlestick', placement: 'floor', blocksNav: false,
   build(m, r) {
-    const H = range(r, 0.22, 0.4), emit: Emitter[] = [];
-    m.tinted(IRON, () => m.lathe('iron', [[0, 0], [0.07, 0], [0.07, 0.01], [0.02, 0.03], [0.012, H * 0.5], [0.02, H * 0.55], [0.012, H * 0.6], [0.012, H - 0.01], [0.05, H - 0.005], [0.05, H + 0.005], [0, H + 0.005]], 10));
-    candle(m, r, [0, H + 0.005, 0], range(r, 0.1, 0.2), 0.013, emit, 0.8);
+    // a turned brass baluster stick (style guide: brass pairs); one in four is the old iron pricket
+    const H = range(r, 0.22, 0.34), emit: Emitter[] = [], brass = r() < 0.75;
+    m.tinted(brass ? jitterTint(r, [0.95, 0.7, 0.36], 0.05) : IRON, () => m.lathe(brass ? 'brass' : 'iron', [[0, 0], [0.065, 0], [0.068, 0.012], [0.04, 0.025], [0.022, 0.04], [0.014, H * 0.3], [0.024, H * 0.42], [0.013, H * 0.55], [0.012, H - 0.03], [0.022, H - 0.02], [0.045, H - 0.008], [0.045, H + 0.005], [0, H + 0.005]], 8));
+    candle(m, r, [0, H + 0.005, 0], range(r, 0.12, 0.2), 0.012, emit, 0.8);
     return { colliders: [hull(m)], emitters: emit };
   },
 };
@@ -506,7 +396,6 @@ export const weaponRack: PropKind = {
     return none(m);
   },
 };
-const v3dir = (a: V3, b: V3): V3 => { const d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]; const l = Math.hypot(...d); return [d[0] / l, d[1] / l, d[2] / l]; };
 
 export const armourStand: PropKind = {
   name: 'armour-stand', placement: 'floor', blocksNav: true,
@@ -610,15 +499,6 @@ export const tapestry: PropKind = {
   },
 };
 
-export const rug: PropKind = {
-  name: 'rug', placement: 'floor', blocksNav: false,
-  build(m, r) {
-    const W = range(r, 1.4, 2.6), L = range(r, 2.0, 3.6), ph = r() * 6;
-    patterned(m, r, (s, t) => [(s - 0.5) * W, 0.006 + Math.max(0, Math.sin(s * 7 + t * 3 + ph)) * 0.01, (t - 0.5) * L], 10, 14, [W, L]);
-    return { colliders: [hull(m)], emitters: [] };
-  },
-};
-
 // ---------- fuel and floor litter ----------
 export const firewood: PropKind = {
   name: 'firewood', placement: 'floor', blocksNav: true,
@@ -650,11 +530,12 @@ export const strawHeap: PropKind = {
 };
 
 export const KIT: readonly PropKind[] = [
-  trestleTable, bench, stool, chair, throne, bed, fourPoster, strawPallet,
+  trestleTable, bench, stool, chair, throne, bed, strawPallet,
   chest, cupboard, shelf, barrel, crate, sack, bucket,
   cauldron, tableware, candlestick, sconce, chandelier,
   weaponRack, armourStand, lectern, altar, bookStack,
-  tapestry, rug, firewood, strawHeap,
+  tapestry, firewood, strawHeap,
+  ...PERIOD,
 ];
 export const KIND = Object.fromEntries(KIT.map((k) => [k.name, k])) as Record<string, PropKind>;
 
@@ -665,7 +546,7 @@ export function makeProp(kind: PropKind | string, seed = 0): Prop {
   const k = typeof kind === 'string' ? KIND[kind] : kind;
   if (!k) throw new Error(`unknown prop kind ${String(kind)}`);
   const mesh = new PropMesh();
-  const meta = k.build(mesh, mulberry32(hashSeed(`prop:${k.name}:${seed}`)));
+  const meta = k.build(mesh, mulberry32(hashSeed(`prop:${k.name}:${seed}`)), seed);
   return { kind: k, seed, mesh, meta, bounds: mesh.bounds() };
 }
 

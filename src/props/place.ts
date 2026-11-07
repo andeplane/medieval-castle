@@ -1,7 +1,7 @@
 // Placing props: merge placed props into one mesh per material, and the layout of the prop-kit
-// review page (gallery cells and three dressed room vignettes). Pure data, unit-tested.
+// review page (gallery cells and four dressed room vignettes). Pure data, unit-tested.
 import { PropMesh, translate, rotY, compose, type V3 } from './geom';
-import { KIT, makeProp, type Prop, type Emitter, type PropKind } from './kit';
+import { KIT, KIND, makeProp, type Prop, type Emitter, type PropKind } from './kit';
 
 export interface Placed { prop: Prop; at: V3; yaw: number }
 
@@ -49,62 +49,110 @@ function frame(name: string, label: string, p: Placed): PreviewView {
   return { name, label, pos: [mid[0] + d * 0.55, mid[1] + d * 0.38, mid[2] + d * 0.8], target: mid };
 }
 
-/** Dressed vignettes, each a three-walled room open to the south (+z), origin at its north-west corner. */
+/** Dressed vignettes, each a three-walled room open to the south (+z), origin at its north-west corner:
+ * the great hall, a bedchamber and a drawing room in the 19th-century refit, and the store room. */
 function vignettes(x0: number, z0: number): { placed: Placed[]; stages: Stage[]; views: PreviewView[] } {
-  const P = (kind: string, seed: number, at: V3, yaw = 0): Placed => ({ prop: makeProp(kind, seed), at, yaw });
   const placed: Placed[] = [], stages: Stage[] = [], views: PreviewView[] = [];
-  // great hall: high table on a dais with the throne, two long tables with benches, chandeliers, tapestries
+  const P = (kind: string, seed: number, at: V3, yaw = 0): Placed => { const p = { prop: makeProp(kind, seed), at, yaw }; placed.push(p); return p; };
+  // backed against a wall: north (z = w, facing south), west (x = w, facing east) or east (x = w, facing west)
+  const N = (kind: string, seed: number, x: number, w: number) => { const pr = makeProp(kind, seed); return P(kind, seed, [x, 0, w + 0.04 - pr.bounds.min[2]], 0); };
+  const Wst = (kind: string, seed: number, z: number, w: number) => { const pr = makeProp(kind, seed); return P(kind, seed, [w + 0.04 - pr.bounds.min[2], 0, z], Math.PI / 2); };
+  const E = (kind: string, seed: number, z: number, w: number) => { const pr = makeProp(kind, seed); return P(kind, seed, [w - 0.04 + pr.bounds.min[2], 0, z], -Math.PI / 2); };
+  // hung on a wall at the kind's mount height: yaw 0 north, PI/2 west, -PI/2 east
+  const hang = (kind: string, seed: number, at: [number, number], yaw: number, y = KIND[kind].mount!) => P(kind, seed, [at[0], y, at[1]], yaw);
+  // things on a chimneypiece: a garniture on the mantel, a glass or picture above it
+  const dressHearth = (h: Placed, garniture: string, xs: number[], above: string, seed: number) => {
+    const mt = h.prop.meta.mantel!, ab = h.prop.meta.above!;
+    for (const x of xs) { const [ox, oz] = yawXZ(x * mt.w / 2, mt.z, h.yaw); P(garniture, seed + x, [h.at[0] + ox, mt.y, h.at[2] + oz], h.yaw); }
+    const pr = makeProp(above, seed), [ox, oz] = yawXZ(ab[0], ab[2], h.yaw);
+    P(above, seed, [h.at[0] + ox, ab[1] - pr.bounds.min[1], h.at[2] + oz], h.yaw);
+  };
+  const facing = (from: V3, to: V3) => Math.atan2(to[0] - from[0], to[2] - from[2]);
+  // great hall: the hooded hearth between suits of armour, the lord's table on the west wall, two long
+  // tables under iron candle rings, stag heads and trophies, portraits, candle sconces
   {
     const ox = x0, oz = z0, W = 11, D = 9, H = 5.2;
     stages.push({ min: [ox, 0, oz], max: [ox + W, H, oz + D], open: 'south' });
-    placed.push(P('throne', 1, [ox + W / 2, 0, oz + 1.0]));
-    placed.push(P('trestle-table', 2, [ox + W / 2, 0, oz + 2.3]));
-    placed.push(P('tableware', 3, [ox + W / 2 - 0.4, 0.78, oz + 2.3]));
-    placed.push(P('candlestick', 4, [ox + W / 2 + 0.7, 0.78, oz + 2.25]));
-    for (const [i, x] of [ox + 3, ox + W - 3].entries()) {
-      placed.push(P('trestle-table', 10 + i, [x, 0, oz + 5.6], Math.PI / 2));
-      placed.push(P('bench', 20 + i, [x - 0.75, 0, oz + 5.6], Math.PI / 2));
-      placed.push(P('bench', 30 + i, [x + 0.75, 0, oz + 5.6], Math.PI / 2));
-      placed.push(P('tableware', 40 + i, [x, 0.78, oz + 5.0 + i * 0.8], Math.PI / 2));
-      placed.push(P('chandelier', 50 + i, [x, H, oz + 5.2]));
+    const h = N('hooded-hearth', 1, ox + W / 2, oz), hw = h.prop.bounds.max[0];
+    for (const sx of [-1, 1]) N('armour', 2 + sx, ox + W / 2 + sx * (hw + 0.55), oz);
+    P('skin', 3, [ox + W / 2, 0, h.at[2] + 1.9], Math.PI / 2);
+    const throne = Wst('throne', 1, oz + 5, ox);
+    const high = P('trestle-table', 2, [throne.at[0] + 1.4, 0, oz + 5], Math.PI / 2);
+    P('candelabrum', 3, [high.at[0], 0.78, oz + 4.4]); P('tableware', 4, [high.at[0], 0.78, oz + 5.4], Math.PI / 2);
+    for (const [i, x] of [ox + 5.0, ox + 8.2].entries()) {
+      P('trestle-table', 10 + i, [x, 0, oz + 5.4], Math.PI / 2);
+      P('bench', 20 + i, [x - 0.75, 0, oz + 5.4], Math.PI / 2);
+      P('bench', 30 + i, [x + 0.75, 0, oz + 5.4], Math.PI / 2);
+      P('tableware', 40 + i, [x, 0.78, oz + 4.9 + i * 0.8], Math.PI / 2);
+      P('chandelier', 50 + i, [x, H, oz + 5.4]);
     }
-    placed.push(P('tapestry', 60, [ox + 2.6, 3.4, oz + 0.02]));
-    placed.push(P('tapestry', 61, [ox + W - 2.6, 3.4, oz + 0.02]));
-    for (const z of [oz + 3.2, oz + 6.8]) { placed.push(P('sconce', 70 + z, [ox + 0.02, 2.1, z], Math.PI / 2)); placed.push(P('sconce', 80 + z, [ox + W - 0.02, 2.1, z], -Math.PI / 2)); }
-    placed.push(P('rug', 90, [ox + W / 2, 0, oz + 3.8]));
-    views.push({ name: 'hall', label: 'Hall', pos: [ox + W / 2 + 1.2, 1.7, oz + D + 2.6], target: [ox + W / 2, 1.4, oz + 2] });
+    for (const [i, sx] of [-1, 1].entries()) hang('stag-head', 60 + i, [ox + W / 2 + sx * 3.4, oz + 0.02], 0);
+    hang('tapestry', 62, [ox + 2.2, oz + 0.02], 0, 3.2);
+    hang('portrait', 63, [ox + W - 2.0, oz + 0.02], 0, 2.6);
+    for (const [i, z] of [oz + 2.6, oz + 6.4].entries()) hang('weapon-trophy', 64 + i, [ox + W - 0.02, z], -Math.PI / 2);
+    hang('portrait', 66, [ox + 0.02, oz + 2.4], Math.PI / 2);
+    for (const z of [oz + 3.4, oz + 7.4]) { hang('candle-sconce', 70 + z, [ox + 0.02, z], Math.PI / 2); hang('candle-sconce', 80 + z, [ox + W - 0.02, z + 1.0], -Math.PI / 2); }
+    views.push({ name: 'hall', label: 'Hall', pos: [ox + W / 2 + 1.2, 1.7, oz + D + 2.6], target: [ox + W / 2, 1.6, oz + 2] });
   }
-  // chamber: four-poster, chest at its foot, chair, cupboard, rug, candle
+  // bedchamber: the tester bed in a corner, a chest at its foot and a candle at its side; a chimneypiece
+  // on the east wall with a glass over it and an armchair at the fire; a rug, a portrait, a sconce
   {
     const ox = x0 + 13, oz = z0, W = 7, D = 6, H = 3.6;
     stages.push({ min: [ox, 0, oz], max: [ox + W, H, oz + D], open: 'south' });
-    placed.push(P('four-poster', 1, [ox + 2.0, 0, oz + 1.15]));
-    placed.push(P('chest', 2, [ox + 2.0, 0, oz + 2.75]));
-    placed.push(P('candlestick', 3, [ox + 2.3, 0.56, oz + 2.75]));
-    placed.push(P('cupboard', 4, [ox + W - 1.0, 0, oz + 0.3]));
-    placed.push(P('chair', 5, [ox + W - 1.6, 0, oz + 2.6], -0.6));
-    placed.push(P('rug', 6, [ox + 3.6, 0, oz + 3.4], Math.PI / 2));
-    placed.push(P('book-stack', 7, [ox + W - 0.9, 0, oz + 1.2]));
-    placed.push(P('tapestry', 8, [ox + 0.02, 2.6, oz + 3.6], Math.PI / 2));
-    placed.push(P('sconce', 9, [ox + W - 0.02, 1.9, oz + 3.2], -Math.PI / 2));
-    views.push({ name: 'chamber', label: 'Chamber', pos: [ox + W / 2 + 0.8, 1.65, oz + D + 2.0], target: [ox + W / 2 - 0.4, 0.9, oz + 1.6] });
+    const bed = N('four-poster', 3, ox + 1.7, oz);
+    P('chest', 2, [bed.at[0], 0, bed.at[2] + bed.prop.bounds.max[2] + 0.4], Math.PI / 2);
+    const st = P('side-table', 4, [bed.at[0] + bed.prop.bounds.max[0] + 0.4, 0, oz + 0.45]);
+    P('candlestick', 5, [st.at[0], st.prop.bounds.max[1], st.at[2]]);
+    const h = E('chimneypiece', 6, oz + 2.6, ox + W);
+    dressHearth(h, 'candlestick', [-0.72, 0.72], 'overmantel-mirror', 7);
+    const fire: V3 = [h.at[0] - 0.5, 0, h.at[2]], chair: V3 = [h.at[0] - 1.8, 0, h.at[2] + 1.1];
+    P('armchair', 9, chair, facing(chair, fire));
+    P('skin', 10, [h.at[0] - 1.35, 0, h.at[2]], h.yaw + Math.PI / 2); // lying along the hearth, as in the castle
+    P('rug', 12, [ox + 2.9, 0, oz + 3.9], Math.PI / 2);
+    N('cupboard', 13, ox + W - 1.0, oz);
+    hang('portrait', 14, [ox + 0.02, oz + 3.4], Math.PI / 2);
+    hang('candle-sconce', 15, [ox + W - 0.02, oz + 4.6], -Math.PI / 2);
+    views.push({ name: 'chamber', label: 'Bedchamber', pos: [ox + W / 2 + 0.8, 1.65, oz + D + 2.0], target: [ox + W / 2 - 0.2, 1.1, oz + 1.8] });
   }
   // store room: barrels, crates, sacks, firewood, straw, a bucket, the armoury rack, a cauldron
   {
     const ox = x0 + 22, oz = z0, W = 7, D = 6, H = 3.2;
     stages.push({ min: [ox, 0, oz], max: [ox + W, H, oz + D], open: 'south' });
-    for (let i = 0; i < 4; i++) placed.push(P('barrel', i, [ox + 0.5 + i * 0.66, 0, oz + 0.45], i));
-    placed.push(P('barrel', 9, [ox + 0.85, 0, oz + 1.15], 2));
-    for (let i = 0; i < 3; i++) placed.push(P('crate', i, [ox + W - 0.7, i === 2 ? 0.62 : 0, oz + 0.6 + (i === 1 ? 0.8 : 0)], i * 0.3));
-    for (let i = 0; i < 5; i++) placed.push(P('sack', i, [ox + 3.4 + (i % 3) * 0.45, 0, oz + 0.4 + Math.floor(i / 3) * 0.5], i));
-    placed.push(P('firewood', 1, [ox + 0.5, 0, oz + 3.2], Math.PI / 2));
-    placed.push(P('straw-heap', 1, [ox + 2.4, 0, oz + 3.4]));
-    placed.push(P('bucket', 1, [ox + 1.4, 0, oz + 2.2]));
-    placed.push(P('cauldron', 1, [ox + 4.6, 0, oz + 2.6]));
-    placed.push(P('weapon-rack', 1, [ox + W - 0.4, 0, oz + 3.4], -Math.PI / 2));
-    placed.push(P('armour-stand', 1, [ox + W - 1.4, 0, oz + 4.6], -0.4));
-    placed.push(P('sconce', 1, [ox + 0.02, 1.8, oz + 1.8], Math.PI / 2));
+    for (let i = 0; i < 4; i++) P('barrel', i, [ox + 0.5 + i * 0.66, 0, oz + 0.45], i);
+    P('barrel', 9, [ox + 0.85, 0, oz + 1.15], 2);
+    for (let i = 0; i < 3; i++) P('crate', i, [ox + W - 0.7, i === 2 ? 0.62 : 0, oz + 0.6 + (i === 1 ? 0.8 : 0)], i * 0.3);
+    for (let i = 0; i < 5; i++) P('sack', i, [ox + 3.4 + (i % 3) * 0.45, 0, oz + 0.4 + Math.floor(i / 3) * 0.5], i);
+    P('firewood', 1, [ox + 0.5, 0, oz + 3.2], Math.PI / 2);
+    P('straw-heap', 1, [ox + 2.4, 0, oz + 3.4]);
+    P('bucket', 1, [ox + 1.4, 0, oz + 2.2]);
+    P('cauldron', 1, [ox + 4.6, 0, oz + 2.6]);
+    P('weapon-rack', 1, [ox + W - 0.4, 0, oz + 3.4], -Math.PI / 2);
+    P('armour-stand', 1, [ox + W - 1.4, 0, oz + 4.6], -0.4);
+    P('sconce', 1, [ox + 0.02, 1.8, oz + 1.8], Math.PI / 2);
     views.push({ name: 'store', label: 'Store', pos: [ox + W / 2 + 0.6, 1.7, oz + D + 2.2], target: [ox + W / 2, 0.8, oz + 1.6] });
+  }
+  // drawing room: a carpet, the chimneypiece with a portrait over it, a sofa and two armchairs round the
+  // fire, a lamp on a side table, a bookcase and a desk, pictures, candle sconces
+  {
+    const ox = x0 + 31, oz = z0, W = 8, D = 6.5, H = 4;
+    stages.push({ min: [ox, 0, oz], max: [ox + W, H, oz + D], open: 'south' });
+    P('carpet', 3, [ox + W / 2, 0, oz + 3.0]);
+    const h = N('chimneypiece', 1, ox + W / 2, oz);
+    dressHearth(h, 'candelabrum', [0], 'portrait', 2);
+    const fire: V3 = [h.at[0], 0, h.at[2] + 0.2];
+    for (const sx of [-1, 1]) { const c: V3 = [h.at[0] + sx * 1.05, 0, h.at[2] + 1.8]; P('armchair', 3, c, facing(c, fire)); }
+    P('sofa', 6, [h.at[0], 0, h.at[2] + 3.1], Math.PI);
+    P('footstool', 9, [h.at[0] + 0.6, 0, h.at[2] + 1.3], 0.3);
+    const st = P('side-table', 5, [h.at[0] + 1.9, 0, h.at[2] + 2.9]);
+    P('oil-lamp', 6, [st.at[0], st.prop.bounds.max[1], st.at[2]]);
+    Wst('bookcase', 7, oz + 2.4, ox);
+    const desk = E('pedestal-desk', 8, oz + 4.4, ox + W - 0.2);
+    P('hall-chair', 9, [desk.at[0] - 0.85, 0, desk.at[2]], Math.PI / 2);
+    P('book-stack', 10, [desk.at[0] + 0.05, desk.prop.bounds.max[1], desk.at[2] + 0.4], -Math.PI / 2);
+    hang('portrait', 11, [ox + W - 0.02, oz + 2.2], -Math.PI / 2);
+    hang('stag-head', 12, [ox + 0.02, oz + 4.8], Math.PI / 2);
+    for (const sx of [-1, 1]) hang('candle-sconce', 13 + sx, [h.at[0] + sx * 2.3, oz + 0.02], 0);
+    views.push({ name: 'drawing', label: 'Drawing room', pos: [ox + W / 2 + 0.6, 1.7, oz + D + 2.4], target: [ox + W / 2, 1.2, oz + 1.6] });
   }
   return { placed, stages, views };
 }

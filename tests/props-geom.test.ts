@@ -89,3 +89,17 @@ describe('flame markers', () => {
     expect(w2.flames[0].up).toEqual([0, 1, 0]);
   });
 });
+
+describe('paint atlas sheets', () => {
+  it('map the whole sheet into its atlas rectangle', async () => {
+    const { PropMesh, ATLAS } = await import('../src/props/geom');
+    const m = new PropMesh();
+    m.atlasSheet((s, t) => [s, 0, t], 3, 2, ATLAS.portraits[1]);
+    const uv = m.bins.paint.uv, r = ATLAS.portraits[1];
+    expect(m.bins.paint.triangles).toBe(12);
+    for (let i = 0; i < uv.length; i += 2) { expect(uv[i]).toBeGreaterThanOrEqual(r[0] - 1e-9); expect(uv[i]).toBeLessThanOrEqual(r[2] + 1e-9); expect(uv[i + 1]).toBeGreaterThanOrEqual(r[1] - 1e-9); expect(uv[i + 1]).toBeLessThanOrEqual(r[3] + 1e-9); }
+    expect(Math.min(...uv.filter((_, i) => i % 2 === 0))).toBeCloseTo(r[0]); expect(Math.max(...uv.filter((_, i) => i % 2 === 1))).toBeCloseTo(r[3]);
+    m.atlasSheet((s, t) => [s, 1, t], 1, 1, ATLAS.carpet, true); // a second sheet leaves the first one's uvs alone
+    expect(uv.slice(0, 24)).toEqual(m.bins.paint.uv.slice(0, 24));
+  });
+});
