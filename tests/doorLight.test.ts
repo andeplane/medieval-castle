@@ -19,11 +19,20 @@ const outdoorMat = new Set<THREE.Material>(Object.values(mats.outdoor));
 const doors = playDoors([], planInterior().doors).active;
 const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
 
-/** Every drawn leaf triangle of every door at openness `initial`, with the space it must be lit as. */
-function faces(initial: number) {
+/**
+ * Every drawn leaf triangle of every door at openness `initial`, with the space it must be lit as;
+ * `flipped`: every two-way leaf first opened from its first swing space, so it hangs in its other seat.
+ */
+function faces(initial: number, flipped = false) {
   const fb = fakeBatch();
-  buildCastleDoors(doors, mats, GROUND, undefined, { batch: fb.factory, initial, ajar: 0 });
-  const leaves = doors.map((d) => ({ d, pl: placeLeaves(d)[0] }));
+  const sys = buildCastleDoors(doors, mats, GROUND, undefined, { batch: fb.factory, initial, ajar: 0 });
+  if (flipped) for (const d of doors) if (d.otherHinge) {
+    const sg = d.swingInto === 1 ? 1 : -1, t = d.wall / 2 + 1;
+    sys.setOpen(d.id, true, true, { pos: { x: d.centre[0] + d.normal[0] * sg * t, y: d.centre[1] + 1, z: d.centre[2] + d.normal[1] * sg * t } });
+    if (initial === 0) sys.setOpen(d.id, false, true);
+    expect(sys.seat(d.id)).toBe(1 - d.swingInto);
+  }
+  const leaves = doors.map((d) => ({ d, pl: placeLeaves(d, sys.seat(d.id)!)[0] }));
   const out: { d: DoorSpec; outdoorMat: boolean; looks: string | null }[] = [];
   const seen = new Set<string>();
   for (const b of fb.made) for (const [i, m] of b.mats) {
@@ -39,7 +48,10 @@ function faces(initial: number) {
       const through = n[0] * own.d.normal[0] + n[2] * own.d.normal[1];
       // shut (and the jamb iron): a face looks through the doorway into one side; edges are not judged.
       // Wide open, the whole leaf stands in its swing space, both faces.
-      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : null) : own.d.spaces[own.d.swingInto];
+      // Edges (board sides in the joints, the rim) of a shut leaf are seen through the joints from either side:
+      // they take the room's light, never the sun (thin sunlit lines in a dim room, 2026-11-07).
+      const room = own.d.spaces.filter((sp) => !isOutdoor(sp));
+      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : room.length === 1 && Math.abs(through) < 0.2 ? room[0] : null) : own.d.spaces[own.pl.seat];
       out.push({ d: own.d, outdoorMat: outdoorMat.has(b.material!), looks });
     }
   }
@@ -47,8 +59,8 @@ function faces(initial: number) {
 }
 
 describe('door leaves are lit as the space each face looks into', () => {
-  for (const [label, initial] of [['shut', 0], ['wide open', 1]] as const) it(`every leaf face of the castle, ${label}`, () => {
-    const { out, seen } = faces(initial);
+  for (const [label, initial, flipped] of [['shut', 0, false], ['wide open', 1, false], ['shut in the other seat', 0, true], ['wide open the other way', 1, true]] as const) it(`every leaf face of the castle, ${label}`, () => {
+    const { out, seen } = faces(initial, flipped);
     expect(seen.size).toBe(doors.length); // every leaf door was found
     const wrong = new Map<string, number>();
     let judged = 0, outward = 0;

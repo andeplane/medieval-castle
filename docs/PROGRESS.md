@@ -52,6 +52,29 @@ Not done or not checked:
 - The ember bed reads slightly pink at close range.
 - 38 family rooms are too narrow or too cut up by doors for a hearth.
 - About 24 family rooms have no textile because door keep-outs cover the middle.
+## 2026-11-07: doors open away from whoever opens them (branch `claude/project-thread-ns4g2v-doorsaway`)
+
+Anders: "also doors should always open away from player. just makes it nicer".
+
+A rebated door can only swing one way: its leaf sits against a stop on one face. So a door that opens both ways is now hung in one of two seats, one per face (assumption, the plainest consistent model; veto welcome):
+- **Two-way doors** (`DoorSpec.otherHinge`): the doorway is rebated on both faces with a stop ring of at least `MIN_STOP` (6 cm) between the two rebates; the leaf hangs in the seat on the face it opens toward, against that face's stop, and closes back into that frame. Same jamb when it fits, else the other (`otherHinge`). `plan.ts fitHinges` adds the second seat only where the wall is thick enough (`twoWayFits`), the leaf fits the space beyond (`leafSwingFits(P, d, seat)`) and its sweep crosses no other seat of any door.
+- **Which seat**: `doorGeom.seatAwayFrom` — the space the opener is not in (by the wall's mid-plane); within 5 cm of the plane, the side they look away from; with no direction, the current seat. The player's E passes the camera ray (`interact.ts` → `Interactable.use(by)`), NPCs `doors.request(id, open, { pos, dir? })`, and `setOpen(id, open, instant, by)`. A seat only changes while the leaf is shut and still.
+- **The leaf moves when opened, not before**: a shut two-way leaf stays in its seat until someone asks it open; then, if they are on its swing side, it moves to the far face and swings from there (a visible jump of up to the wall's thickness, assumption: acceptable). Nothing re-hangs it by who is near (Anders' rule: nothing changes with the viewer's distance).
+- **One-way doors** keep their way: every stair door (the steps or the stair tower's curved drum lie beyond it), and doors whose far side is too tight or too close to another leaf's sweep. On this seed: 241 leaf doors, 189 two-way (the open-door test asserts < 25 % one-way among doors that open).
+- **Courtyard doors** now also open outward into the courtyard from inside. Their leaves have 2 cm more gap underneath (`leafSill`, `COURT_SILL`), since the paving sits 2 cm above the sill (`PAVE_Y`). A 4 cm gap under every leaf would have done the same but made a character stick by the cellar stair door in the swing test.
+- Everything that follows the swing follows the seat: the shell cuts the rebate and stop on every face a leaf swings to (`shell.ts`, castle walls through `DoorHole.swings` in `openings.ts`); the door-light split (#52) draws each seat with its own outdoor or room faces; colliders and the crosshair use the current seat; the batches hold one instance set per seat and show only the current one (triangle budget unchanged; instances up to twice as many). No visibility change was needed (`visibility.ts` untouched): a leaf is drawn with either of its rooms.
+- Found in the capture: a courtyard leaf hung in its outward seat showed thin sunlit lines down its joints from inside, because the board edges were drawn with the courtyard's outdoor material. The edges now go with whichever side faces the room while the leaf is shut (`splitBySide(b, edgesBack)`), and `doorLight.test.ts` now checks edge faces too (it fails without the fix).
+- `__game.doors.seat(id)` for scripts.
+
+Tests (all through the code the player and NPCs use):
+- `doors.test.ts` "opens every castle door away from whoever opens it": every two-way door that opens, asked open by a character 1 m off the doorway on each side (378 cases), ends wide open with its collider on the far side and never stopped by the opener; one-way doors keep their seat. "hangs a shut two-way leaf away from the opener only when asked to open…": no change from characters standing anywhere, re-hang at the open request, none while open or closing, E from the interactable from each side and in the plane.
+- `doors.test.ts` "keeps every castle leaf, in either seat and all through its swing, in its rebate and off the stops": inside the wall every sampled leaf point stays 1 cm clear of the jambs and the rebated head and on its side of its own stop. Random-spec geometry tests (lap the stop, 2 cm off the rebate, hinge side, swing side, det +1) now run over both seats.
+- `world.test.ts` rule 7 over every seat of every door: in its room or doorway (or, out into the courtyard, clear of every building and with the paving and ground under its bottom edge), under the ceiling, off the spiral steps, out of every other seat's sweep; "reports what it is for" adds a courtyard door with its sill sunk into the paving.
+- `doorswing.test.ts` (#49, Rapier): every seat of every leaf, opened by someone on the other side onto a character in its arc, never overlaps them and they can walk away; the NPC case likewise.
+- `doorLight.test.ts`: every leaf face lit as the space it looks into, shut and open, in both seats, including the edges of a shut leaf (the room's light).
+- Key paths unchanged and passing.
+
+Not checked: WebGPU; the `?test=doors` review scene still builds one-way doors (its own wall cut); NPC navigation does not yet use `seat()`; with a thick wall the far seat is ~1 m in, so you walk into the doorway to reach it (reach 2.2 m).
 
 ## 2026-11-07: the cellar stair was a flat pale strip (branch `claude/project-thread-ns4g2v-cellartreads`)
 

@@ -124,13 +124,13 @@ export interface DoorHole {
   id: string;
   c: V2; along: V2; normal: V2; wall: number;
   clear: V2[]; reb: V2[];   // (u along `along`, y absolute): the clear outline, and the rebated one round a leaf
-  swing: -1 | 0 | 1;        // the side of the mid-plane (along normal) the leaf swings to; 0 without a leaf
-  stop: number;             // the stop's distance from the mid-plane toward the swing side
+  swings: (-1 | 1)[];       // the sides of the mid-plane (along normal) the leaf swings to: none without a leaf, both for a two-way door
+  stop: number;             // each stop's distance from the mid-plane toward its swing side
 }
 
 /**
  * Where a door passes through a wall face, in the face's (s, y): its rebated outline on the swing side of
- * the stop, its clear outline elsewhere (what the interior's carve leaves of the face); null when it does not.
+ * a stop, its clear outline elsewhere (what the interior's carve leaves of the face); null when it does not.
  */
 export function doorHoleOn(f: { a: V2; b: V2; out: V2; y0?: number; y1?: number }, h: DoorHole): V2[] | null {
   const dn = dot(h.normal, f.out);
@@ -139,7 +139,7 @@ export function doorHoleOn(f: { a: V2; b: V2; out: V2; y0?: number; y1?: number 
   const tAt = (u: number) => -dot(sub(add(h.c, scale(h.along, u)), f.a), f.out) / dn; // face's depth along normal
   const t = tAt(0);
   if (Math.abs(t) > h.wall / 2 + 0.06) return null;
-  const o = h.swing !== 0 && t * h.swing > h.stop ? h.reb : h.clear;
+  const o = h.swings.some((sw) => t * sw > h.stop) ? h.reb : h.clear;
   const pts = o.map(([u, y]): V2 => [dot(sub(add(add(h.c, scale(h.along, u)), scale(h.normal, tAt(u))), f.a), e), y]);
   const ss = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   if (Math.max(...ss) < 0 || Math.min(...ss) > L) return null;
