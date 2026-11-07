@@ -267,6 +267,34 @@ describe('interior shell', () => {
     }
   });
 
+  // stone courses keep their size on every vault, down to the springing (no texture stretch on the curve)
+  it('maps every vault triangle at metres / tile, within 10%', () => {
+    let n = 0;
+    const bad: string[] = [];
+    for (const g of sh.groups) for (const id of g.rooms) {
+      const r = P.rooms.find((x) => x.id === id)!, v = P.vault[id];
+      if (!v || r.zone === 'tunnel') continue;
+      const h = ceilingAt(P, r), T = 4;
+      for (const [k, b] of Object.entries(g.B.bins)) {
+        if (k !== 'old' && k !== 'new') continue;
+        for (let i = 0; i < b.pos.length; i += 9) {
+          const p = [0, 1, 2].map((j) => [b.pos[i + j * 3], b.pos[i + j * 3 + 1], b.pos[i + j * 3 + 2]]);
+          const cx = (p[0][0] + p[1][0] + p[2][0]) / 3, cz = (p[0][2] + p[1][2] + p[2][2]) / 3;
+          if (!pointInPoly(r.poly, cx, cz) || !p.every((q) => Math.abs(q[1] - h([q[0], q[2]])) < 1e-4 && q[1] > v.spring + 0.01)) continue;
+          const t = [0, 1, 2].map((j) => [b.uv[(i / 3 + j) * 2] * T, b.uv[(i / 3 + j) * 2 + 1] * T]);
+          // edge lengths in metres vs in uv metres: equal for an unstretched map
+          for (const [a, c] of [[0, 1], [1, 2], [2, 0]]) {
+            const m = Math.hypot(p[c][0] - p[a][0], p[c][1] - p[a][1], p[c][2] - p[a][2]), u = Math.hypot(t[c][0] - t[a][0], t[c][1] - t[a][1]);
+            if (m > 0.05 && Math.abs(u / m - 1) > 0.1) bad.push(`${id}: ${m.toFixed(2)} m → ${u.toFixed(2)} m of texture`);
+          }
+          n++;
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(200);
+    expect(bad.length, bad.slice(0, 5).join('\n')).toBe(0);
+  });
+
   it('works without a terrain sampler and on another seed', () => {
     const Q = planInterior(4242);
     const s2 = buildShell(Q, buildCastle().builder, {});

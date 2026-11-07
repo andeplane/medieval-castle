@@ -62,3 +62,16 @@ export class ResolutionGovernor {
     return this.ratio;
   }
 }
+
+/**
+ * Texels of a pass rendered at `scale` of an `n`-pixel drawing buffer: three's PassNode floors.
+ * GTAONode sizes its own target with Math.round instead, so at an odd buffer size the half-res AO was
+ * one texel wider (or taller) than the half-res depth/normal pre-pass it reads. Each AO texel then sat
+ * a growing fraction of a texel off its depth texel, half a texel at the middle, where the nearest
+ * depth lookup jumped a whole column: a thin broken seam down the exact centre of the screen (and
+ * one across it at an odd height), in the AO and so in everything it shades.
+ */
+export const passTexels = (n: number, scale: number) => Math.floor(n * scale);
+
+/** The size to hand GTAONode.setSize (which rounds `size × scale`) so its target is passTexels(n, scale). */
+export const gtaoSizeFor = (n: number, scale: number) => passTexels(n, scale) / scale;
