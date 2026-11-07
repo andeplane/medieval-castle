@@ -8,7 +8,7 @@ import {
   OPEN_ANGLE, LIP, GROW, STOP_GAP, BIN, stopDepth, KIND, leafDepth,
 } from '../src/castle/interior/doorGeom';
 import { leafGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
-import { buildDoors, m4quat, rayBox, rayEnters, REACH_NPC } from '../src/castle/interior/doors';
+import { buildDoors, instancesByGeometry, m4quat, rayBox, rayEnters, REACH_NPC } from '../src/castle/interior/doors';
 import { pickTarget } from '../src/game/interact';
 import { planInterior } from '../src/castle/interior/plan';
 import { playDoors } from '../src/player/setup';
@@ -372,6 +372,21 @@ describe('door system', () => {
     expect(fb.made[1].hidden.size).toBeGreaterThan(hidden0[1]);
     sys.setVisible(d0.id, true); sys.setVisible('nope', false);
     expect([fb.made[0].hidden.size, fb.made[1].hidden.size]).toEqual(hidden0);
+  });
+
+  it('adds instances grouped by geometry: one draw per shown geometry on WebGPU, whatever is hidden', () => {
+    // WebGPU has no multi-draw: three draws each run of consecutive visible instances sharing a geometry
+    const runs = (g: number[]) => g.filter((x, k) => k === 0 || x !== g[k - 1]).length;
+    const fb = fakeBatch(), doors = playDoors([], planInterior().doors).active;
+    const sys = buildDoors(doors, M, undefined, { batch: fb.factory });
+    const r = mulberry32(5);
+    for (const d of doors) sys.setVisible(d.id, r() < 0.3);
+    for (const b of fb.made) {
+      const shown = b.inst.filter((_, i) => !b.hidden.has(i));
+      expect(runs(b.inst)).toBe(new Set(b.inst).size);
+      expect(runs(shown)).toBe(new Set(shown).size);
+    }
+    expect(instancesByGeometry([{ g: 2, k: 0 }, { g: 1, k: 1 }, { g: 2, k: 2 }, { g: 1, k: 3 }]).map((x) => x.k)).toEqual([1, 3, 0, 2]);
   });
 
   it('builds real BatchedMeshes by default', () => {
