@@ -1,5 +1,28 @@
 # Progress
 
+## 2026-11-06: sunlight from nothing indoors (branch `claude/project-thread-ns4g2v-sunleak`)
+
+Anders: "this sunlight there comes from nothing": a sharp strip of sun on a room floor and up a door jamb by a thick-walled doorway (great-0 by its 3 m door to W0-4 reproduces it at the default 15.5 h).
+
+Root cause: interior materials get direct sun only from the shadow map, and indoors the only casters are the hidden shadow skins and the castle exterior (the shell casts nothing, main.ts). three's shadow pass draws a single-sided material's faces turned *away* from the light only (`shadowSide ?? flip(side)`, three Renderer.js). So:
+- the skins (a quad 0.22 m inside each room wall, facing the room) stopped the sun from one side only: of the two skins in a wall between two rooms, the one facing the sun cast nothing;
+- each door passage and window embrasure had no caster at all between the two holes the skins leave there; the reveals don't cast, and the castle faces round a thick wall look at the sun, so they don't cast either. The sun went through the wall mass into the passage and out through the skin's hole: the strip on the jamb and floor.
+- the ceiling skins grew their corners towards the centroid, so their sides fell short of the wall skins and a grazing ray slipped over the top of a wall skin (N6-0 at noon).
+Room culling (`world/visibility.ts`) is not involved: the culled groups never cast, and the skins and the exterior are never culled above ground.
+
+Fix (one owner: the shadow skins, `render/interiorMath.ts` + `buildShadowSkins`)
+- The skin material is `shadowSide = DoubleSide`.
+- `passageSkins`: a tube round every door passage (sides and lid, as wide and high as the skins' door hole, the head from `headRise`) and every window embrasure (its splay from just behind the room face to the glass, then the outer reveal). Doors to the outside stop just inside the outer face, so nothing casts outdoors.
+- The skins' door holes now stop at the real head (`headRise` + 5 cm) instead of 0.6 × width.
+- `ceilingSkins` moves every side out by `inset + 0.1` (exact offset; rooms are convex).
+- Cost: skins 8,185 → 13,201 triangles (+5,016), still one mesh and one draw call that writes no colour; it is now drawn double-sided in the two sun shadow maps. No other change to draw calls or visible triangles.
+
+Test: `tests/sunLeak.test.ts`, "direct sun reaches a room only through its openings": the whole castle as main.ts builds it, at 9, 12 and 15.5 h, sample points on every room floor and every sun-facing wall (not cellars); the casters are ray-cast as the shadow pass draws them (single-sided exterior, skins by their `shadowSide`); a lit point must see the sun through both faces of one of its room's openings, room to room until outside. On main: 93 room × time failures (615 lit points, of which 92 through an opening). On the branch: none, 93 lit, all through an opening.
+
+Captures (headless WebGL2, `castle-plan/sun-leak/`): great-0 by the W0-4 door before/after, the gatehouse windlass room's window patch (unchanged), the passage at 15.5 h and 12 h, bookmarks courtyard, hero, gate.
+
+Not checked: WebGPU; door leaves are left out of the test (they only block more); the gate passage and portcullis slot (rays through the gate are allowed as openings); the furniture build.
+
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 
 Anders: "what is that odd texture (white) here?" (an undercroft by a round tower: white specks and streaks in lines across the walls), then "it is not cracks. bad texture i think". Also the coordinator's WebGPU repro on his Mac (`castle-plan/webgpu-check/gatepass-after-44-45.jpg`): thin white vertical lines on the gate passage's side walls, pale mottled patches on its far wall.

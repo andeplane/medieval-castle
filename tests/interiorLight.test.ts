@@ -158,6 +158,7 @@ describe('bake', () => {
     expect(skin.name).toBe('interior-shadow-skin');
     expect(skin.castShadow).toBe(true);
     expect((skin.material as THREE.Material).colorWrite).toBe(false);
+    expect((skin.material as THREE.Material).shadowSide).toBe(THREE.DoubleSide); // stops the sun from either side
     expect(skin.geometry.getAttribute('position').count).toBeGreaterThan(0);
     expect(buildShadowSkins({ rooms: [], doors: [], stairs: [] }, []).geometry.getAttribute('position')).toBeUndefined();
   });

@@ -20,7 +20,7 @@ import { interiorIrradiance, paneGlow } from './interiorShader';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import {
-  type Aperture, type Daylight, type WindowInput, AP_TEXELS, apertureFrame, ceilingSkins, doorsToApertures, packTable, skinQuads, solveRooms, tagTriangles, windowsToApertures,
+  type Aperture, type Daylight, type WindowInput, AP_TEXELS, apertureFrame, ceilingSkins, doorsToApertures, passageSkins, packTable, skinQuads, solveRooms, tagTriangles, windowsToApertures,
 } from './interiorMath';
 
 import { MAX_AP } from './interiorShader';
@@ -279,7 +279,8 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
 }
 
 /**
- * Invisible shadow casters inside the walls (see interiorMath.skinQuads). One mesh, one draw call that
+ * Invisible shadow casters inside the walls and round the passages through them (see interiorMath.skinQuads,
+ * passageSkins). One mesh, one draw call that
  * writes nothing to colour or depth; it only shows up in the sun's shadow maps.
  */
 export function buildShadowSkins(plan: InteriorPlan, apertures: Aperture[], inset = 0.22) {
@@ -288,9 +289,14 @@ export function buildShadowSkins(plan: InteriorPlan, apertures: Aperture[], inse
     const f = { o: q.o, r: q.r, u: [0, 1, 0] as V3, n: q.n };
     B.planar('old', f, [[0, q.y0], [q.L, q.y0], [q.L, q.y1], [0, q.y1]], 0, q.holes.map(([s0, y0, s1, y1]) => [[s0, y0], [s1, y0], [s1, y1], [s0, y1]]));
   }
-  for (const c of ceilingSkins(plan.rooms, 0.55, inset)) B.cap('old', c.poly, c.y, false);
+  for (const c of ceilingSkins(plan.rooms, 0.55, inset + 0.1)) B.cap('old', c.poly, c.y, false);
+  const rooms = new Set(plan.rooms.map((r) => r.id));
+  for (const [p, q, r, s] of passageSkins(plan.doors, (id) => rooms.has(id), apertures)) { B.bins.old.tri(p, q, r, null, [0, 0], [0, 0], [0, 0]); B.bins.old.tri(p, r, s, null, [0, 0], [0, 0], [0, 0]); }
   const mat = new THREE.MeshBasicNodeMaterial({ colorWrite: false, depthWrite: false });
   mat.name = 'interior-shadow-skin';
+  // both faces reach the shadow map: by default it draws only faces turned away from the sun, so the skin
+  // of a wall between two rooms stopped the sun from one side only, and a passage's skins from neither
+  mat.shadowSide = THREE.DoubleSide;
   const all: Record<MatKey, THREE.Material> = { old: mat, new: mat, trim: mat, slate: mat, lead: mat, wood: mat, iron: mat, void: mat, glass: mat };
   const g = B.build(all);
   const mesh = (g.children[0] as THREE.Mesh | undefined) ?? new THREE.Mesh(new THREE.BufferGeometry(), mat);
