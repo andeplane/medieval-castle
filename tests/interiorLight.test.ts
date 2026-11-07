@@ -114,6 +114,22 @@ describe('geometry queries', () => {
     tagGroups([{ ...g, object: obj }], [hall], new Map([['H', 0]]), 4.5);
     expect(bare.getAttribute('interiorRoom').count).toBe(3);
   });
+  test('tagGroups frustum culls each mesh by its rooms\' boxes', () => {
+    const g = floorGroup();
+    tagGroups([g], [hall], new Map([['H', 0]]), 4.5);
+    const mesh = g.object.children[0] as THREE.Mesh;
+    const boxes = mesh.userData.roomBoxes as THREE.Box3[];
+    expect(boxes.length).toBe(1);
+    const pos = mesh.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) expect(boxes[0].containsPoint(new THREE.Vector3().fromBufferAttribute(pos as THREE.BufferAttribute, i).applyMatrix4(mesh.matrixWorld))).toBe(true);
+    const look = (x: number, z: number, tx: number, tz: number) => {
+      const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100); cam.position.set(x, 1.6, z); cam.lookAt(tx, 0, tz); cam.updateMatrixWorld();
+      return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    };
+    const c = boxes[0].getCenter(new THREE.Vector3());
+    expect(mesh.intersectsFrustum(look(c.x, c.z + 6, c.x, c.z))).toBe(true); // looking at the floor
+    expect(mesh.intersectsFrustum(look(c.x, c.z + 6, c.x, c.z + 60))).toBe(false); // looking away from it
+  });
 });
 
 describe('bake', () => {

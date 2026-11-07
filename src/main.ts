@@ -12,7 +12,7 @@ import { buildCastle } from './castle/castle';
 import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
 import { layoutStonesOffThread, browserStoneWorker } from './castle/stones/offThread';
-import { precompile } from './render/precompile';
+import { precompile, renderOnce } from './render/precompile';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
 import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
@@ -33,7 +33,7 @@ import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
 import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
-import { createVisibility } from './world/visibility';
+import { createVisibility, shadowInView } from './world/visibility';
 import { wallTorches, type FireSources } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
 import { LightRig } from './light/rig';
@@ -72,7 +72,8 @@ const params = new URLSearchParams(location.search);
 // Loading screen (src/loading, started by entry.ts): each boot step lights more of the tunnel,
 // in proportion to how long the step took on this device last time (src/loading/timeline.ts).
 let screen: LoadingScreen;
-const say = (s: string) => screen.step(s);
+// each step is a performance mark too, so load profiles (scripts/loadtime.mjs) can split by step
+const say = (s: string) => { performance.mark(s); return screen.step(s); };
 // between two pieces of one step: input and a paint, so the pieces are separate tasks (no frozen mouse look)
 const breathe = () => screen.breathe();
 if (params.has('shot') && !params.has('ui')) document.body.classList.add('shot');
@@ -422,6 +423,30 @@ async function main() {
     });
   }
   const updateFurniture = () => { if (!furnStream) return; furnStream.setWanted(wanted.wantedRooms()); furnStream.update(); syncFires?.(); };
+  // furniture casts sun shadows only where they can land on screen (world/visibility.ts shadowInView):
+  // a drawn room's furniture above, below or behind the view went into the near shadow map every frame
+  // (77 shadow draw calls at the tower room with furniture, 58 of them furniture). Frustum culling of casters only: what is drawn, and
+  // every shadow that can be seen, stay as they are.
+  const frustum = new THREE.Frustum(), viewProj = new THREE.Matrix4(), sphere = new THREE.Sphere();
+  const sunCasters = () => {
+    if (!furnStream) return;
+    camera.updateMatrixWorld();
+    frustum.setFromProjectionMatrix(viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const sun: [number, number, number] = [sky.sunDir.x, sky.sunDir.y, sky.sunDir.z];
+    lit.groups.forEach((g, i) => {
+      if (!vis.state.visible[i]) return;
+      for (const o of g.object.children) {
+        if (!o.name.startsWith('furniture:')) continue;
+        for (const m of o.children as THREE.Mesh[]) {
+          m.userData.sunCaster ??= m.castShadow; // what roomMeshes chose (flames, cloth and paint never cast)
+          if (!m.userData.sunCaster) continue;
+          // each room's part of the merged mesh (props/roomMeshes.ts), + 0.5 m for the shadow filter's blur
+          const parts = (m.userData.spheres as THREE.Sphere[] | undefined) ?? (m.geometry.boundingSphere ? [m.geometry.boundingSphere] : []);
+          m.castShadow = parts.some((s) => { sphere.copy(s).applyMatrix4(m.matrixWorld); return shadowInView(frustum.planes, [sphere.center.x, sphere.center.y, sphere.center.z], sphere.radius + 0.5, sun); });
+        }
+      }
+    });
+  };
   // door leaves follow the room graph: shown while either of their spaces is drawn
   // the portcullis follows the gate's spaces and its windlass the room it stands in (doors.setVisible)
   const portCells = port.flatMap((p) => [{ id: p.id, spaces: gateDoor!.spaces }, ...(p.winch?.room ? [{ id: p.id + ':winch', spaces: [p.winch.room, p.winch.room] }] : [])]);
@@ -490,11 +515,15 @@ async function main() {
   // it (its reflection of the scene)
   const frameState = () => { stones.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
   const pre = prePass;
+  const nestedRenders = { rendered: 0, skipped: 0 };
   await precompile({
-    passes: [...(pre ? [() => pre.compileAsync(renderer)] : []), () => scenePass.compileAsync(renderer)],
-    warm: [() => { water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { frameState(); pipeline.render(); exposure.measure(); }],
+    passes: [...(pre ? [() => { performance.mark('compile: AO pre-pass'); return pre.compileAsync(renderer); }] : []), () => { performance.mark('compile: scene pass'); return scenePass.compileAsync(renderer); }],
+    warm: [() => { performance.mark('compile: warm-up 1'); water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { performance.mark('compile: warm-up 2'); frameState(); pipeline.render(); exposure.measure(); }],
     breathe,
+    // the AO pre-pass and the water's reflection render the whole scene once per compile item otherwise
+    quiet: () => renderOnce(renderer, nestedRenders),
   });
+  console.info(`precompile: nested renders ${nestedRenders.rendered}, skipped ${nestedRenders.skipped}`);
   scene.remove(warm);
   warm.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
   sprites.set(flames);
@@ -503,7 +532,7 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     // captures wait for the furniture of every room they show (settle), before the frame's counters reset
-    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); sunCasters(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
@@ -596,6 +625,7 @@ async function main() {
     veg?.update(camera);
     vis.update();
     updateFurniture();
+    sunCasters();
     updateFire(dt);
     exposure.update(dt, vis.state);
     pipeline.render();
@@ -611,6 +641,7 @@ async function main() {
     }
   });
   // two frames, then reveal
+  performance.mark('first frames');
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   hooks.ready = true;
   await screen.finish();

@@ -445,6 +445,34 @@ describe('room meshes', () => {
     expect(stepMerge(startMerge([]))).toBe(true);
   });
 
+  it('frustum culls a merged mesh by its rooms\' spheres, not the one round the group', () => {
+    const f = createFurnisher(plan, { maxRooms: MAX_ROOMS });
+    const key = groupKey(plan.rooms.find((r) => r.kind === 'hall')!);
+    const rs = plan.rooms.filter((r) => groupKey(r) === key).map((r) => f(r.id));
+    const m = startMerge(rs);
+    while (!stepMerge(m));
+    const k = (Object.keys(m.spheres) as (keyof typeof m.spheres)[]).find((x) => m.spheres[x]!.length >= 2)!;
+    expect(k).toBeDefined();
+    const mesh = meshesFromBins('g', m.bins, mats, m.spheres).children.find((c) => c.name === `g-${k}`) as THREE.Mesh;
+    expect(mesh.userData.spheres).toHaveLength(m.spheres[k]!.length);
+    // the two parts furthest apart
+    const ss = m.spheres[k]!;
+    let [a, b] = [ss[0], ss[1]];
+    for (const x of ss) for (const y of ss) if (Math.hypot(x[0] - y[0], x[2] - y[2]) > Math.hypot(a[0] - b[0], a[2] - b[2])) [a, b] = [x, y];
+    // a narrow camera looking at the first room's sphere from just outside it, away from the second
+    const at = (s: number[], from: number[]) => {
+      const cam = new THREE.PerspectiveCamera(10, 1, 0.1, 1000); cam.position.set(from[0], from[1], from[2]); cam.lookAt(s[0], s[1], s[2]); cam.updateMatrixWorld();
+      return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    };
+    const away = (s: number[], o: number[]) => { const d = [s[0] - o[0], s[2] - o[2]], l = Math.hypot(d[0], d[1]) || 1; return [s[0] + (d[0] / l) * (s[3] + 2), s[1], s[2] + (d[1] / l) * (s[3] + 2)]; };
+    expect(mesh.intersectsFrustum(at(a, away(a, b)))).toBe(true);
+    // looking from beside the first room straight away from both: neither room is in view
+    const p = away(a, b), out = [p[0] + (p[0] - a[0]) * 10, p[1], p[2] + (p[2] - a[2]) * 10];
+    expect(mesh.intersectsFrustum(at(out, p))).toBe(false);
+    // without room spheres a mesh keeps three's own test
+    expect(Object.prototype.hasOwnProperty.call(meshesFromBins('h', m.bins, mats).children[0], 'intersectsFrustum')).toBe(false);
+  });
+
   it('bounds points and unions spheres', () => {
     expect(sphereOf([0, 0, 0, 2, 0, 0])).toEqual([1, 0, 0, 1]);
     expect(unionSphere([0, 0, 0, 1], [3, 0, 0, 1])).toEqual([1.5, 0, 0, 2.5]);

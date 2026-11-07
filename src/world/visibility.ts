@@ -206,3 +206,49 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
     },
   };
 }
+
+/** A frustum plane as three.js keeps it: a point p is inside when normal · p + constant ≥ 0. */
+export interface PlaneLike { normal: { x: number; y: number; z: number }; constant: number }
+
+/**
+ * Can a sun shadow caster inside the sphere (c, r) darken anything the camera sees? Its shadow falls along
+ * the sun's rays from it, away from the sun, and nothing it can darken is lower than `floor` (the moat's
+ * water, y 0, is the lowest sunlit surface), so the sphere swept from c down to that height must reach into
+ * the view frustum. Frustum culling of shadow casters, not distance: a caster whose shadow can land on
+ * screen always casts. `sun` points towards the sun; at or under the horizon nothing is culled.
+ */
+export function shadowInView(planes: PlaneLike[], c: V3, r: number, sun: V3, floor = 0): boolean {
+  if (sun[1] <= 0.02) return true;
+  const t = Math.max(0, c[1] + r - floor) / sun[1];
+  const e: V3 = [c[0] - sun[0] * t, c[1] - sun[1] * t, c[2] - sun[2] * t];
+  for (const p of planes) {
+    const n = p.normal, dc = n.x * c[0] + n.y * c[1] + n.z * c[2] + p.constant, de = n.x * e[0] + n.y * e[1] + n.z * e[2] + p.constant;
+    if (Math.max(dc, de) < -r) return false;
+  }
+  return true;
+}
+
+/** An axis-aligned box. */
+export interface Box { min: V3; max: V3 }
+
+/**
+ * The bounds of a merged mesh's vertices, one box per room tag (`tag[i]` for vertex i: the interior light's
+ * `interiorRoom`, -1 untagged; no tags: one box). A group's mesh spans a whole wing floor, and three culls it
+ * by one sphere round all of it, so every camera (view, AO pre-pass, reflection) drew all of a floor's rooms
+ * whenever any part of that sphere was in view. Tested per room box, a mesh is drawn when one of its rooms'
+ * triangles can be: frustum culling with tighter bounds, never a distance or facing test.
+ */
+export function tagBoxes(pos: ArrayLike<number>, tag: ArrayLike<number> | null): Box[] {
+  const boxes = new Map<number, Box>();
+  for (let i = 0; 3 * i < pos.length; i++) {
+    const k = tag ? Math.round(tag[i]) : -1;
+    let b = boxes.get(k);
+    if (!b) boxes.set(k, b = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] });
+    for (let a = 0; a < 3; a++) {
+      const v = pos[3 * i + a];
+      if (v < b.min[a]) b.min[a] = v;
+      if (v > b.max[a]) b.max[a] = v;
+    }
+  }
+  return [...boxes.values()];
+}

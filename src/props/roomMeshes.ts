@@ -4,7 +4,9 @@
 // group so it shows and hides with its rooms. A group whose rooms changed is rebuilt in flush(), which
 // the streamer calls inside its frame budget: one room is copied into the new arrays per step, and the
 // old mesh stays drawn until the new one is complete and swaps in. Bounding spheres come per room from
-// the worker. Thin glue: shapes, tags and colliders come from the worker.
+// the worker. A merged mesh is frustum culled by its rooms' spheres, not by the one sphere round the
+// whole group (a wing floor), so each camera (view, AO pre-pass, reflection, shadow map) skips furniture
+// whose rooms it cannot see. Thin glue: shapes, tags and colliders come from the worker.
 import * as THREE from 'three/webgpu';
 import type { PhysicsApi, SpaceId } from '../castle/interior/types';
 import type { Flame, LightEmitter } from '../light/types';
@@ -17,7 +19,7 @@ type Field = (typeof FIELDS)[number];
 
 /** A merge in progress: arrays sized for every room, filled a slice per step. `next` is the room
  * being copied, `part` its (material, field) pair and `off` how far into that array. */
-export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>>; size: Partial<Record<PropMat, Record<Field, number>>> }
+export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; spheres: Partial<Record<PropMat, Sphere[]>>; at: Partial<Record<PropMat, Record<Field, number>>>; size: Partial<Record<PropMat, Record<Field, number>>> }
 
 /** Floats copied per step (256 KB; 1 MB took ~10 ms on the loaded headless box, fresh pages): a big room spans several steps. */
 export const MERGE_CHUNK = 1 << 16;
@@ -25,17 +27,18 @@ export const MERGE_CHUNK = 1 << 16;
 export function startMerge(rooms: RoomFurniture[]): BinMerge {
   // only sizes here: each array is allocated by the step that first writes it (a big group's arrays
   // are megabytes, and fresh memory costs time to hand out)
-  const bins: Partial<Record<PropMat, BinArrays>> = {}, at: BinMerge['at'] = {}, size: BinMerge['size'] = {};
+  const bins: Partial<Record<PropMat, BinArrays>> = {}, spheres: BinMerge['spheres'] = {}, at: BinMerge['at'] = {}, size: BinMerge['size'] = {};
   const none = new Float32Array(0);
   for (const k of PROP_MATS) {
     const parts = rooms.map((r) => r.bins[k]).filter((b): b is BinArrays => !!b);
     if (!parts.length) continue;
     const n = (f: Field) => parts.reduce((t, b) => t + b[f].length, 0);
     bins[k] = { pos: none, nor: none, uv: none, col: none, room: none, sphere: parts.map((b) => b.sphere).reduce(unionSphere) };
+    spheres[k] = parts.map((b) => b.sphere);
     at[k] = { pos: 0, nor: 0, uv: 0, col: 0, room: 0 };
     size[k] = { pos: n('pos'), nor: n('nor'), uv: n('uv'), col: n('col'), room: n('room') };
   }
-  return { rooms, next: 0, part: 0, off: 0, bins, at, size };
+  return { rooms, next: 0, part: 0, off: 0, bins, spheres, at, size };
 }
 
 const PARTS = PROP_MATS.flatMap((k) => FIELDS.map((f) => [k, f] as const));
@@ -66,8 +69,16 @@ export function mergeBins(rooms: RoomFurniture[]): Partial<Record<PropMat, BinAr
   return m.bins;
 }
 
-/** One mesh per non-empty bin, with the interior light's room tag (`interiorRoom`) per vertex. */
-export function meshesFromBins(name: string, bins: Partial<Record<PropMat, BinArrays>>, mats: Record<PropMat, THREE.Material>): THREE.Group {
+/** Frustum cull a mesh by a few spheres (its rooms' parts) instead of its one bounding sphere; kept in userData.spheres. */
+export function cullBySpheres(m: THREE.Mesh, spheres: Sphere[]) {
+  const ss = spheres.map((s) => new THREE.Sphere(new THREE.Vector3(s[0], s[1], s[2]), s[3]));
+  m.userData.spheres = ss;
+  m.intersectsFrustum = (f: THREE.Frustum) => ss.some((s) => f.intersectsSphere(_s.copy(s).applyMatrix4(m.matrixWorld)));
+}
+const _s = new THREE.Sphere();
+
+/** One mesh per non-empty bin, with the interior light's room tag (`interiorRoom`) per vertex; `spheres`: its rooms' bounds per bin. */
+export function meshesFromBins(name: string, bins: Partial<Record<PropMat, BinArrays>>, mats: Record<PropMat, THREE.Material>, spheres: Partial<Record<PropMat, Sphere[]>> = {}): THREE.Group {
   const group = new THREE.Group();
   group.name = name;
   let triangles = 0;
@@ -86,6 +97,7 @@ export function meshesFromBins(name: string, bins: Partial<Record<PropMat, BinAr
     m.name = `${name}-${k}`;
     m.castShadow = k !== 'flame' && k !== 'cloth' && k !== 'paint'; // as render.ts meshFromProp
     m.receiveShadow = k !== 'flame';
+    if (spheres[k]) cullBySpheres(m, spheres[k]);
     group.add(m);
     triangles += b.pos.length / 9;
   }
@@ -126,7 +138,7 @@ export function createRoomSink(d: RoomSinkDeps): GroupSink {
     if (g.merge && !stepMerge(g.merge)) return;
     if (g.object) { g.object.removeFromParent(); g.object.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) m.geometry.dispose(); }); g.object = undefined; }
     if (g.merge) {
-      g.object = meshesFromBins(`furniture:${key}`, g.merge.bins, d.matsFor(key));
+      g.object = meshesFromBins(`furniture:${key}`, g.merge.bins, d.matsFor(key), g.merge.spheres);
       d.parentOf(key)?.add(g.object);
       g.merge = undefined;
     } else groups.delete(key);

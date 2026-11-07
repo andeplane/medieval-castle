@@ -17,6 +17,7 @@ import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix } from 'three/tsl';
 import { interiorIrradiance, paneGlow } from './interiorShader';
+import { tagBoxes } from '../world/visibility';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import {
@@ -191,7 +192,11 @@ export interface InteriorBake {
   roomLight(id: SpaceId): { bounce: V3; direct: V3 } | null;
 }
 
-/** Tag every triangle of the interior groups with its room (`interiorRoom` attribute, -1 = none). */
+/**
+ * Tag every triangle of the interior groups with its room (`interiorRoom` attribute, -1 = none). From the
+ * same walk, each mesh is frustum culled by its rooms' boxes instead of one sphere round the group
+ * (world/visibility.ts tagBoxes); which groups are drawn stays the room graph's.
+ */
 export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'], index: Map<SpaceId, number>, maxWall: number) {
   let tris = 0;
   for (const g of groups) {
@@ -209,7 +214,11 @@ export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'],
         _v.fromBufferAttribute(pos as THREE.BufferAttribute, i).applyMatrix4(mesh.matrixWorld); wp.set([_v.x, _v.y, _v.z], i * 3);
         if (wn) { _n.fromBufferAttribute(nor as THREE.BufferAttribute, i).applyMatrix3(_nm); wn.set([_n.x, _n.y, _n.z], i * 3); }
       }
-      geo.setAttribute('interiorRoom', new THREE.BufferAttribute(tagTriangles(wp, wn, rooms, maxWall, prefer), 1));
+      const tags = tagTriangles(wp, wn, rooms, maxWall, prefer);
+      geo.setAttribute('interiorRoom', new THREE.BufferAttribute(tags, 1));
+      const boxes = tagBoxes(wp, tags).map((b) => new THREE.Box3(new THREE.Vector3(...b.min), new THREE.Vector3(...b.max)));
+      mesh.userData.roomBoxes = boxes; // world space: the groups never move
+      mesh.intersectsFrustum = (f: THREE.Frustum) => boxes.some((b) => f.intersectsBox(b));
       tris += pos.count / 3;
     });
   }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { cameraSpaces, createVisibility, doorwaySpaces, drawnSpaces, roomGraph, spaceShown, visibleSet, windowLinks, type VisContext } from '../src/world/visibility';
+import * as THREE from 'three';
+import { cameraSpaces, createVisibility, shadowInView, tagBoxes, doorwaySpaces, drawnSpaces, roomGraph, spaceShown, visibleSet, windowLinks, type VisContext } from '../src/world/visibility';
 import type { DoorSpec, InteriorGroup, InteriorPlan, RoomSpec, V3 } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
 import type { Aperture } from '../src/render/interiorMath';
@@ -171,5 +172,53 @@ describe('createVisibility', () => {
     expect(vis.state.inside).toBe(false);
     expect(vis.update()).toMatchObject({ inside: false, from: ['outside'] });
     expect(vis.isRoomVisible('A')).toBe(true);
+  });
+});
+
+describe('shadowInView (frustum culling of sun shadow casters)', () => {
+  // a camera at eye height looking north (-z), 60° field of view, out to 1 km
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 0.25, 1000);
+  cam.position.set(0, 4, 0); cam.lookAt(0, 4, -10); cam.updateMatrixWorld();
+  const planes = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)).planes;
+  const high: V3 = [0, 0.8, 0.6]; // sun high in the south: shadows fall north and down
+  const n = (v: V3): V3 => { const l = Math.hypot(...v); return [v[0] / l, v[1] / l, v[2] / l]; };
+  test('a caster in view casts', () => {
+    expect(shadowInView(planes, [0, 3, -10], 1, n(high))).toBe(true);
+  });
+  test('a caster behind the camera whose shadow falls away from the view does not', () => {
+    // sun in the north: shadows fall south, further behind the camera
+    expect(shadowInView(planes, [0, 3, 12], 1, n([0, 0.8, -0.6]))).toBe(false);
+  });
+  test('a caster behind the camera whose shadow falls into the view casts', () => {
+    // sun in the south, low: from 12 m up behind the camera the shadow reaches far ahead of it
+    expect(shadowInView(planes, [0, 12, 3], 0.5, n([0, 0.3, 1]))).toBe(true);
+  });
+  test('a caster high above the view, its shadow ending at the water before it reaches the view, does not', () => {
+    // 40 m up, east of the view; the sun in the west throws its shadow further east, down to the water
+    expect(shadowInView(planes, [40, 40, -30], 1, n([-0.6, 0.8, 0]))).toBe(false);
+    // the same caster with the sun in the east: its shadow sweeps west, down into the view
+    expect(shadowInView(planes, [40, 40, -30], 1, n([0.6, 0.8, 0]))).toBe(true);
+  });
+  test('a caster whose sphere only touches the view casts', () => {
+    expect(shadowInView(planes, [0, 4, 1.5], 1.4, n(high))).toBe(true);
+  });
+  test('nothing is culled with the sun at or under the horizon', () => {
+    expect(shadowInView(planes, [0, 3, 50], 1, [0, 0, -1])).toBe(true);
+    expect(shadowInView(planes, [0, 3, 50], 1, [0, -0.5, -0.8])).toBe(true);
+  });
+  test('a caster below the floor height keeps its own sphere', () => {
+    expect(shadowInView(planes, [0, -3, -20], 1, n(high))).toBe(true); // in view, under the water line
+    expect(shadowInView(planes, [0, -5, 20], 1, n([0, 0.8, -0.6]))).toBe(false); // behind the camera
+  });
+});
+
+describe('tagBoxes (frustum bounds per room)', () => {
+  test('one box per tag, holding exactly that tag\'s vertices; no tags: one box', () => {
+    const pos = [0, 0, 0, 1, 2, 3, 10, 0, 0, 12, 1, -1, 5, 5, 5];
+    expect(tagBoxes(pos, [0, 0, 1, 1, -1])).toEqual([
+      { min: [0, 0, 0], max: [1, 2, 3] }, { min: [10, 0, -1], max: [12, 1, 0] }, { min: [5, 5, 5], max: [5, 5, 5] },
+    ]);
+    expect(tagBoxes(pos, null)).toEqual([{ min: [0, 0, -1], max: [12, 5, 5] }]);
+    expect(tagBoxes([], null)).toEqual([]);
   });
 });
