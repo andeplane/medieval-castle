@@ -25,7 +25,7 @@ import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, type PlanX } from '../src/castle/interior/plan';
-import { placeLeaves, seatsOf, leafPoint, leafDepth, m4swing, headRise, LIP, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { placeLeaves, seatsOf, leafPoint, leafDepth, m4swing, headRise, headTop, leafClassFor, stopPlane, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
@@ -36,7 +36,11 @@ import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../s
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
-import { createVisibility, courtView } from '../src/world/visibility';
+import { createVisibility } from '../src/world/visibility';
+import { MeshBVH } from 'three-mesh-bvh';
+import * as T3 from 'three';
+import { buildTerrain } from '../src/world/terrain';
+import { PAVE_Y } from '../src/castle/paving';
 import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
@@ -58,6 +62,27 @@ function trianglesOf(B: Builder): Tri[] {
     const a = bin.pos.slice(i, i + 3) as V3, b = bin.pos.slice(i + 3, i + 6) as V3, c = bin.pos.slice(i + 6, i + 9) as V3;
     out.push({ a, b, c, lo: [0, 1, 2].map((k) => Math.min(a[k], b[k], c[k])) as V3, hi: [0, 1, 2].map((k) => Math.max(a[k], b[k], c[k])) as V3 });
   }
+  return out;
+}
+const mkTri = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
+/** A BVH over triangles, for rays (three-mesh-bvh). */
+function bvhOf(tris: Tri[]): MeshBVH {
+  const list = tris.length ? tris : [mkTri([0, -1e4, 0], [1e-3, -1e4, 0], [0, -1e4, 1e-3])];
+  const a = new Float32Array(list.length * 9);
+  list.forEach((t, i) => { a.set(t.a, i * 9); a.set(t.b, i * 9 + 3); a.set(t.c, i * 9 + 6); });
+  const g = new T3.BufferGeometry(); g.setAttribute('position', new T3.BufferAttribute(a, 3));
+  return new MeshBVH(g);
+}
+/** World positions of every mesh under an object, as one non-indexed soup. */
+function meshPositions(root: THREE.Object3D): number[] {
+  const out: number[] = [];
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const g = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrixWorld), a = g.getAttribute('position').array;
+    for (let i = 0; i < a.length; i++) out.push(a[i]);
+  });
   return out;
 }
 /** Does the segment o → o + d cross the triangle? */
@@ -522,61 +547,223 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(openingFaults(walls, { ...R, doors: [sunk] }, masses(), tris)).toContain('court>E0-2: leaf scrapes the ground of the courtyard');
   }, 300_000);
 
-  // One model for visibility and LOD: no level of detail or cull may add, move or remove an opening or a
-  // door. Culling (world/visibility.ts) works per room group; the real stones (castle/stones) are one set
-  // drawn at three levels of detail. Both are checked here over the whole castle, from the poses a player has.
-  it('draws every room and leaf seen through an outdoor doorway, from every pose in front of it', () => {
-    const bake = bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() });
-    const cam = { position: { x: 0, y: 0, z: 0 } };
-    const vis = createVisibility(cam, inner.groups, P, { apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) }); // as main.ts
-    const foot = outerFootprint(), court = courtyard(), tower = stairTowerPoly();
-    const outdoors = (s: string, q: V2) => s === 'courtyard' ? pointInPoly(court, q[0], q[1]) && !pointInPoly(tower, q[0], q[1]) : !foot.some((f) => pointInPoly(f, q[0], q[1]));
-    const faults: string[] = [];
-    let poses = 0;
+  // ---- the player's poses, the openings and the shut leaves, for the visibility checks below ----
+  const cam = { position: { x: 0, y: 0, z: 0 } };
+  let bakeCache: ReturnType<typeof bakeInteriorLight> | undefined;
+  const baked = () => (bakeCache ??= bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() }));
+  const court = courtyard(), roofs = Math.min(...WINGS.map((w) => w.top));
+  const inCourt = (x: number, z: number) => pointInPoly(court, x, z);
+  /** The visibility as main.ts makes it. */
+  const makeVis = () => createVisibility(cam, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs });
+  /** The castle as drawn, less its window glass (you see through it). */
+  const castleSolid = () => trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder);
+  /** A door's shut leaf as a flat outline at its mid-thickness: triangles, the outline, its depth along the door's normal. */
+  const shutLeaf = (d: DoorSpec, seat: 0 | 1 = d.swingInto) => {
+    const pl = placeLeaves(d, seat)[0];
+    if (!pl) return null;
+    const cls = leafClassFor(d, pl.kind), top = headTop(cls.head, cls.ow, cls.oh, -GROW), sill = cls.sill;
+    const { zBack, zFront } = leafDepth(pl.kind), z = (zBack + zFront) / 2, M = m4swing(0), N = 24;
+    const ring: V3[] = [leafPoint(pl, M, [0, 0, z]), leafPoint(pl, M, [pl.width, 0, z])];
+    for (let i = 0; i <= N; i++) { const x = pl.width * (1 - i / N); ring.push(leafPoint(pl, M, [x, top(cls.sOff + x) - sill, z])); }
+    const c = [0, 1, 2].map((k) => ring.reduce((s, p) => s + p[k], 0) / ring.length) as V3;
+    const tris = ring.map((p, i) => mkTri(c, p, ring[(i + 1) % ring.length]));
+    const t = (ring[0][0] - d.centre[0]) * d.normal[0] + (ring[0][2] - d.centre[2]) * d.normal[1];
+    return { tris, ring, t, sill };
+  };
+  /** Every door (at its mid-plane) and every window and slit (at its glass), with the two spaces it joins. */
+  const openingsOf = () => {
+    const ops: { id: string; spaces: [string, string]; p: V3; n: V2; leafT?: number }[] = P.doors.map((d) => ({
+      id: d.id, spaces: d.spaces.map((s) => (s === 'farbank' ? 'outside' : s)) as [string, string],
+      p: [d.centre[0], d.centre[1] + Math.min(1.2, d.height / 2), d.centre[2]], n: d.normal, leafT: shutLeaf(d)?.t,
+    }));
+    for (const a of baked().apertures) if (a.door === undefined && a.kind !== 'portal') {
+      ops.push({ id: `${a.id} (${P.rooms[a.room].id})`, spaces: [P.rooms[a.room].id, inCourt(a.c[0] + a.n[0], a.c[2] + a.n[2]) ? 'courtyard' : 'outside'], p: a.c, n: [a.n[0], a.n[2]] });
+    }
+    return ops;
+  };
+  /** Where a player stands: near and far in front of every outdoor doorway, outside up to 150 m, the courtyard, every room and in front of each of its doors, the gate passage. */
+  const playerPoses = () => {
+    const poses: { label: string; eye: V3 }[] = [];
+    const foot = outerFootprint(), tower = stairTowerPoly();
+    const outdoors = (s: string, q: V2) => s === 'courtyard' ? inCourt(q[0], q[1]) && !pointInPoly(tower, q[0], q[1]) : !foot.some((f) => pointInPoly(f, q[0], q[1]));
     for (const d of P.doors) {
-      const out = d.spaces.find((s) => OUTDOOR.has(s)); if (!out) continue;
-      const room = d.spaces.find((s) => s !== out)!, sgn = d.spaces[0] === out ? 1 : -1; // the normal points from spaces[0] to spaces[1]
-      for (const dist of [1.5, 3, 5, 8, 12, 16, 20, 25, 30, 40, 60]) for (const side of [-4, -1.5, 0, 1.5, 4]) {
+      const out = d.spaces.find((s) => OUTDOOR.has(s));
+      if (!out) continue;
+      const sgn = d.spaces[0] === out ? 1 : -1; // the normal points from spaces[0] to spaces[1]
+      for (const dist of [1.5, 3, 5, 8, 12, 16, 20, 25, 30, 40, 60, 90, 150]) for (const side of [-4, -1.5, 0, 1.5, 4]) {
         const q = on(d, side, -sgn * (d.wall / 2 + dist));
-        if (!outdoors(out, q)) continue;
-        for (const h of [1.6, 0.9]) {
-          cam.position = { x: q[0], y: Math.max(d.centre[1], heightAt(q[0], q[1])) + h, z: q[1] };
-          const st = vis.update();
-          if (st.inside) continue; // in the doorway's own embrasure: the inside rules hold there
-          poses++;
-          if (!vis.isRoomVisible(room)) faults.push(`${d.id}: ${room} culled from ${dist} m, ${side} m aside`);
-          if (leafy(d) && !(vis.isRoomVisible(d.spaces[0]) || vis.isRoomVisible(d.spaces[1]))) faults.push(`${d.id}: leaf culled from ${dist} m`);
+        if (outdoors(out, q)) poses.push({ label: `${dist} m in front of ${d.id}, ${side} m aside`, eye: [q[0], Math.max(d.centre[1], heightAt(q[0], q[1]), 0) + 1.6, q[1]] });
+      }
+    }
+    const xs = court.map((p) => p[0]), zs = court.map((p) => p[1]);
+    for (let x = Math.min(...xs) + 1; x < Math.max(...xs); x += 3) for (let z = Math.min(...zs) + 1; z < Math.max(...zs); z += 3) {
+      if (outdoors('courtyard', [x, z])) poses.push({ label: `the courtyard at (${x.toFixed(1)}, ${z.toFixed(1)})`, eye: [x, PAVE_Y + 1.6, z] });
+    }
+    for (const r of P.rooms) {
+      const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
+      if (pointInPoly(r.poly, c[0], c[1])) poses.push({ label: `the middle of ${r.id}`, eye: [c[0], r.y0 + 1.6, c[1]] });
+    }
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    for (const d of P.doors) for (const k of [0, 1]) {
+      const r = rooms.get(d.spaces[k]), q = on(d, 0, (k === 0 ? -1 : 1) * (d.wall / 2 + 1.5));
+      if (r && r.zone !== 'tunnel' && pointInPoly(r.poly, q[0], q[1])) poses.push({ label: `${r.id}, 1.5 m in front of ${d.id}`, eye: [q[0], d.centre[1] + 1.6, q[1]] });
+    }
+    const gm = P.doors.find((d) => d.id === 'gate-main')!, gc = P.doors.find((d) => d.id === 'gate-court')!;
+    for (let f = 0; f <= 1 + 1e-9; f += 0.05) {
+      const x = gm.centre[0] + (gc.centre[0] - gm.centre[0]) * f, z = gm.centre[2] + (gc.centre[2] - gm.centre[2]) * f;
+      poses.push({ label: `the gate passage, ${(f * 100).toFixed(0)} % in`, eye: [x, gc.centre[1] + 1.7, z] });
+    }
+    return poses;
+  };
+  // One model for visibility and LOD: no level of detail or cull may add, move or remove an opening or a
+  // door. Which rooms are drawn is a graph walk (world/visibility.ts): the same spaces from every distance.
+  // Checked here by looking: from every pose a player has (in front of every outdoor doorway near and far,
+  // the middle of every room and in front of each of its doors, the courtyard, outside, the gate passage),
+  // every opening the eye can reach (a ray through the real castle, the rooms and the shut leaves, past the
+  // glass) has its spaces drawn: both for an opening nothing shuts, the eye's side for a shut leaf.
+  // Anders, 2026-11-07: from the gate passage the courtyard doors showed sky (E0-2) or plain wall (the stair
+  // tower), from a few metres into the courtyard they were fine; a shut door in a room showed a white outline.
+  it('draws the spaces of every opening seen from any pose, near or far, doors shut or open', () => {
+    const vis = makeVis(), poses = playerPoses();
+    const solid = [...castleSolid(), ...groupTris(inner.groups)];
+    const faults = new Map<string, string>(), ray = new T3.Ray();
+    let seen = 0, n = 0;
+    for (const open of [false, true]) { // as the castle starts, and with every leaf swung open (any agent may open any door)
+      const occ = bvhOf(open ? solid : [...solid, ...P.doors.flatMap((d) => shutLeaf(d)?.tris ?? [])]);
+      const ops = openingsOf().map((o) => (open ? { ...o, leafT: undefined } : o));
+      for (const d of P.doors) vis.setDoorOpen(d.id, open); // the doors system tells the graph (main.ts syncDoorLight)
+      n = ops.length;
+      for (const { label, eye } of poses) {
+        cam.position = { x: eye[0], y: eye[1], z: eye[2] };
+        vis.update();
+        for (const op of ops) {
+          let target = op.p, need = op.spaces as string[];
+          if (op.leafT !== undefined) { // a shut leaf: the eye's side, up to the leaf
+            const side = Math.sign((eye[0] - op.p[0]) * op.n[0] + (eye[2] - op.p[2]) * op.n[1]) || 1;
+            target = [op.p[0] + op.n[0] * (op.leafT + side * 0.04), op.p[1], op.p[2] + op.n[1] * (op.leafT + side * 0.04)];
+            need = [side < 0 ? op.spaces[0] : op.spaces[1]];
+          }
+          const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
+          if (dist > 220 || dist < 0.05) continue;
+          ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
+          if (occ.raycastFirst(ray, T3.DoubleSide, 0, dist - 0.02)) continue;
+          seen++;
+          for (const s of need) if (!vis.isRoomVisible(s) && !faults.has(`${op.id}:${s}`)) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
         }
       }
     }
-    expect(poses).toBeGreaterThan(300);
+    console.info(`openings seen: ${poses.length} poses, ${n} openings, ${seen} seen, ${faults.size} faults`);
+    expect(poses.length).toBeGreaterThan(900);
+    expect(seen).toBeGreaterThan(5000);
+    expect([...faults.values()]).toEqual([]);
+  }, 300_000);
+
+  it('draws the same spaces from the same place at every distance (a graph, no distance or facing test)', () => {
+    const vis = makeVis();
+    const by = new Map<string, { drawn: string; label: string }>(), faults: string[] = [];
+    for (const { label, eye } of playerPoses()) {
+      cam.position = { x: eye[0], y: eye[1], z: eye[2] };
+      const st = vis.update(), key = [...st.from].sort().join('+'), drawn = [...st.drawn].sort().join(',');
+      const was = by.get(key);
+      if (!was) by.set(key, { drawn, label }); else if (was.drawn !== drawn) faults.push(`${key}: ${label} draws other spaces than ${was.label}`);
+    }
+    expect(by.has('courtyard') && by.has('outside') && by.has('gate-1')).toBe(true);
     expect(faults).toEqual([]);
-    // and no more: walking up to the gate, the rooms off the courtyard stay culled behind the walls
-    const gate = P.doors.find((d) => d.id === 'gate-main')!, courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
-    for (const dist of [5, 15, 30]) {
-      const q = on(gate, 0, -(gate.wall / 2 + dist));
-      cam.position = { x: q[0], y: gate.centre[1] + 1.6, z: q[1] };
-      vis.update();
-      expect(courtRooms.filter((r) => vis.isRoomVisible(r))).toEqual([]);
+    // what the graph is for: from the gate passage every room off the courtyard is drawn, from far outside too
+    const courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
+    const g = P.doors.find((d) => d.id === 'gate-court')!, q = on(g, 0, -(g.wall / 2 + 2));
+    cam.position = { x: q[0], y: g.centre[1] + 1.7, z: q[1] }; vis.update();
+    expect(vis.roomId).toBe('gate-1');
+    expect(courtRooms.filter((r) => !vis.isRoomVisible(r))).toEqual([]);
+  }, 300_000);
+
+  // The shut leaf sits in its rebate a few cm off the jambs (doorGeom LIP − GROW). Past it, round the
+  // leaf, the eye must meet something drawn with its own side (the castle, its own room's reveal, the
+  // stop, the leaf): never only the far room's geometry, which the graph may leave out (the white outline
+  // round a shut door, 2026-11-07: the whole reveal was the first room's, culled from the other side).
+  it('seals every shut leaf from both sides, whatever is drawn beyond it', () => {
+    const castleB = bvhOf(castleSolid()), groupB = new Map(inner.groups.map((g) => [g, bvhOf(groupTris([g]))]));
+    const faults: string[] = [], ray = new T3.Ray();
+    let rays = 0;
+    for (const d of P.doors) for (const seat of seatsOf(d)) { // a two-way door's leaf shuts in either face
+      const leaf = shutLeaf(d, seat)!;
+      const leafB = bvhOf(leaf.tris), y0 = d.centre[1];
+      for (const k of [0, 1] as const) {
+        const s = d.spaces[k], sg = k === 0 ? -1 : 1;
+        const sets = [castleB, leafB, ...inner.groups.filter((g) => !g.rooms.length || g.rooms.includes(s)).map((g) => groupB.get(g)!)]; // groups with no room are always drawn
+        let bad = 0, first = '';
+        for (const across of [-0.6, 0, 0.6]) for (const back of [1, 2.5]) {
+          const e = on(d, across, sg * (d.wall / 2 + back)), eye = new T3.Vector3(e[0], y0 + 1.5, e[1]);
+          // the gap ring: halfway between the leaf's edge and the rebate, at the leaf
+          for (const [u, y] of outlineGrown(P, d, (GROW + LIP) / 2).slice(2)) {
+            if (y < y0 + 0.15) continue;
+            const p = on(d, u, leaf.t), tgt = new T3.Vector3(p[0], y, p[1]), dist = tgt.distanceTo(eye);
+            ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
+            rays++;
+            if (!sets.some((b) => b.raycastFirst(ray, T3.DoubleSide, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
+          }
+        }
+        if (bad) faults.push(`${d.id}: open past its shut leaf (seat ${seat}) from ${s} (${bad} rays, e.g. ${first})`);
+      }
     }
-    // inside: every room joined to the camera's room by a door is drawn, from the middle of every room
-    const shown: string[] = [];
-    for (const r of P.rooms) {
-      const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
-      if (!pointInPoly(r.poly, c[0], c[1])) continue;
-      cam.position = { x: c[0], y: r.y0 + 1.6, z: c[1] };
-      if (vis.update().room < 0 || vis.roomId !== r.id) continue;
-      for (const d of P.doors) if (d.spaces.includes(r.id)) for (const s of d.spaces) if (!OUTDOOR.has(s) && s !== 'farbank' && !vis.isRoomVisible(s)) shown.push(`${r.id}: ${s} behind ${d.id} culled`);
+    expect(rays).toBeGreaterThan(10_000);
+    expect(faults).toEqual([]);
+  }, 300_000);
+
+  // Anders, 2026-11-07, of court>E0-2: "or is the positioning wrong?". One outline: the leaf is the clear
+  // outline grown by GROW, the castle's hole and the reveal are the clear outline (test 3 above), the
+  // rebate the clear outline grown by LIP. The shut leaf covers its hole and fits its rebate, every door.
+  it('hangs every leaf over its own hole: it covers the clear outline and fits the rebate', () => {
+    const faults: string[] = [];
+    for (const d of P.doors) for (const seat of seatsOf(d)) {
+      const leaf = shutLeaf(d, seat)!;
+      const uv = leaf.ring.map((p): V2 => [(p[0] - d.centre[0]) * d.along[0] + (p[2] - d.centre[2]) * d.along[1], p[1]]);
+      const uniq = uv.filter((p, i) => i === 0 || Math.hypot(p[0] - uv[i - 1][0], p[1] - uv[i - 1][1]) > 1e-6);
+      const short = outlineGrown(P, d, -0.01).filter(([u, y]) => y > d.centre[1] + leaf.sill + 0.01 && !pointInPoly(uniq, u, y));
+      if (short.length) faults.push(`${d.id}: leaf short of its hole at (${short[0][0].toFixed(2)}, ${(short[0][1] - d.centre[1]).toFixed(2)})`);
+      const reb = outlineGrown(P, d, LIP + 0.002), big = uniq.filter(([u, y]) => y > d.centre[1] + 0.05 && !pointInPoly(reb, u, y));
+      if (big.length) faults.push(`${d.id}: leaf bigger than its rebate at (${big[0][0].toFixed(2)}, ${(big[0][1] - d.centre[1]).toFixed(2)})`);
+      const sg = seat === 1 ? 1 : -1, tl = (leaf.t - sg * stopPlane(d)) * sg;
+      if (tl < 0 || tl > 0.15) faults.push(`${d.id}: leaf (seat ${seat}) ${tl.toFixed(3)} m off its stop`);
     }
-    expect(shown).toEqual([]);
+    expect(faults).toEqual([]);
   }, 120_000);
+
+  // Anders, 2026-11-07: white slivers along the gate passage's inner threshold. Since the terrain has holes
+  // under the buildings (#57) nothing was left under the 12 cm between the passage's sill and the paving
+  // at the courtyard face. From both sides of every outdoor doorway, every ray down across the threshold
+  // meets a floor, a riser or the ground: none reaches the sky.
+  it('meets the ground at every outdoor doorway: no sky through the threshold', () => {
+    const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: inner.groundHoles.terrain });
+    const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain.getObjectByName('terrain-near')!) } } } as unknown as Builder);
+    const faults: string[] = [], ray = new T3.Ray();
+    let rays = 0;
+    for (const d of P.doors) {
+      if (!d.spaces.some((s) => OUTDOOR.has(s))) continue;
+      const r = d.wall / 2 + 7, near = (t: Tri) => Math.hypot((t.lo[0] + t.hi[0]) / 2 - d.centre[0], (t.lo[2] + t.hi[2]) / 2 - d.centre[2]) < r + Math.hypot(t.hi[0] - t.lo[0], t.hi[2] - t.lo[2]) / 2;
+      const occ = bvhOf([...castleSolid().filter(near), ...groupTris(inner.groups).filter(near), ...tt.filter(near)]);
+      let bad = 0, first = '';
+      for (const sg of [-1, 1]) for (const back of [1.5, 3, 5]) {
+        const e = on(d, 0, sg * (d.wall / 2 + back)), eye = new T3.Vector3(e[0], d.centre[1] + 1.7, e[1]);
+        // off the exact sill and faces: a ray down the joint of two coplanar floors meets neither
+        for (let t = -d.wall / 2 - 1.013; t <= d.wall / 2 + 1; t += 0.04) for (let y = d.centre[1] - 0.093; y <= d.centre[1] + 0.3; y += 0.02) for (const u of [-d.width / 2 + 0.1, -d.width / 4, 0, d.width / 4, d.width / 2 - 0.1]) {
+          const p = on(d, u, t), tgt = new T3.Vector3(p[0], y, p[1]);
+          ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
+          rays++;
+          // the ray runs on 7 m past the doorway: well down into the ground on either side
+          if (!occ.raycastFirst(ray, T3.DoubleSide, 0, 12)) { bad++; if (!first) first = `${back} m ${sg < 0 ? 'before' : 'past'} it, at ${t.toFixed(2)} through, ${(y - d.centre[1]).toFixed(2)} up`; }
+        }
+      }
+      if (bad) faults.push(`${d.id}: ${bad} rays to the sky through the threshold (e.g. from ${first})`);
+    }
+    expect(rays).toBeGreaterThan(50_000);
+    expect(faults).toEqual([]);
+  }, 300_000);
 
   // walking through a doorway: from 1 m before it to 1 m past it, in 5 cm steps, the rooms on both
   // sides stay drawn at every step (inside the wall's thickness the camera is in neither room)
   it('keeps both rooms of every doorway drawn while the camera walks through it', () => {
-    const bake = bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() });
-    const cam = { position: { x: 0, y: 0, z: 0 } };
-    const vis = createVisibility(cam, inner.groups, P, { apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) }); // as main.ts
+    const vis = makeVis();
     const faults = new Map<string, string>();
     let poses = 0;
     for (const d of P.doors) {

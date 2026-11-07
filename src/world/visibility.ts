@@ -1,115 +1,156 @@
-// Room/cell visibility for the interior (game-performance-optimization: cells and portals beat generic
-// occlusion indoors). Each frame: find the camera's room, then show
-//   inside:  its group, the groups of rooms joined to it by a door or stair, stairs within 12 m, and,
-//            unless deep inside, every group seen through one of its doorways (below);
-//   outside: every group with a window within 40 m or a doorway within 120 m facing the camera (the
-//            windows of the others, and of stair towers, show the dark fallback pane, render/windowGlass.ts);
-//            a doorway to the courtyard counts only from the courtyard or above the roofs (`inCourt`).
-// A doorway has no fallback: a room hidden behind one shows as a black hole, so whatever can be seen
-// through an opening is drawn, at every distance at which the opening itself is drawn. Culling never
-// adds, moves or removes an opening or a door (tests/visibility.test.ts checks the whole castle).
-// Underground (camera below the terrain) everything outdoors is hidden: terrain, water, vegetation,
-// the castle exterior, its stones and the gate; deep inside a room with no open way out within 40 m
-// the vegetation is hidden too.
-// No three.js at runtime here, so the decision is unit-tested (tests/interior.test.ts).
+// Which rooms are drawn: a graph of every space (rooms, 'courtyard', 'outside'), walked from the space
+// the camera is in (Anders, 2026-11-07: "build a graph of all rooms ... when we enter a room, we load the
+// rooms next to it, or the next 2").
+// - Nodes: every room of the plan (cellars, tunnels, stair rooms, the gate passage), 'courtyard' and
+//   'outside' (the far bank counts as outside).
+// - Edges: every door (with or without a leaf), every stair, and every window or slit (the one opening
+//   model's apertures). An edge is `open` when nothing can shut it (a doorway without a leaf, a grille,
+//   the gate, a window, a slit, a stair) and leafed otherwise.
+// - The camera's spaces: the room it is in; both spaces of a doorway it stands in; else 'courtyard' in
+//   the courtyard outline and 'outside' elsewhere; above the roofs both.
+// - Drawn: every space within two steps of the camera's spaces; then on through every doorway that is open
+//   (one with no leaf, or whose leaf stands open now), as far as such doorways lead; then one step through
+//   the windows. A group is drawn when one of its rooms is. No distance and no facing test: the same space
+//   draws the same rooms from 1 m or 150 m (tests/world.test.ts checks every opening seen from every pose).
+// The outdoors (terrain, water, castle, vegetation …) is hidden when neither 'courtyard' nor 'outside' is
+// drawn (`deep`), the vegetation alone when deep above ground, everything outdoor when deep below it.
+// No three.js at runtime here, so the decision is unit-tested (tests/visibility.test.ts).
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import type { Aperture } from '../render/interiorMath';
 import { roomAt } from '../render/interiorMath';
-import { pointInPoly, type V2 } from '../core/math2d';
 
-export interface GroupInfo { key: string; zone: string; floor: number; min: V3; max: V3; rooms: number[]; apertures: { p: V3; n: V3; open: boolean; court?: boolean }[] }
+export const COURT = 'courtyard', OUTSIDE = 'outside';
+/** The plan's outdoor space ids, as graph nodes ('farbank', beyond the moat, is outside). */
+export const spaceNode = (s: SpaceId): SpaceId => (s === 'farbank' ? OUTSIDE : s);
+const outdoor = (s: SpaceId) => s === COURT || s === OUTSIDE;
 
-export interface VisOpts {
-  far: number; farOpen: number; stairs: number; deepClear: number; ground?: (x: number, z: number) => number;
-  /** Can a camera at p see into the courtyard (stand in it, or look down from above the roofs)? Default: yes. */
-  inCourt?: (p: V3) => boolean;
+/** An edge: `open` when nothing can shut it; `leaves` the doors whose open leaf opens it; `window` through glass or a slit. */
+export interface Link { to: SpaceId; open: boolean; leaves: string[]; window: boolean }
+export type RoomGraph = Map<SpaceId, Link[]>;
+/** A window or slit: the room behind it and the space in front ('courtyard' or 'outside'). */
+export interface WindowLink { room: SpaceId; side: SpaceId }
+
+/** The graph of every space: doors, stairs and windows as edges (several edges between two spaces: open if any is). */
+export function roomGraph(plan: InteriorPlan, windows: WindowLink[] = []): RoomGraph {
+  const g: RoomGraph = new Map([[COURT, []], [OUTSIDE, []], ...plan.rooms.map((r) => [r.id, []] as [SpaceId, Link[]])]);
+  const link = (a: SpaceId, b: SpaceId, open: boolean, leaf?: string, window = false) => {
+    a = spaceNode(a); b = spaceNode(b);
+    if (a === b || !g.has(a) || !g.has(b)) return;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      let l = g.get(x)!.find((e) => e.to === y && e.window === window);
+      if (!l) g.get(x)!.push(l = { to: y, open, leaves: [], window });
+      l.open ||= open;
+      if (leaf && !l.leaves.includes(leaf)) l.leaves.push(leaf);
+    }
+  };
+  for (const d of plan.doors) {
+    const open = !d.leaf || d.kind === 'gate' || d.kind === 'grille';
+    link(d.spaces[0], d.spaces[1], open, open ? undefined : d.id);
+  }
+  const rooms = new Set(plan.rooms.map((r) => r.id));
+  for (const s of plan.stairs) {
+    // a stair with its own room (a stair tower, a straight flight) opens onto each landing without a door;
+    // one without (a spiral serving the floors of its tower) joins its landings to each other
+    if (rooms.has(s.id)) s.spaces.forEach((sp, i) => { if (!s.landings[i]?.door) link(s.id, sp, true); });
+    else for (let i = 0; i + 1 < s.spaces.length; i++) link(s.spaces[i], s.spaces[i + 1], true);
+  }
+  for (const w of windows) link(w.room, w.side, true, undefined, true);
+  return g;
 }
-const DEF: VisOpts = { far: 40, farOpen: 120, stairs: 12, deepClear: 40 };
-
-/** Is group g seen from p through one of its openings: one facing p, a window within `far`, a doorway within `farOpen`? */
-export function seenThrough(g: GroupInfo, p: V3, o: Pick<VisOpts, 'far' | 'farOpen' | 'inCourt'>, openOnly = false) {
-  return g.apertures.some((a) => {
-    if ((openOnly && !a.open) || (a.court && o.inCourt && !o.inCourt(p))) return false;
-    const dx = p[0] - a.p[0], dy = p[1] - a.p[1], dz = p[2] - a.p[2];
-    return dx * a.n[0] + dy * a.n[1] + dz * a.n[2] > 0 && Math.hypot(dx, dy, dz) < (a.open ? o.farOpen : o.far);
-  });
-}
-
-/** `inCourt` for the castle: in the courtyard's outline, or higher than the lowest roof around it. */
-export const courtView = (court: V2[], roofs: number) => (p: V3) => p[1] > roofs || pointInPoly(court, p[0], p[2]);
-
-const boxDist = (g: GroupInfo, p: V3) => Math.hypot(
-  Math.max(g.min[0] - p[0], 0, p[0] - g.max[0]), Math.max(g.min[1] - p[1], 0, p[1] - g.max[1]), Math.max(g.min[2] - p[2], 0, p[2] - g.max[2]));
-
-export interface VisContext { plan: InteriorPlan; groups: GroupInfo[]; doorAdj: Map<number, Set<number>>; index: Map<SpaceId, number> }
 
 /**
- * Rooms on either side of the doorway the camera stands in (the wall's thickness, where it is in
+ * Every space within `depth` steps of `from`; then on through open doorways (no leaf, or `isOpen(leaf)`)
+ * as far as they lead; then one step through the windows of everything so far.
+ */
+export function drawnSpaces(g: RoomGraph, from: SpaceId[], depth = 2, isOpen: (door: string) => boolean = () => false): Set<SpaceId> {
+  const seen = new Set(from.map(spaceNode).filter((s) => g.has(s)));
+  let front = [...seen];
+  for (let k = 0; k < depth && front.length; k++) {
+    const next: SpaceId[] = [];
+    for (const s of front) for (const e of g.get(s)!) if (!seen.has(e.to)) { seen.add(e.to); next.push(e.to); }
+    front = next;
+  }
+  const passable = (e: Link) => !e.window && (e.open || e.leaves.some(isOpen));
+  const stack = [...seen];
+  while (stack.length) for (const e of g.get(stack.pop()!)!) if (!seen.has(e.to) && passable(e)) { seen.add(e.to); stack.push(e.to); }
+  for (const s of [...seen]) for (const e of g.get(s)!) if (e.window) seen.add(e.to);
+  return seen;
+}
+
+/**
+ * Spaces on either side of the doorway the camera stands in (the wall's thickness, where it is in
  * neither room), so walking through a door never hides the room ahead or behind. Empty when not in one.
  */
-export function doorwayRooms(plan: InteriorPlan, index: Map<SpaceId, number>, p: V3, margin = 0.3): number[] {
+export function doorwaySpaces(plan: InteriorPlan, p: V3, margin = 0.3): SpaceId[] {
   for (const d of plan.doors) {
     const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
     if (p[1] < d.centre[1] - 0.5 || p[1] > d.centre[1] + d.height + 1) continue;
     if (Math.abs(dx * d.along[0] + dz * d.along[1]) > d.width / 2 + margin) continue;
     if (Math.abs(dx * d.normal[0] + dz * d.normal[1]) > d.wall / 2 + margin) continue;
-    return d.spaces.map((s) => index.get(s)).filter((i): i is number => i !== undefined);
+    return d.spaces.map(spaceNode);
   }
   return [];
 }
 
-export function visContext(plan: InteriorPlan, groups: GroupInfo[]): VisContext {
-  const index = new Map(plan.rooms.map((r, i) => [r.id, i]));
-  const doorAdj = new Map<number, Set<number>>();
-  const link = <K>(m: Map<K, Set<K>>, a: K, b: K) => { if (a === b) return; (m.get(a) ?? m.set(a, new Set()).get(a)!).add(b); (m.get(b) ?? m.set(b, new Set()).get(b)!).add(a); };
-  for (const d of plan.doors) {
-    const a = index.get(d.spaces[0]), b = index.get(d.spaces[1]);
-    if (a === undefined || b === undefined) continue;
-    link(doorAdj, a, b);
-  }
-  for (const s of plan.stairs) for (let i = 0; i + 1 < s.spaces.length; i++) {
-    const a = index.get(s.spaces[i]), b = index.get(s.spaces[i + 1]);
-    if (a !== undefined && b !== undefined) link(doorAdj, a, b);
-  }
-  return { plan, groups, doorAdj, index };
+export interface VisOpts {
+  /** Is (x, z) in the courtyard's outline? Default: never. */
+  court?: (x: number, z: number) => boolean;
+  /** Above this height, out of every room, the camera sees into the courtyard and out over the walls. */
+  roofs?: number;
+  /** Terrain height, for `underground`. */
+  ground?: (x: number, z: number) => number;
 }
 
-export interface VisResult { room: number; inside: boolean; deep: boolean; underground: boolean; visible: boolean[] }
-
-export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResult {
-  const { plan, groups } = ctx;
-  // in a doorway the camera belongs to both its rooms; otherwise to the room it is in (or, in an
-  // embrasure, the nearest within 0.9 m)
-  const both = doorwayRooms(plan, ctx.index, cam);
+/** The camera's spaces: its room, both sides of a doorway, or the courtyard / outside it stands in. */
+export function cameraSpaces(plan: InteriorPlan, cam: V3, o: VisOpts = {}): { room: number; spaces: SpaceId[] } {
+  const door = doorwaySpaces(plan, cam);
   let room = roomAt(plan.rooms, cam, 0);
-  if (room < 0) room = both[0] ?? roomAt(plan.rooms, cam, 0.9);
-  const cells = [...new Set([room, ...both])].filter((r) => r >= 0);
-  const underground = o.ground ? cam[1] < o.ground(cam[0], cam[2]) - 1 : false;
-  const visible = groups.map(() => false);
-  if (room >= 0) {
-    const near = new Set(cells.flatMap((r) => [r, ...(ctx.doorAdj.get(r) ?? [])]));
-    groups.forEach((g, i) => {
-      if (g.key === 'doors') { visible[i] = true; return; }
-      if (g.key.startsWith('stairs:')) { visible[i] = boxDist(g, cam) < o.stairs; return; }
-      if (boxDist(g, cam) < 0.3 || g.rooms.some((r) => near.has(r))) visible[i] = true;
-    });
-  } else {
-    groups.forEach((g, i) => {
-      const d = boxDist(g, cam);
-      if (d < 1) { visible[i] = true; return; }
-      if (g.key === 'doors') { visible[i] = d < o.far; return; }
-      const stairs = g.key.startsWith('stairs:');
-      visible[i] = (stairs && d < o.stairs * 0.8) || seenThrough(g, cam, o, stairs);
-    });
+  if (room < 0 && !door.length) room = roomAt(plan.rooms, cam, 0.9); // in an embrasure
+  const spaces = [...new Set([...(room >= 0 ? [plan.rooms[room].id] : []), ...door])];
+  if (!spaces.length) {
+    if (o.roofs !== undefined && cam[1] > o.roofs) spaces.push(COURT, OUTSIDE);
+    else spaces.push(o.court?.(cam[0], cam[2]) ? COURT : OUTSIDE);
   }
-  // deep inside: no open way out (door, grille) in the visible cells within reach
-  let deep = false;
-  if (room >= 0) {
-    deep = !groups.some((g, i) => visible[i] && g.apertures.some((a) => a.open && Math.hypot(cam[0] - a.p[0], cam[1] - a.p[1], cam[2] - a.p[2]) < o.deepClear));
-    // near a way out, the doorways of other buildings are in view through it (the courtyard from the gate passage)
-    if (!deep) groups.forEach((g, i) => { if (!visible[i] && !underground && seenThrough(g, cam, o, true)) visible[i] = true; });
-  }
-  return { room, inside: room >= 0, deep: deep || underground, underground, visible };
+  if (room < 0) room = plan.rooms.findIndex((r) => r.id === spaces.find((s) => !outdoor(s)));
+  return { room, spaces };
+}
+
+export interface GroupInfo { key: string; rooms: SpaceId[] }
+export interface VisContext { plan: InteriorPlan; graph: RoomGraph; groups: GroupInfo[] }
+export interface VisResult {
+  room: number; inside: boolean;
+  /** the camera's spaces, and every space the graph draws from them */
+  from: SpaceId[]; drawn: Set<SpaceId>;
+  /** every space whose geometry is on screen: the drawn ones and the other rooms of their groups */
+  shown: Set<SpaceId>;
+  /** neither the courtyard nor the outside is drawn; underground: and the camera is below the terrain */
+  deep: boolean; underground: boolean;
+  visible: boolean[];
+}
+
+export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = {}, isOpen?: (door: string) => boolean): VisResult {
+  const { room, spaces } = cameraSpaces(ctx.plan, cam, o);
+  const drawn = drawnSpaces(ctx.graph, spaces, 2, isOpen);
+  const deep = !drawn.has(COURT) && !drawn.has(OUTSIDE);
+  const underground = deep && !!o.ground && cam[1] < o.ground(cam[0], cam[2]) - 1;
+  const visible = ctx.groups.map((g) => !g.rooms.length || g.rooms.some((r) => drawn.has(r)));
+  // a group draws all its rooms: what stands in them (leaves, NPCs, props) is shown with them
+  const shown = new Set(drawn);
+  ctx.groups.forEach((g, i) => { if (visible[i]) for (const r of g.rooms) shown.add(r); });
+  return { room, inside: room >= 0, from: spaces, drawn, shown, deep, underground, visible };
+}
+
+/** Is space `id` (a room, 'courtyard', 'outside'; null = anywhere outdoors) on screen in this result? */
+export function spaceShown(v: VisResult, id: SpaceId | null) {
+  if (id === null) return v.shown.has(COURT) || v.shown.has(OUTSIDE);
+  return v.shown.has(spaceNode(id));
+}
+
+/** Windows and slits from the interior light's apertures: each joins its room to the space in front of it. */
+export function windowLinks(plan: InteriorPlan, apertures: Aperture[], court: (x: number, z: number) => boolean): WindowLink[] {
+  return apertures.filter((a) => a.door === undefined && a.kind !== 'portal' && plan.rooms[a.room]).map((a) => ({
+    room: plan.rooms[a.room].id, side: court(a.c[0] + a.n[0], a.c[2] + a.n[2]) ? COURT : OUTSIDE,
+  }));
 }
 
 export const HIDE_UNDERGROUND = ['water', 'terrain', 'vegetation', 'castle', 'stones', 'doors', 'trees', 'ground-cover', 'rocks', 'far-forest'];
@@ -120,57 +161,45 @@ interface SceneLike { getObjectByName(n: string): Obj | undefined }
 interface CamLike { position: { x: number; y: number; z: number } }
 
 /**
- * Per-frame visibility for the shell's InteriorGroups. `apertures` (from bakeInteriorLight) tell which
- * way each group's windows and doors face. Outdoor objects are looked up by name in `scene`.
+ * Per-frame visibility for the shell's InteriorGroups. `apertures` (from bakeInteriorLight) give the
+ * windows; `court` tells which of them face the courtyard. Outdoor objects are looked up by name in `scene`.
  */
-export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan: InteriorPlan, opts: { scene?: SceneLike; apertures?: (Aperture & { group?: string })[]; ground?: (x: number, z: number) => number; inCourt?: (p: V3) => boolean } = {}) {
-  const index = new Map(plan.rooms.map((r, i) => [r.id, i]));
-  const court = new Set(plan.doors.filter((d) => d.spaces.includes('courtyard')).map((d) => d.id));
-  const info: GroupInfo[] = groups.map((g) => ({
-    key: g.key, zone: g.zone, floor: g.floor,
-    min: [g.bounds.min.x, g.bounds.min.y, g.bounds.min.z], max: [g.bounds.max.x, g.bounds.max.y, g.bounds.max.z],
-    rooms: g.rooms.map((id) => index.get(id)).filter((i): i is number => i !== undefined),
-    apertures: (opts.apertures ?? []).filter((a) => a.group === g.key && a.kind !== 'portal').map((a) => ({ p: a.c, n: a.n, open: a.kind !== 'glass', court: a.door !== undefined && court.has(a.door) })),
-  }));
-  const ctx = visContext(plan, info);
-  const o: VisOpts = { ...DEF, ground: opts.ground, inCourt: opts.inCourt };
-  const outdoor = [...new Set([...HIDE_UNDERGROUND, ...HIDE_DEEP])].map((n) => [n, opts.scene?.getObjectByName(n)] as const).filter((x): x is readonly [string, Obj] => !!x[1]);
-  const base = new Map(outdoor.map(([, obj]) => [obj, obj.visible]));
-  let last: VisResult = { room: -1, inside: false, deep: false, underground: false, visible: groups.map(() => true) };
+export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan: InteriorPlan, opts: VisOpts & { scene?: SceneLike; apertures?: Aperture[] } = {}) {
+  const graph = roomGraph(plan, windowLinks(plan, opts.apertures ?? [], opts.court ?? (() => false)));
+  const ctx: VisContext = { plan, graph, groups: groups.map((g) => ({ key: g.key, rooms: g.rooms })) };
+  const outdoorObjs = [...new Set([...HIDE_UNDERGROUND, ...HIDE_DEEP])].map((n) => [n, opts.scene?.getObjectByName(n)] as const).filter((x): x is readonly [string, Obj] => !!x[1]);
+  const base = new Map(outdoorObjs.map(([, obj]) => [obj, obj.visible]));
+  let last: VisResult = { room: -1, inside: false, from: [], drawn: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), shown: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), deep: false, underground: false, visible: groups.map(() => true) };
   const dynamic = new Set<{ obj: { visible: boolean }; roomOf: () => SpaceId | null }>();
+  const opened = new Set<string>();
   return {
+    graph,
+    /** A leaf swung open (any bit) opens its doorway in the graph; shut, it closes it again. */
+    setDoorOpen(id: string, open: boolean) { if (open) opened.add(id); else opened.delete(id); },
     get state() { return last; },
     get roomId() { return last.room >= 0 ? plan.rooms[last.room].id : null; },
+    /** Is this space drawn? (null: anywhere outdoors.) Door leaves, NPCs and props follow it. */
+    isRoomVisible(id: SpaceId | null) { return spaceShown(last, id); },
     /**
-     * Dynamic things (NPCs, door leaves, dropped props) follow the cells: shown when the room they are
-     * in is shown. `roomOf` returns a room id, or 'outside' / 'courtyard' / null when not in a room.
-     * Returns an unregister function.
+     * Dynamic things (NPCs, door leaves, dropped props) follow the graph: shown when the space they are
+     * in is drawn. `roomOf` returns a space id, or null when anywhere outdoors. Returns an unregister function.
      */
-    /** Room-culling hook for other systems (the fire LightRig's `visible(id)`): is this room shown? */
-    isRoomVisible(id: SpaceId | null) { return roomShown(ctx, last, index.get(id ?? '') ?? -1); },
     register(obj: { visible: boolean }, roomOf: () => SpaceId | null) {
       const e = { obj, roomOf };
       dynamic.add(e);
-      obj.visible = roomShown(ctx, last, index.get(roomOf() ?? '') ?? -1);
+      obj.visible = spaceShown(last, roomOf());
       return () => { dynamic.delete(e); };
     },
     update() {
       const p = camera.position;
-      last = visibleSet(ctx, [p.x, p.y, p.z], o);
+      last = visibleSet(ctx, [p.x, p.y, p.z], opts, (id) => opened.has(id));
       groups.forEach((g, i) => { g.object.visible = last.visible[i]; });
-      for (const [name, obj] of outdoor) {
+      for (const [name, obj] of outdoorObjs) {
         const hide = last.underground ? HIDE_UNDERGROUND.includes(name) : last.deep && HIDE_DEEP.includes(name);
         obj.visible = (base.get(obj) ?? true) && !hide;
       }
-      for (const e of dynamic) e.obj.visible = roomShown(ctx, last, index.get(e.roomOf() ?? '') ?? -1);
+      for (const e of dynamic) e.obj.visible = spaceShown(last, e.roomOf());
       return last;
     },
   };
-}
-
-/** Is room `room` (index, -1 = outside / courtyard) shown in this visibility result? */
-export function roomShown(ctx: VisContext, v: VisResult, room: number) {
-  if (room < 0) return !v.underground && !(v.inside && v.deep);
-  if (room === v.room || ctx.doorAdj.get(v.room)?.has(room)) return true;
-  return ctx.groups.some((g, i) => v.visible[i] && g.rooms.includes(room));
 }
