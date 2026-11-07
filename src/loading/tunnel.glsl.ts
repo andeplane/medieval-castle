@@ -20,6 +20,7 @@ uniform float uMotion;          // 0 when the user prefers reduced motion
 uniform vec3 uStone[6];         // rubble palette (linear)
 uniform vec3 uMortar;
 uniform float uDay;             // daylight leaking through the far grille 0..1 (only at the end)
+uniform float uExposure;        // eye adaptation: wide open in the dark, closing as the tunnel lights (model.ts LIGHT)
 
 // Matches the castle's tunnels (interior-shell branch): barrel vault ~2.1 m wide, crown ~2.65 m,
 // rubble walls and vault, dressed springer course and dressed flagstones.
@@ -293,7 +294,7 @@ void main() {
     col += flames(P + h.n * 0.01, rr, 40.0, 0.0) * h.wet * mix(0.25, 1.0, fres) * 0.6;
   }
   // tone map (exponential), vignette, dither so the dark stays smooth
-  col = 1.0 - exp(-col * 1.1);
+  col = 1.0 - exp(-col * uExposure);
   col *= 1.0 - 0.35 * dot(uv, uv);
   col = pow(col, vec3(1.0 / 2.2));
   col += (h21(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5) / 255.0;

@@ -51,6 +51,18 @@ describe('createLoadingScreen', () => {
     expect(d.be.sizes).toEqual([[200, 100]]);
   });
 
+  it('breathe yields a frame between two pieces of a step without touching progress or caption', async () => {
+    const d = fakeDeps();
+    const s = createLoadingScreen(root(), {}, d);
+    await s.step('Raising the walls…');
+    const spans = d.be.spans.length, t = d.clock.time;
+    await s.breathe();
+    expect(d.clock.time).toBeGreaterThan(t);
+    expect(d.be.spans).toHaveLength(spans);
+    expect(d.be.progresses).toEqual([]);
+    expect(label()).toBe('Raising the walls… | 0%');
+  });
+
   it('finishes: waits for the backend to reach 100 %, holds, fades and cleans up', async () => {
     const el = root();
     const d = fakeDeps();
