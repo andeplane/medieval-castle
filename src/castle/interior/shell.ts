@@ -19,6 +19,7 @@ import { doorOutlines, stopPlane, seatsOf } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 import { STAIR_SLIT } from '../openings';
+import { PAVE_Y } from '../paving';
 import { buildTorchHolder, type TorchHolder } from './torch';
 
 type V3 = [number, number, number];
@@ -42,6 +43,11 @@ export interface ShellDeps {
 }
 /** A room's visibility group: one per wing or tower floor, one per stair. */
 export const groupKey = (r: RoomSpec) => (r.kind === 'stair' ? `stairs:${r.id}` : `${r.zone}:${r.floor}`);
+/**
+ * The group of the outdoor halves of the doorways to the courtyard and outside (and their thresholds): it
+ * holds no room, so it is drawn whenever the interior is (world/visibility.ts), like the castle round it.
+ */
+export const OUTDOOR_REVEALS = 'doorways:outdoor';
 
 const VAULT_K = 12;
 /**
@@ -65,6 +71,11 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const key = groupKey(r);
     let g = groups.get(key);
     if (!g) { g = { key, zone: r.zone, floor: r.kind === 'stair' ? -1 : r.floor, B: new Builder(), rooms: [] }; groups.set(key, g); }
+    return g;
+  };
+  const outdoorReveals = (): ShellGroup => {
+    let g = groups.get(OUTDOOR_REVEALS);
+    if (!g) { g = { key: OUTDOOR_REVEALS, zone: 'outdoor', floor: -1, B: new Builder(), rooms: [] }; groups.set(OUTDOOR_REVEALS, g); }
     return g;
   };
   const wallMat = (r: RoomSpec): MatKey => (P.phase[r.id] === 'old' ? 'old' : 'new');
@@ -214,6 +225,12 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     });
     const owner = sides.find((s) => s.r)!.r!;
     const B = groupOf(owner).B;
+    // The passage is drawn with the space you see it from: round a shut leaf you see one side's rebate, stop
+    // and leaf, and from the other the clear reveal up to the leaf, so each belongs to its side's group (the
+    // clear reveal of a two-way door, seen from either side as its leaf changes seats, to both); an open arch
+    // is split at the mid-plane. Never only with the room beyond, which the room graph may leave out (the
+    // white outline round a shut door, 2026-11-07: the whole reveal was spaces[0]'s).
+    const sideB = (k: number) => (sides[k].r ? groupOf(sides[k].r!) : outdoorReveals()).B;
     // the stops: just behind the shut leaf's back face in each seat (doorGeom places the leaf)
     const stopT = (k: number) => (k === 1 ? 1 : -1) * stopPlane(d);
     // reveal: from face 0 to the stop with one outline, then the other to face 1 (a two-way door: the
@@ -221,7 +238,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     // A band that crosses the wall's mid-plane is split there: the interior light gives each triangle the
     // room nearest its centre (render/interiorMath tagTriangles), so a quad from face to face would light
     // its two triangles from the two rooms and show saw teeth round the head (the gate-inner arch).
-    const ring = (o: V2[], tA: (u: number) => number, tB: (u: number) => number) => {
+    const ring = (o: V2[], tA: (u: number) => number, tB: (u: number) => number, owners?: number[]) => {
       const cx = o.reduce((s, v) => s + v[0], 0) / o.length, cy = o.reduce((s, v) => s + v[1], 0) / o.length;
       for (let i = 0; i < o.length; i++) {
         const p = o[i], q = o[(i + 1) % o.length];
@@ -241,8 +258,10 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
           const ta = cuts[k], tb = cuts[k + 1];
           const A = W(p[0], p[1], ta(p[0])), Bq = W(q[0], q[1], ta(q[0])), C = W(q[0], q[1], tb(q[0])), D = W(p[0], p[1], tb(p[0]));
           const v1 = v0 + Math.abs(tb(p[0]) - ta(p[0])) / 2;
-          B.bins.trim.tri(A, Bq, C, nn, [0, v0], [seg / 2, v0], [seg / 2, v1]);
-          B.bins.trim.tri(A, C, D, nn, [0, v0], [seg / 2, v1], [0, v1]);
+          for (const k of owners ?? [ta(p[0]) + ta(q[0]) + tb(p[0]) + tb(q[0]) < 0 ? 0 : 1]) {
+            sideB(k).bins.trim.tri(A, Bq, C, nn, [0, v0], [seg / 2, v0], [seg / 2, v1]);
+            sideB(k).bins.trim.tri(A, C, D, nn, [0, v0], [seg / 2, v1], [0, v1]);
+          }
           v0 = v1;
         }
       }
@@ -251,9 +270,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     else {
       const face = (k: number) => (u: number) => depthOn(k, u);
       const a = rebated(0) ? () => stopT(0) : face(0), b = rebated(1) ? () => stopT(1) : face(1);
-      if (rebated(0)) ring(reb, face(0), () => stopT(0));
-      ring(clear, a, b);
-      if (rebated(1)) ring(reb, () => stopT(1), face(1));
+      if (rebated(0)) ring(reb, face(0), () => stopT(0), [0]);
+      ring(clear, a, b, seats.length === 1 ? [1 - seats[0]] : [0, 1]);
+      if (rebated(1)) ring(reb, () => stopT(1), face(1), [1]);
       // each rebate step: a flat ring between the two outlines facing its swing side
       for (const k of seats) {
         const f: Frame = { o: [c[0] + n[0] * stopT(k), 0, c[1] + n[1] * stopT(k)], r: [al[0], 0, al[1]], u: [0, 1, 0], n: k === 1 ? [n[0], 0, n[1]] : [-n[0], 0, -n[1]] };
@@ -261,10 +280,23 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
         for (let i = 1; i < reb.length; i++) {
           const j = (i + 1) % reb.length;
           const A = at(f, reb[i][0], reb[i][1]), Bq = at(f, reb[j][0], reb[j][1]), C = at(f, clear[j][0], clear[j][1]), D = at(f, clear[i][0], clear[i][1]);
-          quadN(B, 'trim', A, Bq, C, D, f.n);
+          quadN(sideB(k), 'trim', A, Bq, C, D, f.n);
         }
       }
     }
+    // the threshold at an outdoor face: a riser from under the sill up to the ground in front (the paving
+    // stands 2-12 cm above the sills), so no sky shows between the passage floor and the courtyard (2026-11-07:
+    // white slivers at the gate passage's inner end, once the terrain under the buildings was cut away, #57)
+    sides.forEach((s, k) => {
+      if (s.r) return;
+      const sgn = k === 0 ? -1 : 1, t = sgn * (d.wall / 2 - 0.01), mid = W(0, 0, t);
+      const ground = s.sp === 'courtyard' ? PAVE_Y : deps.heightAt?.(mid[0], mid[2]) ?? -Infinity;
+      if (!(ground > d.centre[1] + 0.001)) return;
+      const [u0, u1] = [clear[0][0], clear[1][0]], y0 = d.centre[1] - 0.05;
+      const A = W(u0, y0, t), Bq = W(u1, y0, t), C = W(u1, ground, t), D = W(u0, ground, t), nIn: V3 = [-sgn * n[0], 0, -sgn * n[1]];
+      quadN(outdoorReveals().B, 'trim', A, Bq, C, D, nIn);
+      quadN(outdoorReveals().B, 'trim', D, C, Bq, A, [-nIn[0], 0, -nIn[2]]);
+    });
     if (d.kind === 'gate') gateDetails(B, d, W, clear);
     // the door's one cut through the castle: every castle surface in the doorway (wall faces, round-tower drums,
     // batters, string courses) is carved with the outlines the reveal follows: the rebated one from each face a leaf

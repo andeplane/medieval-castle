@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
 import { planInterior, validatePlan, facings, towerFloorsY, outerFootprint, ceilingAt, doorHeadFits, fitDoorHeads, fitHinges, leafSwingFits, GATE, type PlanX } from '../src/castle/interior/plan';
 import { navGraph, findPath, floorPolys } from '../src/castle/interior/nav';
-import { buildShell, type ShellResult } from '../src/castle/interior/shell';
+import { buildShell, OUTDOOR_REVEALS, type ShellResult } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior/index';
 import { interiorViews } from '../src/camera/interiorViews';
 import { buildCastle } from '../src/castle/castle';
@@ -316,12 +316,13 @@ describe('buildInterior', () => {
     expect(meshes).toBeLessThan(400);
     // one soup per group, then one walking ramp per stair
     expect(res.collision.length).toBe(res.groups.length + P.stairs.length);
+    expect(res.groups.filter((g) => !g.rooms.length).map((g) => g.key)).toEqual([OUTDOOR_REVEALS]);
     expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual(P.stairs.map((s) => `ramp:${s.id}`));
     for (const g of res.groups) {
       const names = g.object.children.map((m) => (m as THREE.Mesh).material);
       expect(new Set(names).size).toBe(names.length);
       expect(g.bounds.isEmpty()).toBe(false);
-      expect(g.rooms.length).toBeGreaterThan(0);
+      expect(g.rooms.length > 0 || g.key === OUTDOOR_REVEALS).toBe(true); // the outdoor halves of the doorways hold no room
     }
     for (const c of res.collision) expect(c.getAttribute('position').count % 3).toBe(0);
     expect(res.stats.carved).toBeGreaterThan(0);
