@@ -19,6 +19,7 @@ import { doorOutlines, stopPlane } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 import { STAIR_SLIT } from '../openings';
+import { buildTorchHolder, type TorchHolder } from './torch';
 
 type V3 = [number, number, number];
 export interface ShellGroup { key: string; zone: string; floor: number; B: Builder; rooms: string[] }
@@ -29,7 +30,13 @@ export interface ShellResult {
   /** The exterior opening behind each embrasure built: room, outward plan normal, centre on the face, sill. */
   embrasures: { room: string; dir: V2; mid: V2; s0: number; s1: number; yb: number }[];
 }
-export interface ShellDeps { heightAt?: (x: number, z: number) => number }
+export interface ShellDeps {
+  heightAt?: (x: number, z: number) => number;
+  /** Wall torches placed by render/interiorFire.ts wallTorches: each holder is built into its room's group. */
+  torches?: TorchHolder[];
+}
+/** A room's visibility group: one per wing or tower floor, one per stair. */
+export const groupKey = (r: RoomSpec) => (r.kind === 'stair' ? `stairs:${r.id}` : `${r.zone}:${r.floor}`);
 
 const VAULT_K = 12;
 /**
@@ -50,7 +57,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   const room = new Map(P.rooms.map((r) => [r.id, r]));
   const carveVols: Volume[] = [], dropped: string[] = [];
   const groupOf = (r: RoomSpec): ShellGroup => {
-    const key = r.kind === 'stair' ? `stairs:${r.id}` : `${r.zone}:${r.floor}`;
+    const key = groupKey(r);
     let g = groups.get(key);
     if (!g) { g = { key, zone: r.zone, floor: r.kind === 'stair' ? -1 : r.floor, B: new Builder(), rooms: [] }; groups.set(key, g); }
     return g;
@@ -135,6 +142,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     cell(g.B, r);
     carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.02, r.y1 + 0.02, BEHIND));
   }
+  for (const h of deps.torches ?? []) buildTorchHolder(groupOf(room.get(h.room)!).B, h);
   for (const s of P.stairs) { const r = room.get(s.id); buildStair(r ? groupOf(r).B : groupOf(room.get(s.spaces[0])!).B, s, stairOpts(P, s)); }
 
   // ------------------------------------------------ exterior clean-up volumes

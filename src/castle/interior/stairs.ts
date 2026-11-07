@@ -56,6 +56,8 @@ export interface StairOpts {
   /** Rope handrail on iron staples along the drum (default true for round drums). */
   handrail?: boolean;
   doorWidth?: number; doorHeight?: number;
+  /** Straight stairs: the going of every tread. The run left over is flat floor (an open flight's top landing). */
+  going?: number;
   /** Straight stairs: side walls + stepped lintels. Default: mural unless it serves 'courtyard' or 'outside'. */
   mural?: boolean;
   mat?: Partial<{ step: MatKey; wall: MatKey; rope: MatKey; iron: MatKey }>;
@@ -479,9 +481,9 @@ export function planStraight(s: StairSpec, o: StairOpts = {}): StraightPlan {
   const nMid = ys.length - 2, lMid = Math.max(0.9, s.width);
   const nTread = nRise - 1 - nMid;
   let g = nTread > 0 ? (run - nMid * lMid) / nTread : 0, lead = 0, tail = 0;
-  if (g > 0.42) {
+  if (g > (o.going ?? 0.42) + 1e-9) {
     // too long for the rise: flat floor at the ends (an open flight keeps it all at the top, it starts on the ground)
-    g = 0.36; const extra = run - nMid * lMid - nTread * g;
+    g = o.going ?? 0.36; const extra = run - nMid * lMid - nTread * g;
     lead = mural ? extra / 2 : 0; tail = extra - lead;
   }
   const steps: StraightStep[] = [];
@@ -961,7 +963,8 @@ export function stairNavPath(s: StairSpec | StairPlan, o: StairOpts = {}): V3[] 
   steps.forEach((st, i) => {
     pts.push([st.s0 - st.nosing, st.y]);
     if (st.landing < 0) return;
-    if (i === steps.length - 1) { pts.push([Math.max(st.s1, st.s0), st.y]); return; }
+    // the top landing ends at a wall: stop where a character (r 0.3) can stand, 0.45 m short of it
+    if (i === steps.length - 1) { pts.push([Math.max(st.s0, st.s1 - 0.45), st.y]); return; }
     pts.push([(st.s0 + st.s1) / 2, st.y], [st.s1 - 0.6 * (steps[i + 1].s1 - steps[i + 1].s0), st.y]);
   });
   return pts.filter((q, k) => k === 0 || q[0] - pts[k - 1][0] > 1e-4).map(([sc, y]) => [p.o[0] + p.d[0] * sc, y, p.o[2] + p.d[1] * sc]);

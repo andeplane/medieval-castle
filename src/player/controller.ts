@@ -44,6 +44,8 @@ export class PlayerController {
   private onFootstep: PlayerDeps['onFootstep'];
   private eyeH = T.eye;
   private stepOff = 0; private prevStepOff = 0;
+  /** Smoothed vertical speed of the feet on the ground (m/s), for the camera. */
+  private climb = 0;
   private bobW = 0; private runMix = 0;
   private dip = 0;
   private fov = T.fov;
@@ -64,7 +66,7 @@ export class PlayerController {
   /** Feet at (x, y, z). Clears velocity and camera smoothing. */
   teleport(x: number, y: number, z: number, yaw?: number, pitch?: number) {
     this.motor.teleport([x, y, z]);
-    this.stepOff = this.prevStepOff = 0; this.dip = 0;
+    this.stepOff = this.prevStepOff = 0; this.dip = 0; this.climb = 0;
     if (yaw !== undefined) this.yaw = yaw;
     if (pitch !== undefined) this.pitch = pitch;
   }
@@ -98,6 +100,12 @@ export class PlayerController {
     this.prevStepOff = this.stepOff;
     m.update(this.intent(this.readInput()), dt);
     if (m.stepDy) this.stepOff = THREE.MathUtils.clamp(this.stepOff - m.stepDy, -0.5, 0.5);
+    // on the ground the eye follows a smoothed climbing speed, so the corners where a stair's ramp
+    // meets a landing (full climbing speed to none within a tick) round off instead of jolting
+    const vy = (m.feet[1] - m.prevFeet[1] - m.stepDy) / dt;
+    const smooth = m.grounded ? damp(this.climb, vy, T.climbSmooth, dt) : vy;
+    this.stepOff = THREE.MathUtils.clamp(this.stepOff + (smooth - vy) * dt, -0.5, 0.5);
+    this.climb = smooth;
     this.stepOff = damp(this.stepOff, 0, T.stepSmooth, dt);
     if (m.landed > 2.5) this.dip = Math.min(0.14, this.dip + (m.landed - 2) * 0.02);
     this.dip = damp(this.dip, 0, 7, dt);

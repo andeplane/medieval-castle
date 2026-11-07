@@ -24,6 +24,101 @@ Test: `tests/sunLeak.test.ts`, "direct sun reaches a room only through its openi
 Captures (headless WebGL2, `castle-plan/sun-leak/`): great-0 by the W0-4 door before/after, looking down that passage, the jamb from 0.5 m, the gatehouse windlass room's window patch (unchanged), bookmarks courtyard, hero, gate.
 
 Not checked: WebGPU; the shadow depth bias (≈ 0.13 m / 0.26 m along the sun) still lets light past a caster closer than that, which the skins avoid by sitting 0.22 m back; door leaves are left out of the test (they only block more); the gate passage and portcullis slot (rays through the gate are allowed as openings); the furniture build.
+## 2026-11-06: a courtyard door glowing white in its dim room (branch `claude/project-thread-ns4g2v-doorlight`)
+
+Anders: "what is this MEGA BRIGHT door?" (a round-headed plank leaf, seen from inside its room, near-white beside leaves lit by the fire).
+
+Cause: #40 gave every leaf of a courtyard or outside door the exterior wood and iron (`main.ts`, the third `buildDoors(doorSets.active.filter(outdoor), { wood: M.wood, iron: M.iron }, …)`). A batch has one material, so the leaf's room face got it too: the sun, the outdoor hemisphere and the sky environment, none of the room's darkening, under the room's +2.5 stop exposure. The four such leaves are `court>N0-4`, `court>W0-2` (round heads), `court>E0-2` and `court>stairtower`; all swing into their rooms.
+
+Fix (one owner: `doors.ts`):
+- `buildDoors(…, { outdoor })` splits a leaf whose two sides are lit differently into its back faces (local −z) and the rest (`splitBySide`). The swing-side faces and edges take the swing space's set; the back faces take the other side's set while the leaf is shut, and the swing space's once it is open past `BACK_SIDE_SWING` (45°), when they stand in that space. Jamb iron splits the same way and does not move. Cell visibility still hides a door's instances together.
+- `buildCastleDoors` (new, used by main.ts) does main.ts's door assembly: leaves above ground in the interior set with the outdoor set for their outward faces, cellar leaves in the underground set (no sun shadow), the portcullis above ground. The outdoor pair now lives in the above-ground system, so the doors keep 6 batches (same as before: 2 + 2 + 2, plus the locked pair). Draw calls: +0.
+
+Tests: `tests/doorLight.test.ts` builds every active leaf of the castle through `buildCastleDoors`, shut and wide open, and checks every drawn leaf triangle: shut, a face looking through the doorway into a room (|n·normal| > 0.5) is in an interior batch and one looking into the courtyard or outside in the outdoor one; wide open, every face is in its swing space's set. On main's assembly it lists the four courtyard doors (their room faces in the outdoor material). A second case walks one courtyard leaf through the switch and `setVisible`.
+
+Captures (headless WebGL2, `castle-plan/door-light/`, `main-*` = origin/main, `after-*` = branch): `n04-in` and `w02-in` look at the shut round-headed leaves from inside their rooms (main: near-white; branch: the room's dim warm light), `n04-out` the same door from the courtyard (unchanged), `court` a courtyard pose. Draw calls and frame triangles are equal on main and the branch at every pose (e.g. n04-in 283 / 3.59 M, n04-out 335 / 4.63 M). The bright hairlines inside are the courtyard seen through the gaps between boards, the same on main.
+
+Not checked: real WebGPU (captures are headless WebGL2); a leaf between 0° and 90° is lit by one side's set on its back face, chosen at 45°, so an ajar leaf's back face changes light at once as it passes 45°.
+## 2026-11-06: cellar stair top door opened onto a 4.4 m drop (branch `claude/project-thread-ns4g2v-understair`)
+
+Anders: "I entered the door up there, and I am now under stairs I can see through."
+
+Root cause: the only straight flight, `N-cellarstair` (N wing, along the courtyard wall, cellar −1.8 → ground 2.6), is a 1.25 m strip room with its floor at the cellar (y0 = −1.8). plan.ts set the flight's `end` at `sTop = hi − 0.7`, but its top door `N0-3>N-cellarstair` sits at `hi − 0.1`, 0.58 m past the last riser, in the strip's side wall. The flight's top "landing" was 0 m long and nothing else built floor at 2.6 there, so the door opened over the cellar floor 4.4 m below. From that pit the flight was open at its top end (an open flight builds its end face only for a landing longer than 0), so you looked up into it: treads and side faces are one-sided and the underside was never built.
+
+Fix (one owner: the stair, planned by plan.ts)
+- plan.ts: the flight now ends at the strip's far wall (`sb`); `stairOpts` passes `going: STRAIGHT_GOING` (0.26) for straight stairs.
+- stairs.ts `planStraight`: a set `going` keeps the treads at it and gives the rest of the run to flat floor; an open flight puts it all in its top landing (here 1.30 m, covering the door and running to the wall). The landing's far face (from under the floor up to 2.6) closes the flight's top end, so the space under the treads is closed on every side.
+- Cost: the cellar stair 2,224 → 2,356 triangles (+132: the landing's tread rows, its sides and end face); no new draw calls.
+
+Assumption (visible, for Anders to veto): the top landing is the same trim stone as the treads, with a plain stone end face against the strip's end wall. No soffit was added: the flight is now a closed solid (sides, first riser and end face), so its underside cannot be seen or reached.
+
+Tests
+- `tests/world.test.ts` "opens every door onto floor on both sides, never onto a drop": every plan door, 0.35 m past each wall face, three points across the doorway, the first surface under the sill (castle + interior triangles, terrain outdoors) is within 0.3 m. On main: `N0-3>N-cellarstair: no floor on the N-cellarstair side (-4.40 m under the sill)` (the only door that fails).
+- `tests/world.test.ts` "closes the space under every straight flight": rays forward, back, sideways and up from under every tread meet the flight's own outer faces from behind. On main: 225 rays escape.
+- `tests/keypaths.test.ts` "N0-3 → the cellar stair door → its top landing … → down the flight to the N cellar": the player's motor walks through the door, stays at 2.6 (on main it falls), then down to `N-c1`.
+- `tests/stairs.test.ts`: `going` keeps the treads and gives the rest to a closed top landing.
+
+Walked in the game (headless WebGL2, `?webgl&shot`, `__game.player.teleport` 1.6 m in front of the door in N0-3, door opened, `__game.input(['KeyW'], 1100)`): on main the player ends at y −1.8 in the stairwell (Anders's view reproduced, `before-walked-end-look-up-flight.png`); on the branch at y 2.6 on the landing, lowest point 2.6. Captures in `castle-plan/under-stairs/` (`before-*` main, `after-*` branch; bookmarks courtyard 665 draw calls / 5.26 M triangles, hall 328 / 3.98 M, gate 464 / 4.30 M, unchanged).
+
+Not fixed, seen in the captures on main and branch alike: the cellar stair's treads render as one flat, bright grey-white strip (no step edges read) in headless WebGL2; the N0-3 leaf swings into the 1.25 m stairwell and stands across the landing when open.
+## 2026-11-06: smooth stair walking (branch `claude/project-thread-ns4g2v-stairwalk`)
+
+Anders: "walking in the stairs here is very hard. must be smoother. one often stops-ish, not sure why." (a spiral stair, walking up).
+
+Root cause (measured with the new test on main, every stair in the castle, W held along the walking line):
+- The capsule climbed the rendered treads only. Each tread is a small slope the KCC rides up over the nosing and then an autostep, so speed sawed between 0.5 and 2.5 m/s at every step and the eye jumped ~8 cm a tick at each one.
+- The stair ramp collider (`stairCollisionRamp()`, written for this in `interior-stairs`) was never added to physics.
+- The motor pressed 1 m/s straight down into the floor every grounded tick. On a slope the KCC projects that press onto the plane, which took about half the horizontal speed on a 35° ramp. On flat landings the same press made the KCC stall now and then: a zero move with only the floor as contact (a Rapier quirk when the capsule sits exactly at its skin offset over the floor). That is the "stops-ish": ~0.02 m/s for a tick or two on many landings and treads.
+
+Fix
+- `castle/interior/index.ts`: one invisible walking ramp per stair (`stairCollisionRamp`) is added to `collision` after the group soups, so characters glide over the nosings. Visible steps are unchanged; the newel, drum and walls still collide as rendered.
+- `character/motor.ts`: a grounded move follows the plane of the floor just ahead instead of pressing down. `CharacterBody.probe()` (optional, a downward ray in `physics/world.ts` that skips characters) gives the floor normal 10 cm ahead of the axis going up (where the capsule's round bottom meets a ramp) and under the axis going down. The 1 m/s press stays only while the capsule touches something too steep to walk on (a riser, an edge, a wall), so the KCC still cannot slide up 0.35 m steps. Bodies without a probe (test fakes) press as before. NPCs get all of it: it is in the motor.
+- `player/controller.ts`: the eye follows a smoothed climbing speed on the ground (`climbSmooth` 30/s), so the corners where a ramp meets a landing round off instead of jolting.
+
+Tests
+- `tests/stairwalk.test.ts`: all 6 stairs (5 spirals, 1 straight cellar flight), up and back down, through the player's own motor, controller and colliders. Asserts: reaches the far landing; horizontal speed ≥ 80 % of walk after 0.3 s; eye moves ≤ 6 cm a tick; change of climbing speed ≤ 3.5 cm a tick per tick. On main every walk fails (min speed 0.015-0.06 m/s, eye jump 8 cm, jolt 7-8 cm); now min speed 2.42-2.99 m/s, jump ≤ 5 cm, jolt ≤ 3.1 cm.
+- `tests/motor.test.ts`: a fake ramp body for the probed move (rise at full horizontal speed, press only against a wall, down under the axis, no rise standing still). The 0.30 m step lane now rides up over the nosings instead of reporting a single-tick step.
+- `tests/interior.test.ts`: collision is one soup per group plus one `ramp:<id>` per stair.
+
+Known issues / next
+- An open door leaf blocks the stair tower's walking line at the courtyard landing (`court>stairtower` swings into the stair): with it open, the walk from the tunnel landing up stops there (on main too). The test keeps leaves shut. For the door-swing work.
+- Entering a ramp from a flat floor still costs one or two ticks at ~2.4 m/s (80 %).
+- The ramp is steeper than 50° within ~0.65 m of the axis; hugging the newel the capsule falls back on the treads and autostep.
+## 2026-11-06: wall torches get a holder (branch `claude/project-thread-ns4g2v-torch`)
+
+Anders: "wtf is this flying flame?" Without `?furniture=1` (the default), `wallTorches` (render/interiorFire.ts) gave the halls, gate rooms, undercrofts and tunnels a flame sprite and a light 0.22 m off the wall, but nothing built a torch, so the flame hung in the air. The moat tunnel's torches were also placed at the tunnel's lowest floor + 2 m, so near its ends they sat under the floor.
+
+Fix (one owner: `wallTorches` places a torch; the shell builds what it places)
+- `wallTorches` returns a `holders` record per flame (room, wall point, inward normal, flame base). main.ts calls it once on the plan before `buildInterior`, passes the holders as `deps.torches`, and feeds the same flames and lights to the light rig. `?furniture=1` builds no holders (the furniture brings its own fixtures).
+- `castle/interior/torch.ts` `buildTorchHolder`: a 4 cm square wooden shaft, 45 cm long, leaning out from 7 cm off the wall to just under the flame base (1 cm gap); an iron wall plate (6 × 18 cm, 1.2 cm thick) on the wall face, a 2 cm arm out to an iron collar round the shaft. The shell builds it into the room's own group (`groupKey`), in that group's 'wood' and 'iron' bins, so it is culled with the room. Assumption (plainest look): square shaft, flat plate, arm and collar; no head wrapping, no sconce cup.
+- Tunnel torches hang 1.55 m over the tunnel's own floor where they are (`floorAlong`), under the vault's springing (1.75 m), so the bracket is on the upright wall.
+- Cost: 38 holders, +1,596 interior triangles (245,432 → 247,028). The groups that had no wood or iron bin get one: N:0, N:1, E:0, S:0, W:0 +iron; gate:0 +wood; N:-1, W:-1, tunnel:-1 +wood +iron (12 meshes over 9 groups, so 1–2 draw calls more while such a group is shown).
+
+Tests
+- `tests/torches.test.ts` (whole castle, the main.ts path): every flame has a holder in its room's group; the shaft top is within 5 cm under the flame base; the plate's centre and corners hit the shell's wall triangles 5 ± 3 cm from a probe 5 cm in front (the real faces, so an opening or a curved vault behind it fails); the wall is behind the flame, the shaft top and its foot at the expected depth; no ceiling within 0.4 m over the flame, no floor within 1 m under the foot; no torch within 0.3 m of a doorway of its room. On main it fails (no holders).
+- `tests/interiorFire.test.ts`: holder record, tunnel torch heights over a sloping floor, `floorAlong` ends.
+
+Not checked: `?test=room` (its own plan; its torches still have no holder); WebGPU; the furniture build.
+## 2026-11-06: a door opened next to you no longer traps you (branch `claude/project-thread-ns4g2v-doorswing`)
+
+Anders: "sometimes I stand next to a door and open it, it crashes into me and it is hard to move (as if I am inside the door)".
+
+Root cause: a moving leaf already stopped against a character, but only when it came within radius + 2 cm of the body's axis (`doors.ts` `blocks`). That is exactly the walking controller's skin (Rapier KCC offset 0.02), so the leaf was allowed into the skin. Rapier's controller nudges a capsule out of anything inside its skin, which gave the leaf room for its next step: the leaf ratcheted the character round the arc into the corner behind the door and pinned it against the wall, where it could hardly move.
+
+Fix (one line of behaviour): the leaf stops when it would come within `LEAF_CLEAR` = radius + 8 cm (skin + 6 cm) of any character's axis, and carries on when they step out. Same as before for every agent: the player and anything in `characters()` (NPCs). No new state or API.
+
+Tests: `tests/doorswing.test.ts` (the key-path world and the player's own motor and colliders). Over all 240 openable leaves, the player stands in the swing arc on the swing side (near the hinge, mid-leaf, near the latch edge; 717 standable spots), the door opens and the world steps: the capsule never overlaps a leaf collider (a Rapier shape query), and the player walks at least 0.5 m away (or as far as the same walk goes with the leaf shut, in cramped turrets). On main it fails 13 spots, all mid-leaf, e.g. `N0-0>N0-1 mid: stuck: moved only 0.09 m (1.31 m with the leaf shut)` (an earlier version of the test that also tried a wider latch spot failed 44). One NPC case checks that an NPC stops the leaf and that it carries on once the NPC leaves.
+
+In the game (vite, headless WebGL2, `__game.player.teleport`, `__game.use()` = E, `__game.input`): in the arc of `N0-0>N0-1`, `se-stair>se-0` and `court>W0-2`, mid-leaf and near the latch, facing the leaf. E opened it ("Open door" under the crosshair); the leaf stayed shut or stopped part-open (0.08 to 0.38) with the player unmoved (< 1 mm), the player walked 2.6 to 2.85 m away in 1 s (0.55 m into the cramped `se-stair` landing), and then the leaf swung fully open. No capture: a behaviour change, not a look change.
+
+Not checked: two characters closing on a leaf from both sides at once; a running NPC whose motor ticks after the doors (it can close 10 cm in one tick, so it may touch a leaf by a cm or two, which the controller then pushes it out of; the leaf is stopped by then, so nothing ratchets).
+## 2026-11-06: rooms and torchlight vanishing in doorways (branch `claude/project-thread-ns4g2v-roomlight`)
+
+- Cause: `visibleSet` (src/world/visibility.ts) put the camera in a room only within 0.9 m of its outline. In a thick wall's doorway it was in no room, so the "outside" rules ran and the room ahead (or behind) was culled: Anders saw straight through to the courtyard for 10-20 cm, then the room came back. Fire lights were picked only among drawn rooms, so torchlight also switched as you crossed a threshold.
+- Fix: `doorwayRooms` puts a camera standing in a doorway (its width and the wall's thickness, plus 30 cm) in both its rooms; the rig picks torches by distance only (main.ts), never by what is drawn.
+- Tests (tests/world.test.ts): every doorway walked from 1 m before to 1 m past in 5 cm steps (3 lines across), both rooms drawn at every step (failed at 60+ doors before); torches that reach the camera stay lit across every doorway walk.
+- Help: fly and orbit help lines now say "P walk".
+- Not checked: torch light still passes through walls within its 6.9 m range (as before; no fire shadows).
 
 ## 2026-11-06: white specks on interior walls (branch `claude/project-thread-ns4g2v-specks`)
 

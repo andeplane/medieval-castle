@@ -41,7 +41,22 @@ export const courtView = (court: V2[], roofs: number) => (p: V3) => p[1] > roofs
 const boxDist = (g: GroupInfo, p: V3) => Math.hypot(
   Math.max(g.min[0] - p[0], 0, p[0] - g.max[0]), Math.max(g.min[1] - p[1], 0, p[1] - g.max[1]), Math.max(g.min[2] - p[2], 0, p[2] - g.max[2]));
 
-export interface VisContext { plan: InteriorPlan; groups: GroupInfo[]; doorAdj: Map<number, Set<number>> }
+export interface VisContext { plan: InteriorPlan; groups: GroupInfo[]; doorAdj: Map<number, Set<number>>; index: Map<SpaceId, number> }
+
+/**
+ * Rooms on either side of the doorway the camera stands in (the wall's thickness, where it is in
+ * neither room), so walking through a door never hides the room ahead or behind. Empty when not in one.
+ */
+export function doorwayRooms(plan: InteriorPlan, index: Map<SpaceId, number>, p: V3, margin = 0.3): number[] {
+  for (const d of plan.doors) {
+    const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
+    if (p[1] < d.centre[1] - 0.5 || p[1] > d.centre[1] + d.height + 1) continue;
+    if (Math.abs(dx * d.along[0] + dz * d.along[1]) > d.width / 2 + margin) continue;
+    if (Math.abs(dx * d.normal[0] + dz * d.normal[1]) > d.wall / 2 + margin) continue;
+    return d.spaces.map((s) => index.get(s)).filter((i): i is number => i !== undefined);
+  }
+  return [];
+}
 
 export function visContext(plan: InteriorPlan, groups: GroupInfo[]): VisContext {
   const index = new Map(plan.rooms.map((r, i) => [r.id, i]));
@@ -56,24 +71,27 @@ export function visContext(plan: InteriorPlan, groups: GroupInfo[]): VisContext 
     const a = index.get(s.spaces[i]), b = index.get(s.spaces[i + 1]);
     if (a !== undefined && b !== undefined) link(doorAdj, a, b);
   }
-  return { plan, groups, doorAdj };
+  return { plan, groups, doorAdj, index };
 }
 
 export interface VisResult { room: number; inside: boolean; deep: boolean; underground: boolean; visible: boolean[] }
 
 export function visibleSet(ctx: VisContext, cam: V3, o: VisOpts = DEF): VisResult {
   const { plan, groups } = ctx;
+  // in a doorway the camera belongs to both its rooms; otherwise to the room it is in (or, in an
+  // embrasure, the nearest within 0.9 m)
+  const both = doorwayRooms(plan, ctx.index, cam);
   let room = roomAt(plan.rooms, cam, 0);
-  if (room < 0) room = roomAt(plan.rooms, cam, 0.9); // standing in a doorway or embrasure
+  if (room < 0) room = both[0] ?? roomAt(plan.rooms, cam, 0.9);
+  const cells = [...new Set([room, ...both])].filter((r) => r >= 0);
   const underground = o.ground ? cam[1] < o.ground(cam[0], cam[2]) - 1 : false;
   const visible = groups.map(() => false);
   if (room >= 0) {
-    const doors = ctx.doorAdj.get(room);
+    const near = new Set(cells.flatMap((r) => [r, ...(ctx.doorAdj.get(r) ?? [])]));
     groups.forEach((g, i) => {
       if (g.key === 'doors') { visible[i] = true; return; }
       if (g.key.startsWith('stairs:')) { visible[i] = boxDist(g, cam) < o.stairs; return; }
-      if (g.rooms.includes(room) || boxDist(g, cam) < 0.3) { visible[i] = true; return; }
-      if (doors && g.rooms.some((r) => doors.has(r))) visible[i] = true;
+      if (boxDist(g, cam) < 0.3 || g.rooms.some((r) => near.has(r))) visible[i] = true;
     });
   } else {
     groups.forEach((g, i) => {
