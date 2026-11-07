@@ -764,6 +764,26 @@ export function ceilingAt(P: Pick<PlanX, 'vault' | 'phase'>, r: RoomSpec): (q: V
   };
 }
 
+/**
+ * Distance (m) along a vaulted ceiling's curve, across the barrel from one springing line, as a
+ * function of plan position: the v texture coordinate of the vault, so the stone courses keep their
+ * size all the way down the curve. (A plan-projected v squeezed a whole course into the last
+ * centimetres before the springing, where the barrel turns vertical.) Flat ceilings: plan distance.
+ */
+export function vaultArc(P: Pick<PlanX, 'vault' | 'phase'>, r: RoomSpec): (q: V2) => number {
+  const v = P.vault[r.id];
+  const side: V2 = v ? [-v.axis[1], v.axis[0]] : [1, 0];
+  if (!v) return (q) => dot(q, side);
+  const bs = r.poly.map((q) => dot(q, side)), b0 = Math.min(...bs), b1 = Math.max(...bs);
+  const h = ceilingAt(P, r), at = (b: number) => h(scale(side, b));
+  const N = 512, step = (b1 - b0) / N, cum = new Float64Array(N + 1);
+  for (let i = 0; i < N; i++) cum[i + 1] = cum[i] + Math.hypot(step, at(b0 + (i + 1) * step) - at(b0 + i * step));
+  return (q) => {
+    const t = Math.min(N, Math.max(0, (dot(q, side) - b0) / step)), i = Math.min(N - 1, Math.floor(t));
+    return b0 + cum[i] + (cum[i + 1] - cum[i]) * (t - i);
+  };
+}
+
 const roomIndexCache = new WeakMap<RoomSpec[], Map<SpaceId, RoomSpec>>();
 /** Rooms by id (memoised per rooms array; rebuilt when the array grows). */
 function roomIndex(rooms: RoomSpec[]): Map<SpaceId, RoomSpec> {

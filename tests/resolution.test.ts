@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ResolutionGovernor, startRatio, PIXEL_BUDGET } from '../src/render/resolution';
+import { ResolutionGovernor, startRatio, PIXEL_BUDGET, passTexels, gtaoSizeFor } from '../src/render/resolution';
 
 describe('dynamic resolution', () => {
   it('starts at the top and steps down while over budget, a second apart', () => {
@@ -55,5 +55,17 @@ describe('start ratio (1440p pixel budget)', () => {
     expect(startRatio(2560, 1440, 2)).toBe(1);
     expect(startRatio(3840, 2160, 2)).toBe(1); // never below min
     expect(startRatio(1728, 1117, 2, PIXEL_BUDGET * 4)).toBe(2);
+  });
+});
+
+describe('half-res AO sizing', () => {
+  // GTAONode sizes its target as Math.round(size × scale); PassNode (its depth/normal pre-pass) floors
+  const gtao = (n: number, s: number) => Math.round(s * n);
+  it('matches the pre-pass texel for texel at every buffer size', () => {
+    for (const s of [0.5, 1]) for (let n = 1; n <= 4096; n++) expect(gtao(gtaoSizeFor(n, s), s)).toBe(passTexels(n, s));
+  });
+  it('fixes the odd sizes that put a seam down the middle', () => {
+    expect(gtao(2469, 0.5)).not.toBe(passTexels(2469, 0.5)); // what three does on its own
+    expect(passTexels(2469, 0.5)).toBe(1234);
   });
 });

@@ -58,7 +58,7 @@ import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 import { createStatsOverlay } from './ui/statsOverlay';
 import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
-import { ResolutionGovernor, startRatio } from './render/resolution';
+import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 
 const params = new URLSearchParams(location.search);
@@ -253,6 +253,10 @@ async function main() {
     pre.setResolutionScale(0.5);
     const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
     aoPass.resolutionScale = 0.5;
+    // the AO target must be texel for texel the pre-pass (GTAONode rounds where PassNode floors: a seam
+    // down the middle of the screen at odd buffer widths, render/resolution.ts passTexels)
+    const aoSetSize = aoPass.setSize.bind(aoPass);
+    aoPass.setSize = (w: number, h: number) => aoSetSize(gtaoSizeFor(w, 0.5), gtaoSizeFor(h, 0.5));
     // metre-scale occlusion so window reveals, corbels and machicolations read with depth
     aoPass.radius.value = 1.1; aoPass.thickness.value = 1.5; aoPass.scale.value = 1.2; aoPass.distanceExponent.value = 1.3;
     const aoNode = aoPass.getTextureNode();
