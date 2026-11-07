@@ -70,12 +70,6 @@ export type DoorMats = { wood: THREE.Material; iron: THREE.Material };
 export const isOutdoor = (space: string) => space === 'courtyard' || space === 'outside';
 /** Past this swing the back face of a leaf stands in its swing space (and is lit as that space). */
 export const BACK_SIDE_SWING = Math.PI / 4;
-/**
- * A shut, resting two-way leaf moves to the seat away from the nearest character once they are between
- * these distances (m) from the doorway: far enough not to be at the door, near enough to be heading for it.
- * So whoever comes to it finds it already hung to open away from them, and E does not make it jump faces.
- */
-export const RESEAT: [number, number] = [3, 12];
 
 /**
  * A leaf part's triangles split by the side they face: back (−z, away from the swing space) and front (the
@@ -506,21 +500,6 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     const u = byId.get(id);
     if (u) setUnit(u, o, instant, by);
   };
-  // shut, resting two-way leaves turn to face whoever is heading for them (RESEAT)
-  const reseat = (who: Vec3Like[]) => {
-    if (!who.length) return;
-    for (const u of units) {
-      const l = u.leaf;
-      if (u.moving || l.angle !== 0 || !l.places[0] || !l.places[1]) continue;
-      let best: Vec3Like | null = null, bd = Infinity;
-      for (const c of who) {
-        if (Math.abs(c.y - u.pos[1]) > 3) continue;
-        const dd = Math.hypot(c.x - u.pos[0], c.z - u.pos[2]);
-        if (dd < bd) { bd = dd; best = c; }
-      }
-      if (best && bd > RESEAT[0] && bd < RESEAT[1]) seatTo(u, seatAwayFrom(u.d, best.x, best.z));
-    }
-  };
   const near = (c: V3, by: Vec3Like) => Math.hypot(by.x - c[0], by.z - c[2]) <= REACH_NPC && Math.abs(by.y - c[1]) < 3;
 
   return {
@@ -529,7 +508,6 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
       dt = Math.min(dt, 0.1);
       const who = [...(playerPos ? [playerPos] : []), ...(opts.characters?.() ?? [])];
       for (const u of units) if (u.moving) step(u, dt, who);
-      reseat(who);
       for (const p of ports) if (p.s.moving) {
         const r = portStep(p.s, p.spec.lift, dt, who.some((c) => underGrille(p.spec, c.x, c.y, c.z)));
         p.s = r.s; voice(p, r.ev); posePort(p);

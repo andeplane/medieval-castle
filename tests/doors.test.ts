@@ -591,37 +591,35 @@ describe('door system', () => {
     }
   });
 
-  it('hangs a shut two-way leaf away from whoever heads for it, and never jumps faces while open or near', () => {
+  it('hangs a shut two-way leaf away from the opener only when asked to open, never by who is near', () => {
+    // nothing changes with a viewer's distance (Anders' standing rule): the leaf moves to the far face at
+    // the moment someone opens it, then swings
     const d = single({ otherHinge: 'left' }), npc = { x: 0, y: d.centre[1] + 0.9, z: 0 };
     const sys = buildDoors([d], M, undefined, { batch: fakeBatch().factory, ajar: 0, characters: () => [npc] });
     const put = (t: number) => { npc.x = d.centre[0] + d.normal[0] * t; npc.z = d.centre[2] + d.normal[1] * t; };
     expect(sys.seat('door')).toBe(1);
-    put(6); run(sys, 0.1);                      // heading for it from spaces[1]: it moves to swing into spaces[0]
+    for (const t of [6, 2, -2, -6, -20]) { put(t); run(sys, 0.1, npc); expect(sys.seat('door')).toBe(1); } // standing about: no change
+    put(1.5);
+    sys.setOpen('door', true, false, { pos: npc }); // E from spaces[1]: it hangs away from them, then swings
     expect(sys.seat('door')).toBe(0);
-    put(-2); run(sys, 0.1);                     // at the door on the other side: it stays (no jump in front of them)
-    expect(sys.seat('door')).toBe(0);
-    put(-20); run(sys, 0.1);                    // far away: nobody heading for it
-    expect(sys.seat('door')).toBe(0);
-    put(-1.5);
-    sys.setOpen('door', true, false, { pos: npc }); // E from right there: it hangs away from them, then swings
-    expect(sys.seat('door')).toBe(1);
     run(sys, 4);
     expect(sys.isOpen('door')).toBe(true);
-    put(6); run(sys, 0.1);                      // open: it keeps its seat
+    put(-1.5); run(sys, 0.1);
+    expect(sys.seat('door')).toBe(0);           // open: it keeps its seat
+    sys.setOpen('door', false, false, { pos: npc });
+    run(sys, 4);
+    expect(sys.seat('door')).toBe(0);           // closing never re-hangs it
+    sys.setOpen('door', true, true, { pos: npc }); // instant open from spaces[0]: hung the other way at once
     expect(sys.seat('door')).toBe(1);
-    sys.setOpen('door', false, true, { pos: npc });
-    expect(sys.seat('door')).toBe(1);           // closing never re-hangs it
-    sys.setOpen('door', true, true, { pos: npc }); // instant open from spaces[1]: hung the other way at once
-    expect(sys.seat('door')).toBe(0);
     expect(sys.state().door).toBe(1);
     expect(sys.seat('nope')).toBeNull();
     // the player's E through the interactable: from where the camera stands, or in the plane where it looks
     sys.setOpen('door', false, true);
-    sys.interactables[0].use({ pos: { x: d.centre[0] - d.normal[0] * 2, y: 4, z: d.centre[2] - d.normal[1] * 2 } });
-    expect(sys.seat('door')).toBe(1);
-    sys.setOpen('door', false, true);
-    sys.interactables[0].use({ pos: { x: d.centre[0], y: 4, z: d.centre[2] }, dir: { x: d.normal[0], y: 0, z: d.normal[1] } });
+    sys.interactables[0].use({ pos: { x: d.centre[0] + d.normal[0] * 2, y: 4, z: d.centre[2] + d.normal[1] * 2 } });
     expect(sys.seat('door')).toBe(0);
+    sys.setOpen('door', false, true);
+    sys.interactables[0].use({ pos: { x: d.centre[0], y: 4, z: d.centre[2] }, dir: { x: -d.normal[0], y: 0, z: -d.normal[1] } });
+    expect(sys.seat('door')).toBe(1);
   });
 
   it('starts closed, with a seeded few ajar, the same every time', () => {
