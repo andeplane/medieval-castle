@@ -19,8 +19,8 @@ type Field = (typeof FIELDS)[number];
  * being copied, `part` its (material, field) pair and `off` how far into that array. */
 export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>> }
 
-/** Floats copied per step (1 MB): a big room is split over several steps. */
-export const MERGE_CHUNK = 1 << 18;
+/** Floats copied per step (256 KB; 1 MB took ~10 ms on the loaded headless box, fresh pages): a big room spans several steps. */
+export const MERGE_CHUNK = 1 << 16;
 
 export function startMerge(rooms: RoomFurniture[]): BinMerge {
   const bins: Partial<Record<PropMat, BinArrays>> = {}, at: BinMerge['at'] = {};
