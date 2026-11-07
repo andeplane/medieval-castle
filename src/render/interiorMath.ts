@@ -2,8 +2,9 @@
 // open doors, grilles, portals between rooms) that light each room, how bright the sky looks through
 // each one, and the split-flux estimate of inter-reflected light per room. The shader in
 // interiorLight.ts integrates each aperture's exact form factor per pixel; this module feeds it.
-import type { RoomSpec, InteriorPlan, V3, SpaceId } from '../castle/interior/types';
+import type { RoomSpec, InteriorPlan, V3, SpaceId, DoorSpec } from '../castle/interior/types';
 import type { V2 } from '../core/math2d';
+import { headRise } from '../castle/interior/geom';
 
 /**
  * Something daylight comes through. Frame: `c` is the centre of the narrowest section (the glass),
@@ -21,6 +22,8 @@ export interface Aperture {
   room: number;               // index into the plan's rooms
   /** portals: the room on the other side; doors: the door id (for setDoorOpen) */
   other?: number; door?: string;
+  /** doors: rise of the head above the springing (top of `h`), m */
+  rise?: number;
   open: number;               // 0..1 (doors with leaves start closed)
 }
 
@@ -180,7 +183,7 @@ export function doorsToApertures(plan: InteriorPlan, index: Map<SpaceId, number>
       out.push({
         id: `door:${d.id}:${room}`, kind: kind === 'grille' && other >= 0 ? 'portal' : kind, door: d.id,
         c: [d.centre[0] + nOut[0] * half, d.centre[1] + d.height / 2, d.centre[2] + nOut[2] * half], n: nOut,
-        w: d.width, h: d.height, depth: d.wall, wi: d.width, hi: d.height, yi: 0, outer: 0, room, other: other >= 0 ? other : undefined, open,
+        w: d.width, h: d.height, depth: d.wall, wi: d.width, hi: d.height, yi: 0, outer: 0, room, other: other >= 0 ? other : undefined, open, rise: headRise(d.head, d.width),
       });
     }
   }
@@ -391,7 +394,7 @@ export function skinQuads(rooms: RoomSpec[], aps: Aperture[], inset = 0.22): Ski
         const k = ap.depth > inset ? (ap.depth - inset) / ap.depth : 0;
         const w = ap.w + (ap.wi - ap.w) * k + 0.1;
         let lo = ap.c[1] + ap.yi * k - (ap.h + (ap.hi - ap.h) * k) / 2 - 0.05, hi = ap.c[1] + ap.yi * k + (ap.h + (ap.hi - ap.h) * k) / 2 + 0.05;
-        if (ap.door) { lo = ap.c[1] - ap.h / 2 - 0.05; hi = ap.c[1] + ap.h / 2 + ap.w * 0.6; } // arched heads
+        if (ap.door) { lo = ap.c[1] - ap.h / 2 - 0.05; hi = ap.c[1] + ap.h / 2 + (ap.rise ?? ap.w * 0.6) + 0.05; } // arched heads
         const h: [number, number, number, number] = [Math.max(0.02, s - w / 2), Math.max(y0 + 0.02, lo), Math.min(len - 0.02, s + w / 2), Math.min(y1 - 0.02, hi)];
         if (h[2] > h[0] && h[3] > h[1] && !holes.some((q) => q[0] < h[2] && h[0] < q[2] && q[1] < h[3] && h[1] < q[3])) holes.push(h);
       }
@@ -401,11 +404,62 @@ export function skinQuads(rooms: RoomSpec[], aps: Aperture[], inset = 0.22): Ski
   return out;
 }
 
+/** A quad of a shadow skin, corners in order. */
+export type SkinFace = [V3, V3, V3, V3];
+
+/** The four sides of a tube whose cross-sections are the rectangles `rings` (each: corners in order). */
+function tube(rings: V3[][]): SkinFace[] {
+  const out: SkinFace[] = [];
+  for (let k = 0; k + 1 < rings.length; k++) for (let i = 0; i < 4; i++) out.push([rings[k][i], rings[k][(i + 1) % 4], rings[k + 1][(i + 1) % 4], rings[k + 1][i]]);
+  return out;
+}
+
+/**
+ * Shadow skins round the passages through the walls: each door passage (sides and lid, from just behind
+ * one face of the wall to just behind the other) and each window embrasure (its splay from just behind the
+ * room face to the glass, then the straight outer reveal). The wall skins are holed
+ * there, the reveals cast no sun shadow and the castle's own faces round a thick wall face the sun (the
+ * shadow map draws only faces turned away from it), so without these the sun shone through the wall
+ * mass into the passage and laid a strip on the jamb and the floor. Cross-sections match the holes that
+ * skinQuads cuts. Doors have no floor: the sun never comes from below.
+ */
+export function passageSkins(doors: DoorSpec[], isRoom: (id: SpaceId) => boolean, aps: Aperture[]): SkinFace[] {
+  const out: SkinFace[] = [];
+  for (const d of doors) {
+    if (!isRoom(d.spaces[0]) && !isRoom(d.spaces[1])) continue;
+    const t1 = Math.max(0.01, d.wall / 2 - 0.02), t0 = -t1; // to just behind both faces, past the wall skins
+    const hw = d.width / 2 + 0.05, y0 = d.centre[1] - 0.6, y1 = d.centre[1] + d.height + headRise(d.head, d.width) + 0.05;
+    const P = (u: number, y: number, t: number): V3 => [d.centre[0] + d.along[0] * u + d.normal[0] * t, y, d.centre[2] + d.along[1] * u + d.normal[1] * t];
+    out.push(...tube([[P(-hw, y0, t0), P(-hw, y1, t0), P(hw, y1, t0), P(hw, y0, t0)], [P(-hw, y0, t1), P(-hw, y1, t1), P(hw, y1, t1), P(hw, y0, t1)]]).slice(0, 3));
+  }
+  for (const ap of aps) {
+    if (ap.door || ap.kind === 'portal') continue;
+    const { a, u, nIn } = apertureFrame(ap);
+    // t: depth into the wall from the glass; the splay runs from (w, h) at t = 0 to (wi, hi, yi) at `depth`
+    const ring = (t: number): V3[] => {
+      const k = t > 0 ? t / ap.depth : 0;
+      const hw = (ap.w + (ap.wi - ap.w) * k) / 2 + 0.05, hh = (ap.h + (ap.hi - ap.h) * k) / 2 + 0.05, yc = ap.yi * k;
+      return [[-hw, -hh], [-hw, hh], [hw, hh], [hw, -hh]].map(([i, j]) => [0, 1, 2].map((q) => ap.c[q] + a[q] * i + u[q] * (yc + j) + nIn[q] * t) as V3);
+    };
+    // to just behind the room face: past the wall skin, whose hole is cut where that skin crosses the splay
+    out.push(...tube([ring(-Math.max(0, ap.outer - 0.02)), ring(0), ring(Math.max(0, ap.depth - 0.02))]));
+  }
+  return out;
+}
+
 /** Horizontal shadow skins just above each room's ceiling (beams and boards touch it from below, so
- * without them sun leaks along the top of every beam). Outline grown by `inset`; faces down. */
-export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, inset = 0.22): { poly: V2[]; y: number }[] {
+ * without them sun leaks along the top of every beam). Every side moves out by `grow` (rooms are convex),
+ * past the wall skins `inset` behind the faces, so a ray grazing over the top of a wall skin meets the
+ * lid (growing the corners towards the centroid left the sides short of the wall skins: N6-0, 12 h).
+ * Faces down. */
+export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, grow = 0.32): { poly: V2[]; y: number }[] {
   return rooms.map((r) => {
-    let cx = 0, cz = 0; for (const p of r.poly) { cx += p[0] / r.poly.length; cz += p[1] / r.poly.length; }
-    return { poly: r.poly.map(([x, z]) => { const d = Math.hypot(x - cx, z - cz) || 1; return [x + ((x - cx) / d) * inset, z + ((z - cz) / d) * inset] as V2; }), y: r.y1 + lift };
+    const q = r.poly.filter((a, i, all) => { const b = all[(i + 1) % all.length]; return Math.hypot(b[0] - a[0], b[1] - a[1]) >= 1e-6; });
+    let area = 0; for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; area += a[0] * b[1] - b[0] * a[1]; }
+    const sg = area < 0 ? -1 : 1;
+    // outward normal of side i (vertex i → i + 1)
+    const nOf = (i: number): V2 => { const a = q[i], b = q[(i + 1) % q.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]); return [(sg * (b[1] - a[1])) / L, (-sg * (b[0] - a[0])) / L]; };
+    const poly = q.map((a, i): V2 => { const n0 = nOf((i + q.length - 1) % q.length), n1 = nOf(i), k = grow / (1 + n0[0] * n1[0] + n0[1] * n1[1]); return [a[0] + (n0[0] + n1[0]) * k, a[1] + (n0[1] + n1[1]) * k]; });
+    return { poly, y: r.y1 + lift };
   });
 }

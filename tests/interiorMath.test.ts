@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   EXPOSURE, adaptStops, apertureFrame, apertureRadiance, ceilingSkins, doorsToApertures, inPoly, meanLog2, nearestRoom, packTable, polyArea, polyDist,
-  polyPerimeter, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
+  passageSkins, polyPerimeter, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
 } from '../src/render/interiorMath';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -194,6 +194,26 @@ describe('bake helpers', () => {
     // a counter-clockwise polygon gives the same inward normals
     const ccw = skinQuads([{ ...hall, poly: [...hall.poly].reverse() }], [], 0.22);
     expect(ccw.every((x) => inPoly(hall.poly, x.o[0] + x.r[0] * 1 + x.n[0] * 0.5, x.o[2] + x.r[2] * 1 + x.n[2] * 0.5))).toBe(true);
+  });
+  test('passageSkins: a lidded tube through each door passage, a splayed one round each embrasure', () => {
+    const isRoom = (id: string) => id === 'H' || id === 'C';
+    const doors = [door({}), door({ id: 'out', spaces: ['outside', 'H'], centre: [3, 0, -0.7], along: [1, 0], normal: [0, 1], head: 'flat' }), door({ id: 'far', spaces: ['outside', 'courtyard'] })];
+    const win = windowsToApertures([hall], [southWin]);
+    const f = passageSkins(doors, isRoom, [...win, ...doorsToApertures({ rooms: [hall, ch], doors, stairs: [] }, new Map([['H', 0], ['C', 1]]))]);
+    expect(f).toHaveLength(3 + 3 + 8); // two doors (sides + lid, no floor), one window (outer reveal + splay)
+    const xs = (q: number[][]) => q.map((p) => p[0]);
+    // through the wall to just behind both faces (wall 1.4), as wide as the skins' hole
+    expect(Math.min(...f.slice(0, 3).flatMap(xs))).toBeCloseTo(12.7 - 0.7 + 0.02);
+    expect(Math.max(...f.slice(0, 3).flatMap(xs))).toBeCloseTo(12.7 + 0.7 - 0.02);
+    expect(Math.max(...f.slice(0, 3).flatMap((q) => q.map((p) => p[1])))).toBeCloseTo(2.2 + 0.6 + 0.05); // round head
+    // to the outside: stops just inside the outer face
+    expect(Math.min(...f.slice(3, 6).flatMap((q) => q.map((p) => p[2])))).toBeCloseTo(-0.7 - 0.7 + 0.02);
+    expect(passageSkins([door({ wall: 0 })], isRoom, [])).toHaveLength(3);
+    // the window tube widens from the glass (w + 0.1) towards the room
+    const wz = f.slice(6).flatMap((q) => q.map((p) => p[2])), wx = f.slice(6).flatMap(xs);
+    expect(Math.max(...wz)).toBeCloseTo(9.6 + 0.38);
+    expect(Math.max(...wx) - 6).toBeGreaterThan(0.45);
+    expect(passageSkins([], isRoom, [{ ...win[0], depth: 0.01 }])).toHaveLength(8); // no depth: no splay
   });
   test('ceilingSkins sit above each room and grow its outline', () => {
     const [c] = ceilingSkins([hall], 0.5, 0.2);
