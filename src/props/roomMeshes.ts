@@ -15,8 +15,12 @@ import type { RoomSink } from './streamer';
 const FIELDS = ['pos', 'nor', 'uv', 'col', 'room'] as const;
 type Field = (typeof FIELDS)[number];
 
-/** A merge in progress: arrays sized for every room, filled one room per step. */
-export interface BinMerge { rooms: RoomFurniture[]; next: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>> }
+/** A merge in progress: arrays sized for every room, filled a slice per step. `next` is the room
+ * being copied, `part` its (material, field) pair and `off` how far into that array. */
+export interface BinMerge { rooms: RoomFurniture[]; next: number; part: number; off: number; bins: Partial<Record<PropMat, BinArrays>>; at: Partial<Record<PropMat, Record<Field, number>>> }
+
+/** Floats copied per step (1 MB): a big room is split over several steps. */
+export const MERGE_CHUNK = 1 << 18;
 
 export function startMerge(rooms: RoomFurniture[]): BinMerge {
   const bins: Partial<Record<PropMat, BinArrays>> = {}, at: BinMerge['at'] = {};
@@ -27,16 +31,24 @@ export function startMerge(rooms: RoomFurniture[]): BinMerge {
     bins[k] = { pos: size('pos'), nor: size('nor'), uv: size('uv'), col: size('col'), room: size('room'), sphere: parts.map((b) => b.sphere).reduce(unionSphere) };
     at[k] = { pos: 0, nor: 0, uv: 0, col: 0, room: 0 };
   }
-  return { rooms, next: 0, bins, at };
+  return { rooms, next: 0, part: 0, off: 0, bins, at };
 }
 
-/** Copy the next room in. Returns true once every room is in. */
-export function stepMerge(m: BinMerge): boolean {
-  const r = m.rooms[m.next++];
-  if (r) for (const k of PROP_MATS) {
-    const b = r.bins[k];
-    if (!b) continue;
-    for (const f of FIELDS) { m.bins[k]![f].set(b[f], m.at[k]![f]); m.at[k]![f] += b[f].length; }
+const PARTS = PROP_MATS.flatMap((k) => FIELDS.map((f) => [k, f] as const));
+
+/** Copy up to `chunk` floats more. Returns true once every room is in. */
+export function stepMerge(m: BinMerge, chunk = MERGE_CHUNK): boolean {
+  let left = chunk;
+  while (m.next < m.rooms.length && left > 0) {
+    const [k, f] = PARTS[m.part], src = m.rooms[m.next].bins[k]?.[f];
+    if (src) {
+      const n = Math.min(left, src.length - m.off);
+      m.bins[k]![f].set(src.subarray(m.off, m.off + n), m.at[k]![f]);
+      m.at[k]![f] += n; m.off += n; left -= n;
+      if (m.off < src.length) break;
+    }
+    m.off = 0;
+    if (++m.part === PARTS.length) { m.part = 0; m.next++; }
   }
   return m.next >= m.rooms.length;
 }

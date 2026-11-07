@@ -13,7 +13,7 @@ import { PROP_MATS } from '../src/props/geom';
 import { createFurnisher, sphereOf, unionSphere, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
 import { serveFurnish, workerJobs, inlineJobs, poolSize, type FurnishScope, type WorkerPort, type ToFurnisher, type FromFurnisher, type FurnitureJobs } from '../src/props/furnishWorker';
 import { createFurnitureStreamer, type RoomSink } from '../src/props/streamer';
-import { meshesFromBins, mergeBins, createRoomSink } from '../src/props/roomMeshes';
+import { meshesFromBins, mergeBins, startMerge, stepMerge, createRoomSink } from '../src/props/roomMeshes';
 import { yawXZ } from '../src/props/place';
 import type { PropTex } from '../src/props/textures';
 
@@ -431,6 +431,18 @@ describe('room meshes', () => {
     const flame = meshesFromBins('f', { flame: furnished[0].bins.wood ?? Object.values(furnished[0].bins)[0] }, mats).children[0] as THREE.Mesh;
     expect(flame.castShadow).toBe(false); expect(flame.receiveShadow).toBe(false);
     expect(mergeBins([])).toEqual({});
+  });
+
+  it('splits a big room over several merge steps, to the same arrays', () => {
+    const f = createFurnisher(plan, { maxRooms: MAX_ROOMS });
+    const rs = plan.rooms.filter((r) => r.kind === 'hall').map((r) => f(r.id));
+    const m = startMerge(rs);
+    let steps = 1;
+    while (!stepMerge(m, 5000)) steps++;
+    const floats = rs.reduce((n, r) => n + Object.values(r.bins).reduce((k, b) => k + b.pos.length + b.nor.length + b.uv.length + b.col.length + b.room.length, 0), 0);
+    expect(steps).toBeGreaterThanOrEqual(Math.ceil(floats / 5000));
+    expect(m.bins).toEqual(mergeBins(rs));
+    expect(stepMerge(startMerge([]))).toBe(true);
   });
 
   it('bounds points and unions spheres', () => {
