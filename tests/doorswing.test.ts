@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { buildInterior, type PlanX } from '../src/castle/interior';
 import { buildDoors, type DoorSystem } from '../src/castle/interior/doors';
-import { placeLeaves, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { placeLeaves, seatsOf, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { portcullisInPlan } from '../src/castle/interior/portcullis';
 import type { DoorSpec, V3 } from '../src/castle/interior/types';
 import { heightAt } from '../src/world/terrain';
@@ -42,7 +42,8 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     buildDoors(sets.locked, doorMats(), play.physics, { ajar: 0, initial: 0 });
     play.physics.onFixed((dt) => doors.update(dt, play.playerCentre()));
     play.player.setActive(true);
-    leaves = sets.active.flatMap((d) => placeLeaves(d).map((pl) => ({ d, pl })));
+    // every seat: a two-way leaf swings onto whoever stands on the far side from the one who opens it
+    leaves = sets.active.flatMap((d) => seatsOf(d).map((k) => ({ d, pl: placeLeaves(d, k)[0] })));
   }, 300_000);
 
   const ONLY_DOORS = groups([L.Character], [L.Door]);
@@ -63,6 +64,13 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     return [pl.pivot[0] + r * (pl.eU[0] * c + pl.eV[0] * s), pl.pivot[2] + r * (pl.eU[1] * c + pl.eV[1] * s)];
   };
   const park = () => { play.player.teleport(0, 200, 0); }; // out of every arc (and every query) between cases
+  /** Someone on the other side of the door from the leaf's swing space, 1 m off the doorway: they open it into `pl`'s seat. */
+  const opener = (d: DoorSpec, pl: LeafPlace) => {
+    const t = d.wall / 2 + 1;
+    return { pos: { x: d.centre[0] - pl.eV[0] * t, y: d.centre[1] + 0.9, z: d.centre[2] - pl.eV[1] * t } };
+  };
+  /** Shut, hung in `pl`'s seat. */
+  const shut = (d: DoorSpec, pl: LeafPlace) => { doors.setOpen(d.id, true, true, opener(d, pl)); doors.setOpen(d.id, false, true); expect(doors.seat(d.id)).toBe(pl.seat); };
 
   /** Hold W toward (dx, dz) for n ticks, as the player does. */
   const walk = (dx: number, dz: number, n = 30) => {
@@ -78,7 +86,7 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     for (const { d, pl } of leaves) {
       for (const [name, r, phi] of spots(pl)) {
         park();
-        doors.setOpen(d.id, false, true);
+        shut(d, pl);
         play.physics.tick();
         const [x, z] = at(pl, r, phi);
         const y = play.player.groundAt(x, z, pl.pivot[1] + 1, pl.pivot[1]);
@@ -88,7 +96,7 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
         // only spots a character can actually stand on, clear of the stone and the shut leaf
         if (!play.player.motor.body.fits(TUNING.height) || overlap(play.player.feet) || Math.hypot(play.player.feet[0] - x, play.player.feet[2] - z) > 0.05) continue;
         cases++;
-        doors.setOpen(d.id, true);
+        doors.setOpen(d.id, true, false, opener(d, pl)); // someone opens it from the other side, onto them
         let bad: string | null = null;
         // until it is fully open or has rested (stopped against the character) for a quarter second
         for (let i = 0, still = 0, last = -1; i < 120 && !bad && still < 15 && !doors.isOpen(d.id); i++) {
@@ -118,13 +126,13 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
           const best = away();
           if (best < 0.5) {
             // a cramped room (a turret, a stair landing): as far as it lets you with the leaf shut
-            park(); doors.setOpen(d.id, false, true); play.physics.tick();
+            park(); shut(d, pl); play.physics.tick();
             play.player.teleport(start[0], start[1], start[2]);
             const room = away();
             if (best < room - 0.05) bad = `stuck: moved only ${best.toFixed(2)} m (${room.toFixed(2)} m with the leaf shut)`;
           }
         }
-        if (bad) fails.push(`${d.id} ${name}: ${bad}`);
+        if (bad) fails.push(`${d.id} seat ${pl.seat} ${name}: ${bad}`);
       }
       park();
       doors.setOpen(d.id, false, true);
@@ -136,14 +144,14 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
   it('an NPC in the arc stops the leaf the same way (doors take every character, not only the player)', () => {
     const { d, pl } = leaves.find((l) => l.d.id === 'court>W0-2')!;
     park();
-    doors.setOpen(d.id, false, true);
+    shut(d, pl);
     const npc = new CharacterMotor(play.physics.createCharacter(shapeFrom()));
     play.npcs.push(npc);
     play.physics.onFixed((dt) => npc.update(IDLE, dt));
     const [x, z] = at(pl, pl.width * 0.55, 0.6);
     npc.teleport([x, play.player.groundAt(x, z, pl.pivot[1] + 1, pl.pivot[1]), z]);
     for (let i = 0; i < 10; i++) play.physics.tick();
-    expect(doors.request(d.id, true, { pos: play.characters()[0] })).toBe(true);
+    expect(doors.request(d.id, true, opener(d, pl))).toBe(true); // opened from the other side, onto the NPC
     for (let i = 0; i < 180; i++) { play.physics.tick(); expect(overlap(npc.feet)).toBeNull(); }
     expect(doors.isOpen(d.id)).toBe(false); // stopped against the NPC…
     npc.teleport([x + pl.eV[0] * 3, npc.feet[1], z + pl.eV[1] * 3]); // …which steps out of the arc

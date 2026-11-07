@@ -9,8 +9,9 @@
 // - an outdoor door lies on one face with its rebate, CLEAR from the face's ends and corners, with open
 //   air FRONT deep in front of it, CLEAR wider either side (not jammed against a tower), as windows are;
 // - an indoor door opens fully into the rooms on both sides (no junction through its jambs or rebate);
-// - every leaf, from shut to fully open, stays in its doorway or its room, under the ceiling, off the
-//   stair treads and out of every other leaf's sweep;
+// - every leaf, from shut to fully open, in either seat of a two-way door, stays in its doorway or its
+//   room (or, swinging out into the courtyard, clear of every building and above the ground), under the
+//   ceiling, off the stair treads and out of every other leaf's sweep;
 // - a round tower's spiral takes its light through real slits (openings.ts stairSlits): open from outside
 //   into the stairwell, the embrasure behind each clear of every step stone, off the doors and the drum's
 //   other openings, and every such spiral has some.
@@ -24,7 +25,7 @@ import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, type PlanX } from '../src/castle/interior/plan';
-import { placeLeaves, leafPoint, leafDepth, m4swing, headRise, LIP, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { placeLeaves, seatsOf, leafPoint, leafDepth, m4swing, headRise, LIP, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
@@ -140,7 +141,7 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
     // 3. on an outdoor face the castle's hole is the reveal's outline: 1 cm outside it the face is still there
     const k = d.spaces.findIndex((s) => OUTDOOR.has(s));
     if (k >= 0) {
-      const sg = k === 0 ? -1 : 1, grow = leafy(d) && sg === (d.swingInto === 1 ? 1 : -1) ? LIP : 0;
+      const sg = k === 0 ? -1 : 1, grow = seatsOf(d).includes(k as 0 | 1) ? LIP : 0;
       for (const [u, y] of outlineGrown(P, d, grow + 0.01).slice(2)) {
         if (!ray(u, y, sg * (d.wall / 2 + 0.15), sg * (d.wall / 2 - 0.15))) { bad.push(`${d.id}: its hole in the castle face is bigger than its outline at (${u.toFixed(2)}, ${(y - d.centre[1]).toFixed(2)})`); break; }
       }
@@ -168,21 +169,30 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
     if (x!.s - hw < need(w.a) - 1e-6) bad.push(`${d.id}: ${(x!.s - hw).toFixed(2)} m from the end of its face (needs ${need(w.a)})`);
     if (x!.L - x!.s - hw < need(w.b) - 1e-6) bad.push(`${d.id}: ${(x!.L - x!.s - hw).toFixed(2)} m from the end of its face (needs ${need(w.b)})`);
   }
-  // 7. leaves: the whole swing in the doorway or its room, under the ceiling, off the treads, clear of other leaves
-  const leaves = P.doors.flatMap((d) => placeLeaves(d).map((pl) => ({ d, pl })));
+  // 7. leaves, in every seat: the whole swing in the doorway or its room (or the open courtyard), under the
+  // ceiling, off the treads, clear of other leaves in any of their seats
+  const leaves = P.doors.flatMap((d) => seatsOf(d).map((k) => ({ d, pl: placeLeaves(d, k)[0] })));
   const spirals = P.stairs.filter((s) => s.kind === 'spiral').map((s) => planStair(s, stairOpts(P, s)) as SpiralPlan);
   for (const { d, pl } of leaves) {
-    const into = d.spaces[d.swingInto], r = rooms.get(into);
-    if (!r) { bad.push(`${d.id}: swings out into ${into}`); continue; }
-    if (pl.pivot[1] + pl.height > r.y1 - 0.02) bad.push(`${d.id}: leaf top above the ceiling of ${r.id}`);
+    const into = d.spaces[pl.seat], r = rooms.get(into);
+    if (!r && into !== 'courtyard') { bad.push(`${d.id}: swings out into ${into}`); continue; }
+    if (r && pl.pivot[1] + pl.height > r.y1 - 0.02) bad.push(`${d.id}: leaf top above the ceiling of ${r.id}`);
     const faults = new Set<string>(), { zBack } = leafDepth(pl.kind);
+    const sg = pl.seat === 1 ? 1 : -1, own = M.find((m) => pointInPoly(m.poly, ...on(d, 0, -sg * 0.3)));
+    // the other leaves whose sweep this one could reach at all
+    const others = leaves.filter((o) => o.d !== d && Math.hypot(o.pl.pivot[0] - pl.pivot[0], o.pl.pivot[2] - pl.pivot[2]) < o.pl.width + pl.width + 0.2);
     for (let i = 0; i <= 24; i++) for (let k = 0; k <= 8; k++) for (const y of [0, pl.height / 2, pl.height - 0.02]) for (const z of [zBack, 0]) {
       const q = leafPoint(pl, m4swing((pl.maxAngle * i) / 24), [(pl.width * k) / 8, y, z]);
       const dx = q[0] - d.centre[0], dz = q[2] - d.centre[2];
       const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
       // in the doorway or its rebate (a curved or skewed room face lies up to 0.15 m beyond the wall face at the centre)
       const inDoor = Math.abs(across) <= d.width / 2 + LIP + 1e-3 && Math.abs(through) <= d.wall / 2 + 0.15;
-      if (!inDoor && !pointInPoly(r.poly, q[0], q[2])) faults.add(`${d.id}: leaf swings through the wall of ${r.id}`);
+      if (r && !inDoor && !pointInPoly(r.poly, q[0], q[2])) faults.add(`${d.id}: leaf swings through the wall of ${r.id}`);
+      if (!r && !inDoor) {
+        // out into the courtyard: no building in the way, and the ground (paving or terrain) under its bottom edge
+        if (M.some((m) => m !== own && m.top > q[1] && pointInPoly(m.poly, q[0], q[2]))) faults.add(`${d.id}: leaf swings into a building in the ${into}`);
+        if (y === 0 && Math.max(heightAt(q[0], q[2]), floorUnder(tris, q[0], q[2], q[1] + 0.3, 0.6)) > q[1] - 0.005) faults.add(`${d.id}: leaf scrapes the ground of the ${into}`);
+      }
       for (const sp of spirals) {
         const ex = q[0] - sp.c[0], ez = q[2] - sp.c[1], rr = Math.hypot(ex, ez);
         if (rr < sp.rn || rr > sp.R) continue;
@@ -195,7 +205,7 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
           if (q[1] < st.y - 0.01 && q[1] > under + 0.01) faults.add(`${d.id}: leaf swings into the steps of ${sp.id}`);
         }
       }
-      for (const o of leaves) if (o.d !== d && inSweep(q, o.pl)) faults.add(`${d.id}: leaf swings into the leaf of ${o.d.id}`);
+      for (const o of others) if (inSweep(q, o.pl)) faults.add(`${d.id}: leaf swings into the leaf of ${o.d.id}`);
     }
     bad.push(...faults);
   }
@@ -463,7 +473,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
 
   it('holds every invariant', () => {
     expect(openingFaults(walls, P, masses(), tris)).toEqual([]);
-  }, 120_000);
+  }, 300_000);
 
   it('leaves no castle surface just behind a room wall (it shows through the parallax joints)', () => {
     expect(hiddenFaceFaults(P, tris, 0.08)).toEqual([]);
@@ -505,7 +515,12 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(f.some((x) => x.startsWith('court>E0-2: castle surface left in the doorway'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>W0-2: its hole in the castle face is bigger than its outline'))).toBe(true);
     expect(f).toContain('N0-2>N0-3: leaf swings through the wall of N0-3');
-  }, 120_000);
+    // a courtyard door's outward seat (it opens away from someone inside) with its sill sunk into the paving
+    const R = structuredClone(P), sunk = R.doors.find((d) => d.id === 'court>E0-2')!;
+    expect(sunk.otherHinge).toBeDefined();
+    sunk.centre[1] -= 0.3;
+    expect(openingFaults(walls, { ...R, doors: [sunk] }, masses(), tris)).toContain('court>E0-2: leaf scrapes the ground of the courtyard');
+  }, 300_000);
 
   // One model for visibility and LOD: no level of detail or cull may add, move or remove an opening or a
   // door. Culling (world/visibility.ts) works per room group; the real stones (castle/stones) are one set
