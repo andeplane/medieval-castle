@@ -7,10 +7,26 @@ import type { Flame, FlameKind } from '../light/types';
 
 export type V3 = [number, number, number];
 export type RGB = [number, number, number];
-export type PropMat = 'wood' | 'iron' | 'cloth' | 'straw' | 'ceramic' | 'wax' | 'flame';
-export const PROP_MATS: readonly PropMat[] = ['wood', 'iron', 'cloth', 'straw', 'ceramic', 'wax', 'flame'];
+/**
+ * Material bins. brass: polished metal (brass, gilt, copper, steel, mirror by tint); stone: dressed
+ * stone and marble (chimneypieces, plinths); paint: one non-tiling atlas (carpets, runners, canvases),
+ * mapped with atlasSheet, never with metres / tile.
+ */
+export type PropMat = 'wood' | 'iron' | 'cloth' | 'straw' | 'ceramic' | 'wax' | 'flame' | 'brass' | 'stone' | 'paint';
+export const PROP_MATS: readonly PropMat[] = ['wood', 'iron', 'cloth', 'straw', 'ceramic', 'wax', 'flame', 'brass', 'stone', 'paint'];
 /** Metres per texture tile. Wood grain runs along u. */
-export const PROP_TILE: Record<PropMat, number> = { wood: 1, iron: 0.5, cloth: 0.5, straw: 0.5, ceramic: 0.5, wax: 0.25, flame: 0.25 };
+export const PROP_TILE: Record<PropMat, number> = { wood: 1, iron: 0.5, cloth: 0.5, straw: 0.5, ceramic: 0.5, wax: 0.25, flame: 0.25, brass: 0.5, stone: 1, paint: 1 };
+/** A rectangle of the paint atlas, [u0, v0, u1, v1]. */
+export type AtlasRect = [number, number, number, number];
+/** Where each design sits in the paint atlas (textures.ts paints it, kit.ts maps sheets onto it). */
+export const ATLAS = {
+  carpet: [0, 0, 0.5, 0.5] as AtlasRect,          // Turkey carpet: red field, medallion, navy border
+  tartan: [0.5, 0, 1, 0.5] as AtlasRect,          // Royal Stuart tartan carpet
+  runner: [0, 0.5, 0.125, 1] as AtlasRect,        // corridor runner, u across, v along
+  portraits: [0, 1, 2, 3].map((i) => [0.125 + i * 0.1875, 0.5, 0.3125 + i * 0.1875, 0.75] as AtlasRect),
+  scenes: [0, 1].map((i) => [0.125 + i * 0.375, 0.75, 0.5 + i * 0.375, 1] as AtlasRect),
+  fur: [0.875, 0.5, 1, 1] as AtlasRect,           // pelt: hair streaks along v
+};
 
 export const v3 = {
   add: (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
@@ -250,6 +266,17 @@ export class PropMesh {
       this.tri(mat, [f(s0, t0), f(s1, t0), f(s1, t1)], [nrm(s0, t0), nrm(s1, t0), nrm(s1, t1)], [uv(s0, t0), uv(s1, t0), uv(s1, t1)]);
       this.tri(mat, [f(s0, t0), f(s1, t1), f(s0, t1)], [nrm(s0, t0), nrm(s1, t1), nrm(s0, t1)], [uv(s0, t0), uv(s1, t1), uv(s0, t1)]);
     }
+  }
+
+  /**
+   * Parametric sheet in the paint atlas: (s, t) in [0, 1] maps to the rectangle `rect` of the atlas
+   * (s along u, t along v), so a carpet or a canvas shows its whole design once.
+   */
+  atlasSheet(f: (s: number, t: number) => V3, nu: number, nv: number, rect: AtlasRect, flip = false) {
+    const before = this.bins.paint.uv.length;
+    this.sheet('paint', f, nu, nv, [1, 1], flip);
+    const uv = this.bins.paint.uv;
+    for (let i = before; i < uv.length; i += 2) { uv[i] = rect[0] + (rect[2] - rect[0]) * uv[i]; uv[i + 1] = rect[1] + (rect[3] - rect[1]) * uv[i + 1]; }
   }
 
   /** Append another mesh (already in its own local space) under the current transform. */

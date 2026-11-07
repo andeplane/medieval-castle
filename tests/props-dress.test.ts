@@ -4,7 +4,9 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, type Dressing } from '../src/props/dress';
+import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { tone } from '../src/props/period';
+import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
 import { portcullisInPlan } from '../src/castle/interior/portcullis';
 
@@ -90,7 +92,48 @@ describe('dressing helpers', () => {
   });
 });
 
+const front = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
+const HEARTHS = ['chimneypiece', 'hooded-hearth'];
+/** The hearth's back stands on an inner wall of its room, and it faces into the room. */
+function hearthOnInnerWall(h: Placed, r: RoomSpec, P: InteriorPlan) {
+  const n = front(h), back: V2 = [h.at[0] + n[0] * h.prop.bounds.min[2], h.at[2] + n[1] * h.prop.bounds.min[2]];
+  return wallsOf(r, P).some((w) => {
+    const d = (back[0] - w.a[0]) * w.n[0] + (back[1] - w.a[1]) * w.n[1], s = ((back[0] - w.a[0]) * (w.b[0] - w.a[0]) + (back[1] - w.a[1]) * (w.b[1] - w.a[1])) / w.L;
+    return w.inner && Math.abs(d - 0.04) < 0.02 && s > 0 && s < w.L && n[0] * w.n[0] + n[1] * w.n[1] > 0.999;
+  });
+}
+/** Every armchair and sofa turns to the fire: its front within 50 degrees of the line to the hearth. */
+function seatsFaceHearth(d: RoomDressing) {
+  const h = d.placed.find((p) => HEARTHS.includes(p.prop.kind.name));
+  const seats = d.placed.filter((p) => p.prop.kind.name === 'armchair' || p.prop.kind.name === 'sofa');
+  if (!h) return seats.length === 0;
+  return seats.every((s) => { const f = front(s), v = [h.at[0] - s.at[0], h.at[2] - s.at[2]], L = Math.hypot(v[0], v[1]); return (f[0] * v[0] + f[1] * v[1]) / L > Math.cos((50 * Math.PI) / 180); });
+}
+
 describe('dressing a small plan', () => {
+  it('family rooms build round a hearth on the inner wall, seats turned to the fire, no torches', () => {
+    const make = variantPool();
+    for (const kind of ['chamber', 'hall'] as const) for (let seed = 0; seed < 24; seed++) {
+      const r = room('A', R.poly, kind, 5), P = { ...plan, rooms: [r, B] };
+      const d = dressRoom(r, P, { seed, make });
+      if (!FAMILY.includes(d.role)) continue;
+      const h = d.placed.find((p) => HEARTHS.includes(p.prop.kind.name));
+      if (h) expect(hearthOnInnerWall(h, r, P), `${kind} ${seed}`).toBe(true);
+      expect(seatsFaceHearth(d), `${kind} ${seed}`).toBe(true);
+      expect(d.placed.some((p) => p.prop.kind.name === 'sconce')).toBe(false);
+    }
+  });
+  it('a gallery passage gets a runner, a rhythm of features along one wall and candle sconces', () => {
+    const G = { ...room('G', [[0, 0], [12, 0], [12, 2.4], [0, 2.4]], 'passage', 2), zone: 'N' };
+    const P: InteriorPlan = { rooms: [G], doors: [door('w', ['outside', 'G'], -0.5, 1.2, [1, 0], [0, 1]), door('e', ['G', 'x'], 12.5, 1.2, [1, 0], [0, 1])], stairs: [] };
+    const d = dressRoom(G, P, { make: variantPool() });
+    const names = d.placed.map((p) => p.prop.kind.name);
+    expect(names).toEqual(expect.arrayContaining(['runner', 'candle-sconce']));
+    expect(names.filter((n) => n === 'armour' || n === 'hall-chair').length).toBeGreaterThanOrEqual(2);
+    expect(names).not.toContain('sconce');
+    expect(walkable(G.poly, d.obstacles, P.doors.map((x) => doorEntry(x, 'G').at))).toBe(true);
+  });
+
   const make = variantPool();
   it('every role furnishes the test room without blocking its doors', () => {
     const kinds: RoomSpec['kind'][] = ['hall', 'chapel', 'gate', 'passage', 'undercroft', 'chamber', 'tower'];
@@ -157,14 +200,14 @@ describe('dressing the castle plan', () => {
     const furnished = D.rooms.filter((r) => r.placed.length > 0).length;
     expect(furnished).toBeGreaterThan(P.rooms.length * 0.85);
     const tris = D.rooms.reduce((s, r) => s + r.placed.reduce((t, p) => t + p.prop.mesh.triangles, 0), 0);
-    expect(tris).toBeLessThan(900_000);
+    expect(tris).toBeLessThan(1_000_000); // 19th-century rooms: ~940k (was ~740k); culling shows a few groups at a time
     for (const [, placed] of D.byGroup) expect(placed.reduce((t, p) => t + p.prop.mesh.triangles, 0)).toBeLessThan(60_000);
     const rooms = new Map(P.rooms.map((r) => [r.id, r]));
     for (const d of D.rooms) {
       const r = rooms.get(d.room)!;
       for (const p of d.placed) {
         expect(pointInPoly(r.poly, p.at[0], p.at[2]), `${d.room} ${p.prop.kind.name}`).toBe(true);
-        expect(p.at[1]).toBeGreaterThanOrEqual(r.y0 - 1e-6); expect(p.at[1]).toBeLessThanOrEqual(r.y1 + 1e-6);
+        expect(p.at[1]).toBeGreaterThanOrEqual(r.y0 - 1e-6); expect(p.at[1]).toBeLessThanOrEqual(r.y1 + (p.prop.kind.placement === 'ceiling' ? 0.02 : 1e-6)); // a ceiling hook sinks into the vault
       }
     }
   });
@@ -183,9 +226,59 @@ describe('dressing the castle plan', () => {
     const floor = D.rooms.find((r) => r.room === id)!.placed.filter((p) => p.prop.kind.placement === 'floor');
     for (const p of floor) expect(convexOverlap(footRect(p), zone), p.prop.kind.name).toBe(false);
   });
+  it('puts every hearth on an inner wall and turns the seats round it to the fire', () => {
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    let withHearth = 0, family = 0;
+    for (const d of D.rooms) {
+      const r = rooms.get(d.room)!;
+      for (const h of d.placed.filter((p) => HEARTHS.includes(p.prop.kind.name))) expect(hearthOnInnerWall(h, r, P), d.room).toBe(true);
+      expect(seatsFaceHearth(d), d.room).toBe(true);
+      if (FAMILY.includes(d.role)) { family++; if (d.placed.some((p) => HEARTHS.includes(p.prop.kind.name))) withHearth++; }
+    }
+    expect(withHearth).toBeGreaterThan(family * 0.6);
+  });
+  it('lights a hearth fire inside its room and burns torches only in tunnels, cellars, gate rooms and passages', () => {
+    for (const d of D.rooms) {
+      const r = P.rooms.find((x) => x.id === d.room)!;
+      if (d.placed.some((p) => p.prop.kind.name === 'sconce')) expect(TORCH_ROLES, d.room).toContain(d.role);
+      for (const h of d.placed.filter((p) => HEARTHS.includes(p.prop.kind.name))) {
+        const e = h.prop.meta.emitters[0], n = front(h), at: V2 = [h.at[0] + n[0] * e.position[2], h.at[2] + n[1] * e.position[2]];
+        expect(e.kind).toBe('hearth'); expect(pointInPoly(r.poly, at[0], at[1]), d.room).toBe(true);
+      }
+    }
+  });
+  it('keeps both sides of every doorway clear for a leaf swinging either way', () => {
+    for (const door of P.doors) for (const id of door.spaces) {
+      const d = D.rooms.find((x) => x.room === id);
+      if (!d) continue;
+      const e = doorEntry(door, id), w = door.width, a: V2 = [door.along[0], door.along[1]];
+      // both quarter circles of the swing (hinge on either jamb) fit in the rectangle width × width
+      const swing: V2[] = [[-w / 2, 0], [w / 2, 0], [w / 2, w], [-w / 2, w]].map(([s, t]) => [e.face[0] + a[0] * s + e.n[0] * t, e.face[1] + a[1] * s + e.n[1] * t]);
+      for (const p of d.placed) if (p.prop.kind.placement === 'floor' && p.prop.kind.blocksNav && p.at[1] < P.rooms.find((r) => r.id === id)!.y0 + 0.05) expect(convexOverlap(footRect(p), swing), `${door.id} ${id} ${p.prop.kind.name}`).toBe(false);
+    }
+  });
+  it('keeps one textile colour per room and hangs pictures inside the room height', () => {
+    for (const d of D.rooms) {
+      const tones = new Set(d.placed.filter((p) => TONED.has(p.prop.kind.name)).map((p) => tone(p.prop.seed)));
+      expect(tones.size, d.room).toBeLessThanOrEqual(1);
+      const r = P.rooms.find((x) => x.id === d.room)!;
+      for (const p of d.placed) {
+        expect(p.at[1] + p.prop.bounds.max[1], `${d.room} ${p.prop.kind.name}`).toBeLessThanOrEqual(r.y1 + (p.prop.kind.placement === 'ceiling' ? 0.02 : 1e-6)); // a ceiling hook sinks into the vault
+        if (p.prop.kind.placement === 'wall') expect(p.at[1] + p.prop.bounds.min[1]).toBeGreaterThan(r.y0 + 0.4);
+      }
+    }
+  });
+  it('furnishes the family rooms in period: carpets, pictures, candles and lamps', () => {
+    const fam = D.rooms.filter((d) => FAMILY.includes(d.role));
+    const has = (k: string[]) => fam.filter((d) => d.placed.some((p) => k.includes(p.prop.kind.name))).length / fam.length;
+    expect(has(['portrait', 'overmantel-mirror', 'stag-head', 'weapon-trophy'])).toBeGreaterThan(0.8);
+    expect(has(['candle-sconce', 'oil-lamp', 'candelabrum', 'candlestick'])).toBeGreaterThan(0.9);
+    expect(has(['carpet', 'rug', 'skin'])).toBeGreaterThan(0.8);
+    for (const d of fam) for (const p of d.placed) if (flat(p.prop)) expect(p.prop.kind.blocksNav).toBe(false);
+  });
   it('has the signature rooms', () => {
     const hall = D.rooms.find((r) => r.role === 'hall')!;
-    expect(hall.placed.map((p) => p.prop.kind.name)).toEqual(expect.arrayContaining(['throne', 'trestle-table', 'bench', 'chandelier']));
+    expect(hall.placed.map((p) => p.prop.kind.name)).toEqual(expect.arrayContaining(['throne', 'trestle-table', 'bench', 'chandelier', 'hooded-hearth', 'armour', 'stag-head']));
     expect(D.rooms.find((r) => r.role === 'chapel')!.placed.map((p) => p.prop.kind.name)).toContain('altar');
     const beds = D.rooms.filter((r) => r.role === 'bedchamber');
     expect(beds.filter((r) => r.placed.some((p) => p.prop.kind.name === 'bed' || p.prop.kind.name === 'four-poster')).length).toBeGreaterThan(beds.length * 0.9);
