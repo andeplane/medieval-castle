@@ -48,7 +48,10 @@ function faces(initial: number, flipped = false) {
       const through = n[0] * own.d.normal[0] + n[2] * own.d.normal[1];
       // shut (and the jamb iron): a face looks through the doorway into one side; edges are not judged.
       // Wide open, the whole leaf stands in its swing space, both faces.
-      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : null) : own.d.spaces[own.pl.seat];
+      // Edges (board sides in the joints, the rim) of a shut leaf are seen through the joints from either side:
+      // they take the room's light, never the sun (thin sunlit lines in a dim room, 2026-11-07).
+      const room = own.d.spaces.filter((sp) => !isOutdoor(sp));
+      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : room.length === 1 && Math.abs(through) < 0.2 ? room[0] : null) : own.d.spaces[own.pl.seat];
       out.push({ d: own.d, outdoorMat: outdoorMat.has(b.material!), looks });
     }
   }

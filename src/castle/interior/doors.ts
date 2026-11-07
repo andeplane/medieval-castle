@@ -77,11 +77,15 @@ export const BACK_SIDE_SWING = Math.PI / 4;
  */
 export const RESEAT: [number, number] = [3, 12];
 
-/** A leaf part's triangles split by the side they face: back (−z, away from the swing space) and the rest. */
-export function splitBySide(b: PartBin): { front: PartBin; back: PartBin } {
+/**
+ * A leaf part's triangles split by the side they face: back (−z, away from the swing space) and front (the
+ * rest). The edges (board sides in the joints, the leaf's rim) go with the back when `edgesBack`: whichever
+ * side is the room's while the leaf is shut, so a joint seen from a dim room is not lit by the sun.
+ */
+export function splitBySide(b: PartBin, edgesBack = false): { front: PartBin; back: PartBin } {
   const front: PartBin = { pos: [], nor: [], uv: [] }, back: PartBin = { pos: [], nor: [], uv: [] };
   for (let t = 0; t < b.pos.length / 9; t++) {
-    const o = b.nor[t * 9 + 2] < -0.2 ? back : front;
+    const nz = b.nor[t * 9 + 2], o = nz < -0.2 || (edgesBack && nz <= 0.2) ? back : front;
     o.pos.push(...b.pos.slice(t * 9, t * 9 + 9)); o.nor.push(...b.nor.slice(t * 9, t * 9 + 9)); o.uv.push(...b.uv.slice(t * 6, t * 6 + 6));
   }
   return { front, back };
@@ -189,18 +193,19 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   // --- geometry per class and hand (mirrored), shared by every leaf of that class; a leaf whose two
   // sides are lit differently (a courtyard door) is drawn as its back faces and the rest, apart
   type Bins = { wood: PartBin; iron: PartBin; fixed: PartBin };
-  const variants = new Map<string, { geom: LeafGeom; whole: Bins; split?: { front: Bins; back: Bins } }>();
-  const variant = (pl: LeafPlace, d: DoorSpec, split: boolean) => {
+  const variants = new Map<string, { geom: LeafGeom; whole: Bins; split: Map<boolean, { front: Bins; back: Bins }> }>();
+  // `split`: the two sides are lit differently; `edgesBack`: the shut leaf's back faces the room (splitBySide)
+  const variant = (pl: LeafPlace, d: DoorSpec, split: boolean, edgesBack: boolean) => {
     const k = pl.classKey + (pl.mirrored ? '|M' : '|R');
     if (!variants.has(k)) {
       const unm = variants.get(pl.classKey + (pl.mirrored ? '|R' : '|M'))?.geom;
       const g = unm ?? leafGeometry(leafClassFor(d, pl.kind), rngFor('door-class:' + pl.classKey));
-      variants.set(k, { geom: g, whole: pl.mirrored ? { wood: mirrorX(g.wood), iron: mirrorX(g.iron), fixed: mirrorX(g.fixed) } : { wood: g.wood, iron: g.iron, fixed: g.fixed } });
+      variants.set(k, { geom: g, whole: pl.mirrored ? { wood: mirrorX(g.wood), iron: mirrorX(g.iron), fixed: mirrorX(g.fixed) } : { wood: g.wood, iron: g.iron, fixed: g.fixed }, split: new Map() });
     }
     const v = variants.get(k)!;
-    if (split && !v.split) {
-      const w = splitBySide(v.whole.wood), i = splitBySide(v.whole.iron), f = splitBySide(v.whole.fixed);
-      v.split = { front: { wood: w.front, iron: i.front, fixed: f.front }, back: { wood: w.back, iron: i.back, fixed: f.back } };
+    if (split && !v.split.has(edgesBack)) {
+      const w = splitBySide(v.whole.wood, edgesBack), i = splitBySide(v.whole.iron, edgesBack), f = splitBySide(v.whole.fixed, edgesBack);
+      v.split.set(edgesBack, { front: { wood: w.front, iron: i.front, fixed: f.front }, back: { wood: w.back, iron: i.back, fixed: f.back } });
     }
     return k;
   };
@@ -212,7 +217,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     const seats = seatsOf(d);
     if (!seats.length) { open.push(d.id); continue; }
     const out = sideOut(d), places: Leaf['places'] = {}, vks: Partial<Record<0 | 1, string>> = {};
-    for (const k of seats) { places[k] = placeLeaves(d, k)[0]; vks[k] = variant(places[k]!, d, out[0] !== out[1]); }
+    for (const k of seats) { places[k] = placeLeaves(d, k)[0]; vks[k] = variant(places[k]!, d, out[0] !== out[1], out[k] && !out[1 - k]); }
     const pl = places[d.swingInto]!, geom = variants.get(vks[d.swingInto]!)!.geom;
     const leaf: Leaf = { place: pl, places, seat: d.swingInto, geom, angle: 0, vel: 0, max: pl.maxAngle, draws: [], bodies: [], matrix: [] };
     const unit: Unit = { id: d.id, d, kind: d.kind, leaf, open: false, moving: false, blocked: false, width: d.width, weight: d.kind === 'postern' ? 1.3 : d.kind === 'grille' ? 1.1 : 1, pos: [d.centre[0], d.centre[1] + 1.2, d.centre[2]] };
@@ -236,13 +241,13 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   const wants = pending.map(({ vks, d }) => {
     const list: Want[] = [];
     for (const seat of seatsOf(d)) {
-      const v = variants.get(vks[seat]!)!, out = sideOut(d), sw = out[seat], other = out[1 - seat];
+      const out = sideOut(d), sw = out[seat], other = out[1 - seat], sp = variants.get(vks[seat]!)!.split.get(sw && !other), v = variants.get(vks[seat]!)!;
       for (const part of ['wood', 'iron', 'fixed'] as const) {
         const moves = part !== 'fixed';
-        if (!v.split || sw === other) { list.push({ part, bin: v.whole[part], out: sw, moves, seat }); continue; }
-        list.push({ part, bin: v.split.front[part], out: sw, moves, seat });
-        if (moves) list.push({ part, bin: v.split.back[part], out: other, moves, shut: true, seat }, { part, bin: v.split.back[part], out: sw, moves, shut: false, seat });
-        else list.push({ part, bin: v.split.back[part], out: other, moves, seat });
+        if (!sp || sw === other) { list.push({ part, bin: v.whole[part], out: sw, moves, seat }); continue; }
+        list.push({ part, bin: sp.front[part], out: sw, moves, seat });
+        if (moves) list.push({ part, bin: sp.back[part], out: other, moves, shut: true, seat }, { part, bin: sp.back[part], out: sw, moves, shut: false, seat });
+        else list.push({ part, bin: sp.back[part], out: other, moves, seat });
       }
     }
     return list.filter((w) => w.bin.pos.length);
