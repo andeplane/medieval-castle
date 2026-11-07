@@ -433,7 +433,8 @@ async function main() {
   // what the first frame adds to the scene (the stones, tree levels and grass near the camera) is there before
   // the compile; the rooms are all still shown, so their shaders are built too
   rig.update(0); // the camera where the first frame puts it (walk mode: on the player at the spawn)
-  stones.update(camera.position, Infinity);
+  while (stones.update(camera.position, 30)) await breathe(); // ~30 ms of stone geometry per task
+  await breathe();
   veg?.update(camera);
   await breathe();
   // shaders in pieces (render/precompile.ts): each pass compiles for its own target, then two warm-up

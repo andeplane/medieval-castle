@@ -282,14 +282,18 @@ describe('LOD', () => {
     expect(field.chunks.some((c) => c.mesh && !c.mesh.visible)).toBe(true);
     // a zero budget with a clock that runs builds one chunk per call
     const f2 = new StoneField(s, { old: m, new: m }, L, () => (t += 1));
-    f2.update({ x: 6, y: 1.5, z: 1 }, 0);
+    const left = f2.update({ x: 6, y: 1.5, z: 1 }, 0);
     expect(f2.stats().visibleChunks).toBe(1);
-    f2.update({ x: 6, y: 1.5, z: 1 }, 0);
+    expect(left).toBeGreaterThan(0); // what is still to build, so the boot can loop with breaks (main.ts)
+    expect(f2.update({ x: 6, y: 1.5, z: 1 }, 0)).toBe(left - 1);
     expect(f2.stats().visibleChunks).toBe(2);
+    let calls = 2;
+    while (f2.update({ x: 6, y: 1.5, z: 1 }, 0)) calls++;
+    expect(calls).toBe(left); // the last call builds the last chunk and reports nothing left
     // hidden group: no work at all
     const f3 = new StoneField(s, { old: m, new: m }, L);
     f3.group.visible = false;
-    f3.update({ x: 6, y: 1.5, z: 1 });
+    expect(f3.update({ x: 6, y: 1.5, z: 1 })).toBe(0);
     expect(f3.stats().visibleChunks).toBe(0);
   });
   it('big chunks get 32-bit indices', () => {
