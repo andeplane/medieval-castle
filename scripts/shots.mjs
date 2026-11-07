@@ -25,6 +25,9 @@ const list = views.length ? views : await page.evaluate(() => window.__game.view
 for (const v of list) {
   const t = Date.now();
   await page.evaluate((name) => window.__game.setCamera(name), v);
+  // a new animation frame first: the render passes re-render once per frame (three's node frame), and a
+  // second render within one frame redraws only the output quad, i.e. the previous view
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await page.evaluate(() => window.__game.step(1));
   await page.screenshot({ path: `${OUT}/${v}.png`, timeout: 300_000 });
   const st = await page.evaluate(() => window.__game.state());

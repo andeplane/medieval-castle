@@ -692,6 +692,47 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(courtRooms.filter((r) => !vis.isRoomVisible(r))).toEqual([]);
   }, 300_000);
 
+  // Frustum culling by room (render/interiorLight.ts tagGroups, world/visibility.ts tagBoxes): each interior
+  // mesh is culled by its rooms' boxes instead of one sphere round its group. A cull layer may decide only
+  // how something is drawn: so every triangle of every mesh lies in one of the mesh's boxes (a frustum that
+  // reaches a triangle reaches its box), and from player poses no mesh with a vertex in view is culled.
+  it('culls interior meshes by bounds that hold every triangle of their rooms', () => {
+    baked(); // tags the triangles and gives each mesh its room boxes
+    const meshes: THREE.Mesh[] = [];
+    for (const g of inner.groups) g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
+    const outside: string[] = [], v = new THREE.Vector3();
+    let boxes = 0;
+    for (const m of meshes) {
+      const bs = m.userData.roomBoxes as THREE.Box3[];
+      boxes += bs.length;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        if (!bs.some((b) => b.distanceToPoint(v) < 1e-4)) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
+      }
+    }
+    expect(meshes.length).toBeGreaterThan(250);
+    expect(boxes).toBeGreaterThan(meshes.length); // most meshes hold several rooms
+    expect(outside).toEqual([]);
+    // from a sample of the player's poses, looking four ways: a mesh with a vertex in the view is not culled
+    const culledInView: string[] = [], camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.25, 30000), fr = new THREE.Frustum(), pv = new THREE.Matrix4();
+    let culled = 0;
+    playerPoses().filter((_, i) => i % 60 === 0).forEach(({ label, eye }) => {
+      for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        camera.position.set(...eye); camera.lookAt(eye[0] + dx, eye[1], eye[2] + dz); camera.updateMatrixWorld();
+        fr.setFromProjectionMatrix(pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+        for (const m of meshes) {
+          if (m.intersectsFrustum(fr)) continue;
+          culled++;
+          const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+          for (let i = 0; i < pos.count; i++) if (fr.containsPoint(v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld))) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
+        }
+      }
+    });
+    expect(culled).toBeGreaterThan(0);
+    expect(culledInView).toEqual([]);
+  }, 300_000);
+
   // The shut leaf sits in its rebate a few cm off the jambs (doorGeom LIP − GROW). Past it, round the
   // leaf, the eye must meet something drawn with its own side (the castle, its own room's reveal, the
   // stop, the leaf): never only the far room's geometry, which the graph may leave out (the white outline

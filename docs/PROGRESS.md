@@ -1,5 +1,42 @@
 # Progress
 
+## 2026-11-07: a cheaper precompile; interior meshes culled by room (branch `claude/project-thread-ns4g2v-trim`)
+
+Anders, on his Mac (WebGPU, live build): ready went from 13.6 s to 16.9 s after #60 (longest freeze 2.4 → 0.9 s, keep that), and 914–1335 draw calls at the hall, chamber, tower room (`?furniture=1`) and at eye (11.6, 4.3, -1.2) looking at (14.2, 4.0, -3.3).
+
+**Load: what the precompile spent its time on.** Counted with a hook on three's pipeline cache during a headless load (`compile: …` performance marks, `scripts/loadtime.mjs`):
+- The scene pass's `compileAsync` ran each compile item's `updateBefore` nodes. Every item carries the AO context, whose pre-pass renders the whole scene, and the water, whose reflector renders it again from below. So one scene-pass compile drew the whole castle, every room shown, 44 times as the AO pre-pass and 44 times as the reflection: 28,547 render objects processed instead of 1,107, and the GTAO pipeline was rebuilt 25 extra times (28 GTAO pipelines instead of 3). The first of each nested render already builds every pipeline the rest would (the same objects are shown throughout).
+- Not the rooms themselves: the 304 interior meshes share 12 materials, so they add 47 pipelines, built once.
+- Fix (`render/precompile.ts`): while the passes compile, `renderOnce` lets each nested render (scene, camera, target, context node) run once. Pipelines built: identical per material and target except the 25 duplicate GTAO ones; the first frames after ready still build 0 new pipelines (so no freeze comes back).
+- Headless WebGL2 (SwiftShader, so every shader link is synchronous and takes seconds; two runs each): ready 365 / 337 s → 223 / 218 s; the scene-pass compile 194 / 161 s → 75 / 73 s; warm-up 1 40 / 41 s → 10 / 9 s; long tasks in all 331 / 302 s → 190 / 188 s. The longest task (64 s, one GL program link) is unchanged; on WebGPU three builds pipelines asynchronously. What this saves on the Mac is not measured: 86 whole-castle renders and 25 pipeline builds, which fits the 3.3 s.
+
+**Draw calls: where they go** (`scripts/drawcalls.mjs`: the backend's `draw` wrapped for one frame, by pass and by top-level group). Every pose draws the scene three times: the AO pre-pass and the scene pass draw the same objects, the water's reflection most of them again, plus the near sun shadow map (19 calls) and 2 post quads. At the eye pose (no furniture, doors shut): pre-pass 98, scene 98, reflection 92, shadow 19; vegetation 36 per pass, interior 17–22, terrain 14, castle 9, doors 8, flames 5. Headless I could not reproduce 1335 there: shot and live loop both give 305–309 on main. Opening every door (`?doors=1`) and furnishing reaches Anders' range: with every leaf open the graph draws all 86 groups (open doorways lead on as far as they go), and main gives hall 1043, eye 865, hero 1328 (doors only), gate 1192.
+
+What changed (frustum culling only; which groups, rooms, openings and doors are drawn is untouched):
+- Interior shell meshes are culled by their rooms' boxes: a group's mesh covers a whole wing floor and three culled it by one sphere round all of it, so every camera (view, pre-pass, reflection) drew all of a floor's rooms when any of that sphere was in view. `render/interiorLight.ts tagGroups` (which already walks every triangle to tag its room) now keeps one box per room tag (`world/visibility.ts tagBoxes`) and overrides the mesh's `intersectsFrustum`.
+- Streamed furniture is culled by its rooms' spheres in the same way (`props/roomMeshes.ts cullBySpheres`, spheres from the worker, no vertex walk on the page).
+- Furniture casts sun shadows only when its shadow can land in the view (`world/visibility.ts shadowInView`): each room part's sphere swept away from the sun down to the water (y 0, the lowest sunlit surface) must reach the view frustum. Before, a drawn room's furniture above, below or behind the view went into the near shadow map every frame.
+
+`__game.state()` at 1280×720 (headless WebGL2, shot mode), main → branch, draw calls / triangles:
+
+| pose | doors shut | `?furniture=1` | `?doors=1` (all open) | `?furniture=1&doors=1` |
+|---|---|---|---|---|
+| hero | 437 / 3.62 M → 437 / 3.62 M | | 1328 → 1328 | |
+| gate | 378 / 4.04 M → 376 / 4.04 M | | 1192 → 1145 | |
+| courtyard | 537 / 4.21 M → 498 / 4.19 M | | 937 → 844 | |
+| hall | 367 / 4.19 M → 352 / 4.11 M | 401 → 383 | | 1043 / 7.26 M → 788 / 6.45 M |
+| chamber | 281 / 3.82 M → 258 / 3.74 M | 325 → 297 | | 684 / 6.11 M → 470 / 5.37 M |
+| tower room | 276 / 3.86 M → 272 / 3.86 M | 359 → 337 | | 425 / 5.48 M → 353 / 5.21 M |
+| eye | 305 / 4.02 M → 279 / 4.00 M | 394 → 335 | 402 → 327 | 865 / 6.59 M → 639 / 5.94 M |
+
+Hero with every door open stays at 1328: from the hero orbit every room of the castle is in the frustum, and nothing but a distance or occlusion test (not allowed) would drop it. What would cut further, not done: the reflection redraws interior groups (they show through see-through windows of drawn rooms, so dropping them changes the reflection); the AO pre-pass could skip what lies beyond the 260 m where AO fades to nothing (a far plane, i.e. a distance cut, so left for Anders to decide); merging a group's stone, ashlar and trim bins needs one material for all three.
+
+Tests: `precompile.test.ts` (quiet while the passes compile, undone on failure; `renderOnce` keyed by scene, camera, target and context node, restores the renderer's own render); `visibility.test.ts` (`shadowInView`: in view, behind with the shadow falling away, behind with the shadow falling into view, high above with the shadow ending at the water, sun at or under the horizon; `tagBoxes`); `interiorLight.test.ts` (tagGroups' boxes hold every vertex, a mesh is culled looking away and kept looking at it); `props-stream.test.ts` (a merged group mesh in view of one room, culled when no room is); `world.test.ts` new rule over the whole castle: every vertex of all 304 interior meshes lies in one of its mesh's room boxes, and from every 60th player pose looking four ways no mesh with a vertex in view is culled. `scripts/shots.mjs` and `scripts/drawcalls.mjs` wait for a new animation frame before each capture: three re-renders the passes once per node frame, so two renders inside one frame drew only the output quad (a stale image of the previous view; seen as "1 draw call" in counts).
+
+Captures (`castle-plan/trim/`, 1600×900, `main*` origin/main, `after*` branch): hero, gate, courtyard; hall, chamber, tower room with `?furniture=1`. Pixel diff main → branch: the three furnished rooms are identical (max difference 0, furniture sun shadows included); hero, gate and courtyard differ only in the sky, the moat and the grass, which move with time between the two captures (clouds drifted; the castle's pixels are the same).
+
+Not checked: WebGPU and Anders' Mac (load time and draw calls are headless WebGL2 only); why his eye pose shows 1335 (my guess, from the numbers above: doors he had opened plus furniture; `__game.state().light.groupsShown` at that pose would tell); frame time on a real GPU; the furniture shadow cull at low sun from a pose where a shadow falls through a room's far window onto the courtyard (covered by the rule, which sweeps to the water, but not captured).
+
 ## 2026-11-07: furniture streams in by room from workers (branch `claude/project-thread-ns4g2v-furnworker`, still behind `?furniture=1`)
 
 Anders: "be smart about web worker … and chunking". Until now `furnish(plan)` dressed all 206 rooms (1,400 props, 740k triangles) and then `tagGroups` room-tagged them, synchronously on the page's thread at load: measured headless 4.9 s + 3.7 s (another run 7.4 s for the tags alone) in one block.
