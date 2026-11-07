@@ -19,7 +19,7 @@ export interface RoomSink<H> {
   flush?(over: () => boolean): boolean;
 }
 
-/** What the streamer is told to keep: the rooms near the player (a room graph, or a stand-in). */
+/** What the streamer is told to keep: the rooms near the player (main.ts: the room graph's drawn rooms). */
 export interface WantedRooms { wantedRooms(): Set<SpaceId> }
 
 export interface StreamerOptions {

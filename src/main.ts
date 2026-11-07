@@ -33,7 +33,7 @@ import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
 import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
-import { createVisibility, courtView } from './world/visibility';
+import { createVisibility } from './world/visibility';
 import { wallTorches, type FireSources } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
 import { LightRig } from './light/rig';
@@ -220,7 +220,7 @@ async function main() {
   const syncDoorLight = () => {
     for (const [id, o] of Object.entries(doors.state())) {
       const was = doorLit[id];
-      if (was === undefined || Math.abs(was - o) > 0.05 || (o !== was && (o === 0 || o === 1))) { doorLit[id] = o; bake.setDoorOpen(id, o); }
+      if (was === undefined || Math.abs(was - o) > 0.05 || (o !== was && (o === 0 || o === 1))) { doorLit[id] = o; bake.setDoorOpen(id, o); vis.setDoorOpen(id, o > 0); }
     }
   };
   // props join their rooms' groups after the bake (they don't shadow the sun-visibility rays): they take
@@ -366,9 +366,11 @@ async function main() {
   const setTime = (h: number) => { sky.setTime(h); (water as unknown as { sunDirection: { value: THREE.Vector3 } }).sunDirection.value.copy(sky.sunDir); bake.update(); winFlags.night.value = nightOf(sky.sunDir.y); };
   setTime(Number(params.get('time') ?? 15.5));
   const start = VIEWS.find((v) => v.name === (params.get('view') ?? (testRoom ? 'room-hall' : 'hero'))) ?? VIEWS[0];
-  // per frame: interior cells on/off (world/visibility.ts) and eye adaptation (render/exposure.ts)
-  // a courtyard doorway is seen from the courtyard, or from above the lowest wing's parapet
-  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, inCourt: courtView(courtyard(), Math.min(...WINGS.map((w) => w.top))) });
+  // per frame: which rooms are drawn (world/visibility.ts: the room graph, two steps from the camera's
+  // space) and eye adaptation (render/exposure.ts); above the lowest wing's parapet the camera is in the
+  // courtyard and outside at once
+  const courtPoly = courtyard();
+  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, court: (x, z) => pointInPoly(courtPoly, x, z), roofs: Math.min(...WINGS.map((w) => w.top)) });
   // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
   // rig lights the nearest ones (whatever is drawn), and the interior materials take its light pool
   const groupOf = new Map<string, string>();
@@ -388,14 +390,13 @@ async function main() {
   // windows glow at night for rooms with firelight: streamed rooms count once they have come in
   const fireGroups = lit.groups.map((g) => fire.group.includes(g.key));
   // streamed furniture: rooms in from the workers, a few per frame, out again when no longer wanted.
-  // The wanted rooms are a stand-in until the room graph (world/visibility.ts) gives the rooms near the
-  // player: the room you are in, then every room of every group drawn now
+  // The wanted rooms are the ones the room graph draws (world/visibility.ts), the camera's own first
   let furnStream: FurnitureStreamer | null = null, syncFires: (() => void) | null = null;
+  const planRooms = new Set(lit.plan.rooms.map((r) => r.id));
   const wanted: WantedRooms = {
     wantedRooms() {
       const s = new Set<SpaceId>();
-      if (vis.roomId) s.add(vis.roomId);
-      lit.groups.forEach((g, i) => { if (vis.state.visible[i]) for (const id of g.rooms) s.add(id); });
+      for (const id of [...vis.state.from, ...vis.state.drawn]) if (planRooms.has(id)) s.add(id); // not 'courtyard' / 'outside'
       return s;
     },
   };
@@ -421,7 +422,7 @@ async function main() {
     });
   }
   const updateFurniture = () => { if (!furnStream) return; furnStream.setWanted(wanted.wantedRooms()); furnStream.update(); syncFires?.(); };
-  // door leaves follow their rooms: shown while either side is shown (outside counts when not deep)
+  // door leaves follow the room graph: shown while either of their spaces is drawn
   // the portcullis follows the gate's spaces and its windlass the room it stands in (doors.setVisible)
   const portCells = port.flatMap((p) => [{ id: p.id, spaces: gateDoor!.spaces }, ...(p.winch?.room ? [{ id: p.id + ':winch', spaces: [p.winch.room, p.winch.room] }] : [])]);
   const doorCells = [...doorSets.active.map((d) => [doors, d] as const), ...doorSets.locked.map((d) => [locked, d] as const), ...portCells.map((d) => [doors, d] as const)];
