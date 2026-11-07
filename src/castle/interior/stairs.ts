@@ -963,7 +963,8 @@ export function stairNavPath(s: StairSpec | StairPlan, o: StairOpts = {}): V3[] 
   steps.forEach((st, i) => {
     pts.push([st.s0 - st.nosing, st.y]);
     if (st.landing < 0) return;
-    if (i === steps.length - 1) { pts.push([Math.max(st.s1, st.s0), st.y]); return; }
+    // the top landing ends at a wall: stop where a character (r 0.3) can stand, 0.45 m short of it
+    if (i === steps.length - 1) { pts.push([Math.max(st.s0, st.s1 - 0.45), st.y]); return; }
     pts.push([(st.s0 + st.s1) / 2, st.y], [st.s1 - 0.6 * (steps[i + 1].s1 - steps[i + 1].s0), st.y]);
   });
   return pts.filter((q, k) => k === 0 || q[0] - pts[k - 1][0] > 1e-4).map(([sc, y]) => [p.o[0] + p.d[0] * sc, y, p.o[2] + p.d[1] * sc]);
