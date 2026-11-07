@@ -220,6 +220,7 @@ export class RoomDresser {
   /** The room's textile colour (period.ts TONES): every toned prop takes a variant seed ≡ tone (mod 3). */
   tone: number;
   private n = 0;
+  private pictures = 0;
   constructor(public r: RoomSpec, public P: InteriorPlan, public keepOut: V2[][], public rng: Rng, private make: (k: string, s: number) => Prop, private seed: number) {
     this.walls = wallsOf(r, P); this.poly = orient(r.poly);
     this.tone = Math.floor(rng() * 3);
@@ -236,6 +237,8 @@ export class RoomDresser {
   /** A prop for this room; toned props take a variant seed in the room's colour. */
   prop(kind: string) {
     const h = hashSeed(`${this.r.id}:${this.n++}`, this.seed);
+    // pictures in one room take consecutive variants from a seeded start: never the same canvas twice
+    if (kind === 'portrait') return this.make(kind, (hashSeed(`${this.r.id}:pictures`, this.seed) % VARIANTS) + this.pictures++);
     return this.make(kind, TONED.has(kind) ? this.tone + 3 * (h % 0x5555555) : h);
   }
 
@@ -247,7 +250,7 @@ export class RoomDresser {
     return flat(p.prop) || !this.blockers.some((b) => convexOverlap(f, b, -0.01));
   }
   /** Flat floor textiles (carpets, rugs, skins, runners) lie under furniture and over each other. */
-  add(p: Placed) { this.placed.push(p); if (p.prop.kind.blocksNav || (p.prop.kind.placement === 'floor' && !flat(p.prop))) this.blockers.push(footRect(p, 0.02)); return p; }
+  add(p: Placed, pad = 0.02) { this.placed.push(p); if (p.prop.kind.blocksNav || (p.prop.kind.placement === 'floor' && !flat(p.prop))) this.blockers.push(footRect(p, pad)); return p; }
   fitsFloor(p: Placed): boolean {
     return this.fits(p) && (p.at[1] - this.r.y0) + p.prop.bounds.max[1] < this.r.y1 - this.r.y0 - 0.05;
   }
@@ -279,13 +282,14 @@ export class RoomDresser {
     return null;
   }
 
-  /** Free-standing at exactly this spot and yaw (or nudged up to `spread` m), never turned around. */
-  at(kind: string, c: V2, yaw: number, spread = 0.25): Placed | null {
+  /** Free-standing at exactly this spot and yaw (or nudged up to `spread` m), never turned around;
+   * `gap`: clear space it keeps from every other standing piece (seats round a fire must not touch). */
+  at(kind: string, c: V2, yaw: number, spread = 0.25, gap = 0): Placed | null {
     const prop = this.prop(kind);
     for (let k = 0; k < 12; k++) {
       const rr = k === 0 ? 0 : spread * Math.sqrt(k / 12), a = this.rng() * Math.PI * 2;
       const p: Placed = { prop, at: [c[0] + Math.cos(a) * rr, this.r.y0, c[1] + Math.sin(a) * rr], yaw: yaw + (k ? (this.rng() - 0.5) * 0.12 : 0) };
-      if (this.fitsFloor(p)) return this.add(p);
+      if (this.fitsFloor(p) && (!gap || !this.blockers.some((b) => convexOverlap(footRect(p, gap), b)))) return this.add(p, Math.max(0.02, gap));
     }
     return null;
   }
@@ -377,6 +381,8 @@ export const FAMILY: readonly Role[] = ['hall', 'solar', 'bedchamber', 'study'];
 export const TORCH_ROLES: readonly Role[] = ['passage', 'cellar', 'gate'];
 
 const longest = (w: Wall) => w.L;
+/** Clear space round the fireside seats and their lamp table: room to sit down, and they read as separate pieces. */
+export const SEAT_GAP = 0.25;
 const frontOf = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
 
 /**
@@ -397,10 +403,10 @@ export function hearthGroup(D: RoomDresser, o: { kind?: string; chairs?: 0 | 1 |
   if (chairs) {
     for (const sx of chairs === 2 ? [-1, 1] : [D.rng() < 0.5 ? -1 : 1]) {
       const c = P(front + 1.3, sx * range(D.rng, 0.95, 1.1));
-      D.at('armchair', c, yawFacing([fire[0] - c[0], fire[1] - c[1]]), 0.2);
+      D.at('armchair', c, yawFacing([fire[0] - c[0], fire[1] - c[1]]), 0.2, SEAT_GAP);
     }
-    if (o.sofa) D.at('sofa', P(front + 2.6, 0), h.yaw + Math.PI, 0.3);
-    if (o.lamp !== false) { const st = D.at('side-table', P(front + 1.4, (D.rng() < 0.5 ? -1 : 1) * 1.75), h.yaw, 0.2); D.onTop('oil-lamp', st); }
+    if (o.sofa) D.at('sofa', P(front + 2.9, 0), h.yaw + Math.PI, 0.3, SEAT_GAP);
+    if (o.lamp !== false) { const st = D.at('side-table', P(front + 1.4, (D.rng() < 0.5 ? -1 : 1) * 1.75), h.yaw, 0.2, SEAT_GAP); D.onTop('oil-lamp', st); }
     if (o.stool !== false) D.at('footstool', P(front + 0.75, (D.rng() < 0.5 ? -1 : 1) * 0.6), h.yaw + 0.3, 0.1);
   }
   return h;

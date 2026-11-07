@@ -4,7 +4,7 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
@@ -256,6 +256,37 @@ describe('dressing the castle plan', () => {
       const swing: V2[] = [[-w / 2, 0], [w / 2, 0], [w / 2, w], [-w / 2, w]].map(([s, t]) => [e.face[0] + a[0] * s + e.n[0] * t, e.face[1] + a[1] * s + e.n[1] * t]);
       for (const p of d.placed) if (p.prop.kind.placement === 'floor' && p.prop.kind.blocksNav && p.at[1] < P.rooms.find((r) => r.id === id)!.y0 + 0.05) expect(convexOverlap(footRect(p), swing), `${door.id} ${id} ${p.prop.kind.name}`).toBe(false);
     }
+  });
+  it('never puts two floor pieces in the same spot: footprints of standing props do not intersect', () => {
+    const bad: string[] = [];
+    for (const d of D.rooms) {
+      const y0 = P.rooms.find((r) => r.id === d.room)!.y0;
+      // standing on the floor, not a textile under them, not something on a table, mantel or shelf
+      const stand = d.placed.filter((p) => p.prop.kind.placement === 'floor' && !flat(p.prop) && p.at[1] < y0 + 0.05);
+      for (let i = 0; i < stand.length; i++) for (let j = i + 1; j < stand.length; j++) {
+        if (convexOverlap(footRect(stand[i]), footRect(stand[j]), -0.01)) bad.push(`${d.room} ${stand[i].prop.kind.name}/${stand[j].prop.kind.name}`);
+      }
+    }
+    expect(bad).toEqual([]);
+    // the fireside seats stand clear of every other piece (a footstool goes right up to its chair)
+    const crowd: string[] = [];
+    for (const d of D.rooms) {
+      const y0 = P.rooms.find((r) => r.id === d.room)!.y0;
+      const stand = d.placed.filter((p) => p.prop.kind.placement === 'floor' && !flat(p.prop) && p.at[1] < y0 + 0.05);
+      for (const s of stand.filter((p) => ['armchair', 'sofa'].includes(p.prop.kind.name))) {
+        for (const o of stand) if (o !== s && o.prop.kind.name !== 'footstool' && convexOverlap(footRect(s, SEAT_GAP / 2), footRect(o))) crowd.push(`${d.room} ${s.prop.kind.name}/${o.prop.kind.name}`);
+      }
+    }
+    expect(crowd).toEqual([]);
+  });
+  it('hangs a different canvas for every picture in a room', () => {
+    let rooms = 0;
+    for (const d of D.rooms) {
+      const v = d.placed.filter((p) => p.prop.kind.name === 'portrait').map((p) => p.prop.seed % VARIANTS);
+      if (v.length > 1) rooms++;
+      expect(new Set(v).size, d.room).toBe(Math.min(v.length, VARIANTS));
+    }
+    expect(rooms).toBeGreaterThan(10);
   });
   it('keeps one textile colour per room and hangs pictures inside the room height', () => {
     for (const d of D.rooms) {

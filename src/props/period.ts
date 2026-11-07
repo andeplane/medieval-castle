@@ -260,13 +260,14 @@ function giltFrame(m: PropMesh, r: Rng, w: number, h: number, rail: number, dept
 }
 
 /** Oil painting in a gilt frame, hung from a picture rail on two cords and tilted forward (3-5 deg).
- * v % 3 picks the size (0.55 × 0.7, 0.8 × 1.05, 1.05 × 1.4 m canvas); one in four is a landscape. */
+ * The variant picks the canvas (v % 6: the four sitters, then the two landscapes) and the size (v % 3:
+ * 0.55 × 0.7, 0.8 × 1.05, 1.05 × 1.4 m), so consecutive variants are all different pictures. */
 export const portrait: PropKind = {
   name: 'portrait', placement: 'wall', mount: 2.1, blocksNav: false,
   build(m, r, v) {
-    const size = [[0.55, 0.7], [0.8, 1.05], [1.05, 1.4]][((v % 3) + 3) % 3], scene = r() < 0.25;
+    const c = ((v % 6) + 6) % 6, size = [[0.55, 0.7], [0.8, 1.05], [1.05, 1.4]][c % 3], scene = c >= ATLAS.portraits.length;
     const w = scene ? size[1] : size[0], h = scene ? size[0] : size[1], rail = 0.06 + w * 0.06, depth = 0.05 + w * 0.02, tilt = range(r, 0.05, 0.085);
-    const rect = scene ? ATLAS.scenes[Math.floor(r() * ATLAS.scenes.length)] : ATLAS.portraits[Math.floor(r() * ATLAS.portraits.length)];
+    const rect = scene ? ATLAS.scenes[c - ATLAS.portraits.length] : ATLAS.portraits[c];
     const H = h + 2 * rail;
     m.with(compose(translate(0, -H / 2, 0), compose(rotX(tilt), translate(0, H / 2, 0))), () => {
       giltFrame(m, r, w, h, rail, depth);

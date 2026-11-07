@@ -115,6 +115,12 @@ describe('19th-century pieces', () => {
     }
     expect(makeProp('overmantel-mirror', 1).mesh.bins.brass.triangles).toBeGreaterThan(100);
   });
+  it('paints a different canvas on each portrait variant: four sitters upright, two landscapes wide', () => {
+    const w = (v: number) => { const b = makeProp('portrait', v).bounds; return b.max[0] - b.min[0]; };
+    // a landscape is its size's canvas turned on its side: wider than the sitter of the same size
+    expect(w(4)).toBeGreaterThan(w(1) + 0.2); expect(w(5)).toBeGreaterThan(w(2) + 0.3);
+    expect(w(3)).toBeCloseTo(w(0), 1);
+  });
   it('has period heights and the lights the style guide asks for', () => {
     for (let s = 0; s < 6; s++) {
       expect(H('armchair', s).max[1]).toBeGreaterThan(0.9); expect(H('armchair', s).max[1]).toBeLessThan(1.15);
