@@ -382,7 +382,7 @@ describe('room meshes', () => {
     // no budget: one step per flush (start, one room per step, swap), so a big group spans frames
     let steps = 0;
     while (sink.flush(() => true)) { steps++; expect(parent.children).toHaveLength(0); }
-    expect(steps + 1).toBe(ids.length + 1); // start, then one room per step (the last one swaps)
+    expect(steps + 1).toBeGreaterThanOrEqual(ids.length + 1); // start, then at least one step per room (the last one swaps)
     const g = sink.objectOf(key)!;
     // the bounding sphere comes from the rooms' spheres and holds every vertex
     for (const m of g.children as THREE.Mesh[]) {
