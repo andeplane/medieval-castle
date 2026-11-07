@@ -7,9 +7,9 @@
 //   is carved with the outlines its reveal follows (doorGeom doorOutlines), its only cut.
 import type { V2 } from '../../core/math2d';
 import { pointInPoly } from '../../core/math2d';
-import { Builder, wallFrame, type Frame, type MatKey, type Opening, type WallRecord, type CurvedRecord, at } from '../builder';
+import { Builder, wallFrame, TILE, type Frame, type MatKey, type Opening, type WallRecord, type CurvedRecord, at } from '../builder';
 import type { DoorSpec, RoomSpec } from './types';
-import { ceilingAt, stairOpts, type PlanX } from './plan';
+import { ceilingAt, vaultArc, stairOpts, type PlanX } from './plan';
 import { orient, leftN, clip, archOutline, headRise, convexOverlap, type Head, add, sub, scale, dot, norm } from './geom';
 import { prismVolume, extrudeVolume, type Volume } from './carve';
 import { buildTunnel } from './tunnel';
@@ -397,7 +397,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   function vaultSurface(B: Builder, r: RoomSpec, v: { axis: V2; spring: number; ribs: boolean; murder?: boolean }, p: V2[], wm: MatKey) {
     const side: V2 = [-v.axis[1], v.axis[0]], h = vaultHeight(r, v);
     const bs = p.map((q) => dot(q, side)), b0 = Math.min(...bs), b1 = Math.max(...bs);
-    const K = VAULT_K, bin = B.bins[wm];
+    const K = VAULT_K, bin = B.bins[wm], T = TILE[wm], arc = vaultArc(P, r); // v runs along the curve (metres / tile), not across the plan
     const nrm = (q: V2): V3 => { const e = 0.02, dh = (h(add(q, scale(side, e))) - h(add(q, scale(side, -e)))) / (2 * e); return norm3([side[0] * dh, -1, side[1] * dh]); };
     for (let k = 0; k < K; k++) {
       const lo = b0 + ((b1 - b0) * k) / K, hi = b0 + ((b1 - b0) * (k + 1)) / K;
@@ -405,7 +405,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       if (piece.length < 3) continue;
       for (let i = 1; i < piece.length - 1; i++) {
         const tri = [piece[0], piece[i], piece[i + 1]]; // positive winding in (x, z) faces down
-        bin.triN(tri.map((q) => [q[0], h(q), q[1]] as V3), tri.map(nrm), tri.map((q) => [dot(q, v.axis) / 4, dot(q, side) / 4] as [number, number]));
+        bin.triN(tri.map((q) => [q[0], h(q), q[1]] as V3), tri.map(nrm), tri.map((q) => [dot(q, v.axis) / T, arc(q) / T] as [number, number]));
       }
     }
     if (v.ribs) {

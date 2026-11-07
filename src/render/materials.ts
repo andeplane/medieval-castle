@@ -35,6 +35,16 @@ const POM_GAIN = typeof location === 'undefined' ? 1 : Number(new URLSearchParam
 
 const depthOf = (h: Node<'float'>, o: Pom) => clamp(float(o.hTop).sub(h).div(o.hTop - o.hBot), 0, 1);
 
+/**
+ * Grazing views. The uv shift to the back of a joint is depth × tan(view angle), so it grows without
+ * bound towards grazing, and the side of every stone (a cliff a texel or two wide in the height map)
+ * is then drawn by smearing those edge texels over the whole shift: the "hairy" fringes along stone
+ * edges on walls seen edge-on (curved drums and vaults are always edge-on somewhere). So the depth
+ * fades from full at cos = POM_GRAZE[1] (~73° from the normal) to none at POM_GRAZE[0] (~86°), and the
+ * shift is capped at the one at 70° (cos POM_CZ: ~2.7 × depth; it was ~4.9 × depth at 78°). Steeper than that, the normal map and the
+ * cavity shading carry the relief, as they do in the distance.
+ */
+const POM_GRAZE: [number, number] = [0.07, 0.3], POM_CZ = 0.35;
 /** March tuning (FPOM-style): one layer per POM_PX pixels (or texels) of the ray's length, in [min, max]. */
 const POM_PX = 1.5, POM_MIN = 6, POM_MAX = 64, SHADOW_MAX = 16;
 
@@ -61,7 +71,8 @@ function parallax(set: GpuSet, o: Pom, raw?: (q: Node<'vec2'>, gx: Node<'vec2'>,
     const Tn = T.mul(inv).toVar(), Bn = B.mul(inv).toVar();
     const V = positionView.negate().normalize();
     const vt = vec3(V.dot(Tn), V.dot(Bn), V.dot(N)).toVar();
-    const fade = float(1).sub(smoothstep(POM_NEAR, POM_FAR, positionView.length())).mul(smoothstep(0.06, 0.2, vt.z)).toVar();
+    // grazing: the depth fades out well before the view lies along the face (see POM_GRAZE)
+    const fade = float(1).sub(smoothstep(POM_NEAR, POM_FAR, positionView.length())).mul(smoothstep(POM_GRAZE[0], POM_GRAZE[1], vt.z)).toVar();
     const scale = (o.depth / o.tile) * POM_GAIN;
     const h = (q: Node<'vec2'>) => depthOf(raw ? raw(q, gx, gy) : texture(set.data, q).grad(gx, gy).r, o);
     // uv spacing of one height sample at the mip the gradients pick (never finer than a texel)
@@ -69,7 +80,7 @@ function parallax(set: GpuSet, o: Pom, raw?: (q: Node<'vec2'>, gx: Node<'vec2'>,
 
     const out = vec4(uv0, 0, 1).toVar();
     If(fade.greaterThan(POM_GAIN > 0 ? 0.002 : 2), () => {
-      const cz = vt.z.max(0.2);
+      const cz = vt.z.max(POM_CZ);
       const off = vt.xy.div(cz).mul(scale).mul(fade).toVar(); // uv shift from the face to the full depth
       const nf = off.length().div(spacing.mul(POM_PX)).clamp(POM_MIN, POM_MAX).floor().toVar();
       const layer = float(1).div(nf);
