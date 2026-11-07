@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { startLoop, renderSize, followLook } from '../../src/loading/loop';
-import { LoadingModel } from '../../src/loading/model';
+import { LoadingModel, LIGHT } from '../../src/loading/model';
 import { createTunnelRenderer } from '../../src/loading/gl';
 import { PALETTE } from '../../src/loading/tunnel';
 import { fakeClock, fakeGL } from './fakes';
@@ -53,6 +53,7 @@ describe('startLoop', () => {
     expect(gl.uniforms.get('uI')).toEqual(new Array(8).fill(0));
     expect(gl.uniforms.get('uDay')).toBe(0);
     expect(gl.uniforms.get('uFill')).toBe(0);
+    expect(gl.uniforms.get('uExposure')).toBeCloseTo(LIGHT.dark);
     expect(gl.uniforms.get('uLook')).toEqual([0.1, 0.2]);
     expect(gl.calls).toContain('viewport 0 0 64 32');
     m.setTarget(1);
@@ -60,7 +61,8 @@ describe('startLoop', () => {
     expect(m.done).toBe(true);
     expect((gl.uniforms.get('uI') as number[]).every((x) => x > 0.5)).toBe(true);
     expect(gl.uniforms.get('uDay')).toBe(1);
-    expect(gl.uniforms.get('uFill')).toBeCloseTo(0.3);
+    expect(gl.uniforms.get('uFill')).toBeCloseTo(LIGHT.fill);
+    expect(gl.uniforms.get('uExposure')).toBeCloseTo(LIGHT.lit); // the eye has closed down: no glare at the end
     expect(onFrame).toHaveBeenCalledWith(m);
     stop();
     const n = onFrame.mock.calls.length;

@@ -11,6 +11,14 @@ export function torchThresholds(n = N_TORCH, fillFrom = FILL_FROM): number[] {
   return Array.from({ length: n }, (_, i) => 0.03 + (i * (fillFrom - 0.06)) / (n - 1));
 }
 
+/**
+ * Eye adaptation, as in the game (render/exposure.ts): pitch dark at first, the eye wide open (`dark`);
+ * as the torches strike nearer and the fill and daylight come up it closes down to `lit`, in log space,
+ * so the lit tunnel ends about as bright as the game's own moat tunnel (the `tunnel` bookmark) instead
+ * of a flat sepia glare. `fill` scales the last stretch's soft fill light.
+ */
+export const LIGHT = { dark: 1.1, lit: 0.15, fill: 0.1 };
+
 /** "Cutting the stone… 42%", for assistive tech (the overlay sets step and percent apart). */
 export const caption = (label: string, shown: number) => `${label} ${Math.round(shown * 100)}%`;
 
@@ -75,6 +83,9 @@ export class LoadingModel {
     const sputter = this.reduced || !isFinite(a) ? 1 : 1 + 0.6 * Math.exp(-a * 5) * Math.sin(a * 47) + 0.35 * Math.exp(-a * 3);
     return ramp * ramp * sputter;
   }
+
+  /** Tone-mapping exposure for the current progress (LIGHT.dark → LIGHT.lit). */
+  exposure(): number { return LIGHT.dark * Math.pow(LIGHT.lit / LIGHT.dark, this.shown); }
 
   /** Fill light 0..1 over the last stretch of progress. */
   fill(): number { return smooth(clamp01((this.shown - FILL_FROM) / (1 - FILL_FROM))); }

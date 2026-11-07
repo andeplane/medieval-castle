@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, spanProgress, caption } from '../../src/loading/model';
+import { LoadingModel, torchThresholds, N_TORCH, FILL_FROM, spanProgress, caption, LIGHT } from '../../src/loading/model';
 
 describe('torchThresholds', () => {
   it('lights torches in order, all before the fill stretch', () => {
@@ -83,6 +83,18 @@ describe('LoadingModel', () => {
     expect(m.ignite.filter((x) => x !== null)).toHaveLength(lit);
     expect(m.torch(0, 10)).toBe(1);
     expect(new LoadingModel({ fixed: 7 }).shown).toBe(1);
+  });
+
+  it('adapts the eye: wide open in the dark, at least a stop down once the tunnel is lit, never opening again', () => {
+    expect(LIGHT.lit).toBeLessThanOrEqual(LIGHT.dark / 2);
+    let last = Infinity;
+    for (let p = 0; p <= 1.0001; p += 0.05) {
+      const e = new LoadingModel({ fixed: Math.min(1, p) }).exposure();
+      expect(e).toBeLessThanOrEqual(last);
+      last = e;
+    }
+    expect(new LoadingModel().exposure()).toBeCloseTo(LIGHT.dark);
+    expect(new LoadingModel({ fixed: 1 }).exposure()).toBeCloseTo(LIGHT.lit);
   });
 
   it('brings up the fill only in the last stretch', () => {

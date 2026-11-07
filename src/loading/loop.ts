@@ -1,6 +1,6 @@
 // The tunnel's frame loop: tick the model, draw the renderer. The same loop runs inside the worker
 // (normal case, so a busy main thread cannot freeze it) or on the main thread as a fallback.
-import { LoadingModel } from './model';
+import { LoadingModel, LIGHT } from './model';
 import type { TunnelRenderer } from './gl';
 
 export interface Clock {
@@ -42,7 +42,7 @@ export function startLoop(o: LoopOpts): () => void {
       for (let i = 0; i < m.n; i++) torches[i] = m.torch(i, now);
       const f = m.fill();
       // fully dark at first; the fill and the daylight at the grille only come up at the end
-      renderer.draw({ w, h, time: (now - t0) / 1000, torches, fill: f * 0.3, day: f, look });
+      renderer.draw({ w, h, time: (now - t0) / 1000, torches, fill: f * LIGHT.fill, day: f, exposure: m.exposure(), look });
     }
     o.onFrame?.(m);
     raf = clock.raf(tick);

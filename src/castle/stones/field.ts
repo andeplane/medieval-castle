@@ -133,11 +133,12 @@ export class StoneField {
     return g;
   }
 
-  /** Pick each chunk's level for a camera at `cam`; build missing geometry within `budgetMs`. */
-  update(cam: Point3, budgetMs = 4) {
-    if (!this.group.visible) return;
+  /** Pick each chunk's level for a camera at `cam`; build missing geometry within `budgetMs`.
+   *  Returns how many chunks still wait for geometry (built on later calls). */
+  update(cam: Point3, budgetMs = 4): number {
+    if (!this.group.visible) return 0;
     const t0 = this.now(), lod = this.lod;
-    let built = 0;
+    let built = 0, pending = 0;
     for (const ch of this.chunks) {
       // ashlar has about half as many stones per m² as rubble, so it keeps real stones further out
       const d = boxDistance(cam, ch.lo, ch.hi) / (ch.mat === 'new' ? lod.ashlar : 1);
@@ -146,7 +147,7 @@ export class StoneField {
       if (!want.level) { if (ch.mesh) ch.mesh.visible = false; ch.level = 0; ch.silOnly = false; this.evict(ch, d); continue; }
       if (want.level === ch.level && want.silOnly === ch.silOnly) continue;
       if (!ch.geo[want.level - 1]) {
-        if (built && this.now() - t0 > budgetMs) continue; // build it on a later frame (at least one per frame)
+        if (built && this.now() - t0 > budgetMs) { pending++; continue; } // build it on a later frame (at least one per frame)
         built++;
       }
       const g = this.geometry(ch, want.level);
@@ -161,6 +162,7 @@ export class StoneField {
       ch.mesh.visible = true;
       ch.level = want.level; ch.silOnly = want.silOnly;
     }
+    return pending;
   }
 
   /** Free geometry of chunks well out of range, so memory stays bounded when flying around. */

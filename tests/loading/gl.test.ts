@@ -22,13 +22,14 @@ describe('createTunnelRenderer', () => {
     expect(gl.uniforms.get('uStone')).toHaveLength(18);
     expect(gl.uniforms.get('uMortar')).toEqual([0.35, 0.34, 0.31]);
     expect(gl.uniforms.get('uMotion')).toBe(1);
-    r.draw({ w: 640, h: 360, time: 2, torches: new Float32Array([1, 0.5]), fill: 0.2, day: 0.4, look: [0.1, -0.2] });
+    r.draw({ w: 640, h: 360, time: 2, torches: new Float32Array([1, 0.5]), fill: 0.2, day: 0.4, exposure: 0.7, look: [0.1, -0.2] });
     expect(gl.calls).toContain('viewport 0 0 640 360');
     expect(gl.calls.at(-1)).toBe('draw');
     expect(gl.uniforms.get('uRes')).toEqual([640, 360]);
     expect(gl.uniforms.get('uI')).toEqual([1, 0.5]);
     expect(gl.uniforms.get('uFill')).toBe(0.2);
     expect(gl.uniforms.get('uDay')).toBe(0.4);
+    expect(gl.uniforms.get('uExposure')).toBe(0.7);
     expect(gl.uniforms.get('uLook')).toEqual([0.1, -0.2]);
     expect(gl.uniforms.get('uTime')).toBe(2);
     r.dispose();
