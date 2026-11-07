@@ -22,7 +22,7 @@ import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFram
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
 import { spiralStartFor, validateStair, planStair, spiralNosingY, spiralStonesAt, type StairOpts, type SpiralPlan } from './stairs';
 import { masses, fits, boxOf, STAIR_SLIT, type Face, type DoorHole, type SpiralBehind } from '../openings';
-import { placeLeaves, leafPoint, leafMatrix, m4apply, leafDepth, m4swing, LIP, doorOutlines, stopPlane, type LeafPlace } from './doorGeom';
+import { placeLeaves, leafPoint, leafMatrix, m4apply, leafDepth, m4swing, LIP, doorOutlines, stopPlane, seatsOf, twoWayFits, type LeafPlace } from './doorGeom';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -682,14 +682,14 @@ export function planInterior(seed = WORLD_SEED): PlanX {
 /** The plan's doors as the castle's walls see them: every wall a door passes through is cut with its outline. */
 export function doorHoles(P: PlanX): DoorHole[] {
   return P.doors.map((d) => {
-    const { clear, reb } = doorOutlines(d, P.rise[d.id]), leafy = d.leaf && d.kind !== 'gate';
-    return { id: d.id, c: [d.centre[0], d.centre[2]], along: d.along, normal: d.normal, wall: d.wall, clear, reb, swing: leafy ? (d.swingInto === 1 ? 1 : -1) : 0, stop: stopPlane(d) };
+    const { clear, reb } = doorOutlines(d, P.rise[d.id]);
+    return { id: d.id, c: [d.centre[0], d.centre[2]], along: d.along, normal: d.normal, wall: d.wall, clear, reb, swings: seatsOf(d).map((k) => (k === 1 ? 1 : -1)), stop: stopPlane(d) };
   });
 }
 
-/** Whether a door's leaf, swung through its whole arc, stays in its doorway (with the rebate) or the room it swings into. */
-export function leafSwingFits(P: Pick<InteriorPlan, 'rooms'>, d: DoorSpec): boolean {
-  const [pl] = placeLeaves(d), r = P.rooms.find((x) => x.id === d.spaces[d.swingInto]);
+/** Whether a door's leaf in `seat`, swung through its whole arc, stays in its doorway (with the rebate) or the room it swings into. */
+export function leafSwingFits(P: Pick<InteriorPlan, 'rooms'>, d: DoorSpec, seat: 0 | 1 = d.swingInto): boolean {
+  const [pl] = placeLeaves(d, seat), r = P.rooms.find((x) => x.id === d.spaces[seat]);
   if (!pl || !r) return true;
   const { zBack } = leafDepth(pl.kind), sx = pl.mirrored ? -1 : 1;
   // a coarser sweep than the test's (the leaf's ends and middle; rooms are convex where doors meet them)
@@ -721,9 +721,17 @@ function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
   return false;
 }
 
+/** Outdoor spaces a leaf may swing into: the courtyard (paved and flat at the sill, kept clear in front of
+ *  every door by the openings rules and props). Outside the walls the ground falls away from the sills. */
+const SWING_OUT = new Set<SpaceId>(['courtyard']);
+
 /**
  * Hang each leaf so that it opens: on its other jamb when it would swing into the room's side wall (a door
- * near a corner) or across another leaf's swing; failing both, swing it into the other room.
+ * near a corner) or across another leaf's swing; failing both, swing it into the other room. Then make
+ * every door that can two-way, so it opens away from whoever opens it: a second seat on the other face
+ * (otherHinge; the same jamb if it fits, else the other) where the wall leaves a stop between the two
+ * rebates, the leaf fits the space beyond and its sweep crosses no other seat's. A door that fails, or a stair
+ * door, keeps opening its one way.
  */
 export function fitHinges(P: Pick<InteriorPlan, 'rooms' | 'doors'>): void {
   const leaf = new Map(P.doors.map((d) => [d, placeLeaves(d)[0]]));
@@ -742,6 +750,22 @@ export function fitHinges(P: Pick<InteriorPlan, 'rooms' | 'doors'>): void {
       if (ok(d)) { fixed = true; break; }
     }
     if (!fixed) { Object.assign(d, was); leaf.set(d, placeLeaves(d)[0]); }
+  }
+  // second seats, each checked against every seat taken so far (so the result holds pairwise)
+  const taken = [...leaf.values()].filter((pl): pl is LeafPlace => !!pl);
+  for (const d of P.doors) {
+    const pl = leaf.get(d);
+    delete d.otherHinge;
+    // a stair door keeps its one way, onto the landing side: the steps (and a tower's curved drum) lie beyond it
+    if (!pl || !twoWayFits(d) || d.spaces.some((sp) => P.rooms.some((r) => r.id === sp && r.kind === 'stair'))) continue;
+    const seat: 0 | 1 = d.swingInto === 1 ? 0 : 1, into = d.spaces[seat];
+    if (!SWING_OUT.has(into) && !P.rooms.some((r) => r.id === into)) continue;
+    for (const hinge of [d.hinge, d.hinge === 'left' ? 'right' : 'left'] as const) {
+      d.otherHinge = hinge;
+      const other = placeLeaves(d, seat)[0];
+      if (leafSwingFits(P, d, seat) && !taken.some((o) => o.door !== d.id && sweepsCross(other, o))) { taken.push(other); break; }
+      delete d.otherHinge;
+    }
   }
 }
 

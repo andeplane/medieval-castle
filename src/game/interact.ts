@@ -111,7 +111,7 @@ export function createInteraction(camera: THREE.Camera, dom: HTMLElement, items:
   const render = () => view.show(current ? current.item.label() : null);
   const use = () => {
     current = pick();
-    if (current) current.item.use();
+    if (current) current.item.use({ pos: ray.origin, dir: ray.direction });
     render();
     return !!current;
   };
