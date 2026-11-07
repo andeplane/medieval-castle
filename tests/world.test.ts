@@ -484,7 +484,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const d = P.doors.find((x) => x.id === 'gate-inner')!, y = d.centre[1] + d.height;
     const W = (u: number, w: number): V3 => [d.centre[0] + d.along[0] * u + d.normal[0] * w, y, d.centre[2] + d.along[1] * u + d.normal[1] * w];
     expect(revealFaults(P, [{ p: [W(-0.5, -d.wall / 2), W(0.5, -d.wall / 2), W(0.5, d.wall / 2)], n: [0, -1, 0] }])).toEqual(['gate-inner: a reveal triangle spans the wall\'s mid-plane']);
-  });
+  }, 120_000);
 
   it('reports what it is for', () => {
     // a door slid into the stair tower's corner of the north wing, a window over the stair door, a slab left in

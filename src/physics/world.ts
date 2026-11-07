@@ -137,6 +137,10 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
         place(false);
         return { move: [m.x, m.y, m.z], grounded: kcc.computedGrounded(), hits };
       },
+      probe(x, z, top, depth) {
+        const h = api.raycast([x, top, z], [0, -1, 0], depth);
+        return h && { y: h.point[1], normal: h.normal, tag: h.tag };
+      },
       teleport(p) { feet[0] = p[0]; feet[1] = p[1]; feet[2] = p[2]; place(true); },
       setHeight(h) { hh = half(h); collider.setHalfHeight(hh); place(true); },
       fits(h) {
