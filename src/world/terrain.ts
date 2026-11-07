@@ -11,8 +11,9 @@
 import * as THREE from 'three/webgpu';
 import { WORLD_SEED } from '../core/rng';
 import { type V2, pointInPoly, edgeDist, smoothstep, clamp, add, scale, norm } from '../core/math2d';
-import { GROUND, MOAT } from '../castle/spec';
-import { islandOutline, moatOuter, footprints, courtyard, castleCentre, gatehouseFrame } from '../castle/layout';
+import { GROUND, MOAT, STAIR_TOWER } from '../castle/spec';
+import { islandOutline, moatOuter, footprints, courtyard, castleCentre, gatehouseFrame, stairTowerCentre } from '../castle/layout';
+import { offsetPoly } from '../castle/builder';
 import { fieldLayout, fieldIndexAt, segDist, LANE_HALF, CROPS, FIELD_EXTENT, type Crop, type FieldLayout } from './fields';
 import { buildRocks } from './rocks';
 import { makeRelief0, erodeRelief, RN, RX0, RZ0, RSIZE, RCELL } from './relief';
@@ -93,6 +94,28 @@ function footDist(x: number, z: number) {
   let d = 1e9;
   for (const f of FOOT_F) { const q = f.signed(x, z); if (q < 0) return 0; if (q < d) d = q; }
   return d;
+}
+
+/** Point-in-any-polygon with a bounding-box reject first. */
+export function inAny(polys: V2[][]) {
+  const boxes = polys.map((p) => { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of p) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); } return { x0, x1, z0, z1 }; });
+  return (x: number, z: number) => polys.some((p, i) => { const b = boxes[i]; return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && pointInPoly(p, x, z); });
+}
+const IN_BUILT = inAny(FOOT), COURT_OUT = offsetPoly(COURT, 0.3), HOLE_IN = 0.5;
+const STAIR_HOLE = (() => { const c = stairTowerCentre(), r = STAIR_TOWER.r - 0.3; return Array.from({ length: 16 }, (_, i) => [c[0] + Math.cos((i / 16) * 2 * Math.PI) * r, c[1] + Math.sin((i / 16) * 2 * Math.PI) * r] as V2); })();
+const RING: V2[] = Array.from({ length: 8 }, (_, i) => [Math.cos((i / 8) * 2 * Math.PI) * HOLE_IN, Math.sin((i / 8) * 2 * Math.PI) * HOLE_IN]);
+/**
+ * Where there is no ground at ground level: under the buildings, at least HOLE_IN (0.5 m) inside their
+ * joined footprints (their own floors take over, and the cellar stairs and stair shafts pass through), but
+ * not under the courtyard, which keeps its ground except in the stair tower (its spiral goes down to the
+ * cellars). Joined footprints count as one (a gate passage runs across the gatehouse and the wing). The one
+ * rule for the rendered near grid and its collider (player/setup.ts): a cell whose centre is in a hole is
+ * left out of both.
+ */
+export function groundHole(x: number, z: number): boolean {
+  if (pointInPoly(STAIR_HOLE, x, z)) return true;
+  if (!IN_BUILT(x, z) || pointInPoly(COURT_OUT, x, z)) return false;
+  return RING.every(([dx, dz]) => IN_BUILT(x + dx, z + dz));
 }
 
 // where the broken bridge lands on the outer bank (same march as castle/bridge.ts)
@@ -540,12 +563,21 @@ function finish(T: Terrain, g: THREE.BufferGeometry, samples: Sample[]) {
   return g;
 }
 
-function buildGrid(T: Terrain, size: number, seg: number) {
+function buildGrid(T: Terrain, size: number, seg: number, holes: V2[][] = []) {
+  const extra = inAny(holes);
   const g = new THREE.PlaneGeometry(size, size, seg, seg);
   g.rotateX(-Math.PI / 2);
   const p = g.attributes.position as THREE.BufferAttribute;
   const samples: Sample[] = new Array(p.count);
   for (let i = 0; i < p.count; i++) { const s = T.sample(p.getX(i), p.getZ(i)); samples[i] = s; p.setY(i, s.h); }
+  // no ground where groundHole says so (PlaneGeometry: 6 indices per cell, a b d / b c d; a and c are opposite corners)
+  const src = g.index!.array, keep: number[] = [];
+  for (let o = 0; o < src.length; o += 6) {
+    const a = src[o], c = src[o + 4];
+    const x = (p.getX(a) + p.getX(c)) / 2, z = (p.getZ(a) + p.getZ(c)) / 2;
+    if (!groundHole(x, z) && !extra(x, z)) for (let k = 0; k < 6; k++) keep.push(src[o + k]);
+  }
+  g.setIndex(keep);
   return finish(T, g, samples);
 }
 
@@ -606,7 +638,11 @@ function buildStream(T: Terrain, waterMat: THREE.Material | null) {
   return { ground: g, water };
 }
 
-export interface TerrainMeshOptions { near?: number; nearSeg?: number; farRings?: number; farSegs?: number }
+export interface TerrainMeshOptions {
+  near?: number; nearSeg?: number; farRings?: number; farSegs?: number;
+  /** More holes in the near grid besides groundHole (the interior's groundHoles.terrain). */
+  holes?: V2[][];
+}
 
 /** Meshes for a terrain: near grid, polar far mesh, stream corridor and water, rocks. The material's
  *  userData may carry `stream`, `rock` (materials) and `reliefTex` (filled here). */
@@ -616,7 +652,7 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const inside = (x: number, z: number) => NEAR / 2 - Math.max(Math.abs(x), Math.abs(z));
   const group = new THREE.Group();
   group.name = 'terrain';
-  const near = new THREE.Mesh(buildGrid(T, NEAR, o.nearSeg ?? 420), material);
+  const near = new THREE.Mesh(buildGrid(T, NEAR, o.nearSeg ?? 420, o.holes), material);
   near.receiveShadow = true; near.name = 'terrain-near';
   const tNear = performance.now();
   const far = new THREE.Mesh(buildFar(T, 150, 16000, o.farRings ?? 200, o.farSegs ?? 560, (x, z, s) => 4 * smoothstep(0, 25, inside(x, z)) + (s.stream !== undefined ? 9 * (1 - smoothstep(CORRIDOR - 14, CORRIDOR - 2, s.stream)) : 0)), material);

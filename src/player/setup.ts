@@ -5,11 +5,9 @@ import type * as THREE from 'three/webgpu';
 import { createPhysics, type Physics } from '../physics/world';
 import { boundaryOutline } from '../physics/boundary';
 import type { HeightGrid } from '../physics/mesh';
-import { offsetPoly } from '../castle/builder';
-import { courtyard, footprints, stairTowerCentre } from '../castle/layout';
-import { STAIR_TOWER } from '../castle/spec';
+import { courtyard } from '../castle/layout';
 import { type V2, pointInPoly } from '../core/math2d';
-import { ISLAND, heightAt, footDist } from '../world/terrain';
+import { ISLAND, heightAt, footDist, groundHole, inAny } from '../world/terrain';
 import { PlayerController, type SurfaceResolver, type CameraView } from './controller';
 import { CharacterMotor, shapeFrom } from '../character/motor';
 import type { Footsteps } from './footsteps';
@@ -41,12 +39,6 @@ export function playDoors<D extends { id: string; leaf: boolean; kind: string }>
 }
 
 const COURT = courtyard();
-const circle = (c: V2, r: number, n = 16): V2[] => Array.from({ length: n }, (_, i) => [c[0] + Math.cos((i / n) * 2 * Math.PI) * r, c[1] + Math.sin((i / n) * 2 * Math.PI) * r]);
-/** Point-in-any-polygon with a bounding-box reject first. */
-function boxed(polys: V2[][]) {
-  const boxes = polys.map((p) => { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of p) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); } return { x0, x1, z0, z1 }; });
-  return (x: number, z: number) => polys.some((p, i) => { const b = boxes[i]; return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && pointInPoly(p, x, z); });
-}
 export const surfaceAt: SurfaceResolver = (tag, x, z) => {
   if (!tag) return 'stone';
   if (tag.includes('wood')) return 'wood';
@@ -77,14 +69,11 @@ export async function setupPlay(d: PlayDeps) {
   for (const g of d.furniture ?? []) physics.addStaticMesh(g, 'furniture');
   if (d.extra) physics.addObject(d.extra.object, undefined, () => 'course');
 
-  // terrain: an open trimesh over the island and the near moat. Holes under the buildings (their own
-  // floors take over, and cellar stairs pass through) but not under the courtyard, which keeps the
-  // ground except in the stair tower (its spiral goes down to the cellars); plus whatever the interior
-  // or the course asks for
-  const built = footprints().map((p) => offsetPoly(p, -0.5)), court = offsetPoly(COURT, 0.3);
-  const extra: V2[][] = [circle(stairTowerCentre(), STAIR_TOWER.r - 0.3), ...(d.interior?.terrainHoles ?? []), ...(d.extra?.holes ?? [])];
-  const inBuilt = boxed(built), inExtra = boxed(extra);
-  const hole = (x: number, z: number) => (inBuilt(x, z) && !pointInPoly(court, x, z)) || inExtra(x, z);
+  // terrain: an open trimesh over the island and the near moat, with the rendered grid's holes
+  // (world/terrain.ts groundHole: under the buildings and in the stair tower), plus whatever the
+  // interior or the course asks for
+  const inExtra = inAny([...(d.interior?.terrainHoles ?? []), ...(d.extra?.holes ?? [])]);
+  const hole = (x: number, z: number) => groundHole(x, z) || inExtra(x, z);
   let ix0 = 1e9, ix1 = -1e9, iz0 = 1e9, iz1 = -1e9;
   for (const [x, z] of ISLAND) { ix0 = Math.min(ix0, x); ix1 = Math.max(ix1, x); iz0 = Math.min(iz0, z); iz1 = Math.max(iz1, z); }
   const crop = { x0: ix0 - 6, x1: ix1 + 6, z0: iz0 - 6, z1: iz1 + 6 };

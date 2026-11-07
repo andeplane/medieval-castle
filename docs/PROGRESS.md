@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-11-07: the cellar stair was a flat pale strip (branch `claude/project-thread-ns4g2v-cellartreads`)
+
+Seen live: looking down (or up) the straight cellar stair `N-cellarstair` from its top landing showed one flat, very pale strip, no step edges, much brighter than the rubble walls beside it, at 14:00 and still at 22:00.
+
+Root cause: not the treads (geometry, nosings and the `interior-under-trim` material are fine, and the irradiance has nothing to do with it). Two outdoor surfaces ran straight through the stair well:
+- the near terrain grid, one continuous sheet at y 2.55 under every building (no holes; only its collider had holes, `player/setup.ts`). That was the flat strip at landing level, lit as outdoors (sun through the shadow map, sky IBL), so neither the interior light nor time of day dimmed it much;
+- the moat's water plane, 9000 m square at y 0 under the whole island: below the terrain, it showed the sky reflection as a second pale floor.
+Found by elimination in headless captures (interior gain and floor to 0, lights off, AO off: the strip did not change) and then a raycast through the screen centre in the page: `terrain-near` at y 2.55, `water` at y 0, the treads behind both. The same sheets covered the gate passage floor (gate-0 and gate-1 showed terrain 5 cm above the sill), crossed the great-tower and stair-tower spirals, floated in every cellar at y 0 (unseen only because the eye there is just below 0 and the plane is single-sided) and cut the sally port's last flight under the outer bank.
+
+Fix (one owner per thing):
+- `world/terrain.ts groundHole(x, z)`: the hole rule that was the collider's alone (under the buildings, now 0.5 m inside the *joined* footprints, so a gate passage across the gatehouse and the wing is covered; not under the courtyard; the stair tower), used by the rendered near grid (`buildGrid` leaves out every cell whose centre is in a hole) and by its collider (`setup.ts`), so the two match cell for cell.
+- `world/water.ts waterGeometry`: the water plane has the island cut out, 0.5 m inside its edge, where the bank is already above the water.
+- The sally port: `shell.ts portal` returns `groundHoles` (terrain inside its housing; water from where the tunnel crown comes up to the water to the end); `buildInterior` hands them on and `main.ts` passes them to `buildTerrain`, `makeWater` and the collider.
+- Visible change beyond the stair: the gate passage now shows its flag floor instead of a pale terrain sheet over it (`ab-gate-passage-14h`).
+- Cost: terrain 784,702 → 780,702 triangles (−4,000), frame triangles −11,728 at every pose captured; draw calls unchanged (e.g. stair top 345, hero 231, gate 445, courtyard 649).
+
+Test: `tests/groundInRooms.test.ts`, "no terrain, water or paving inside any room": the castle, interior, terrain and water as main.ts builds them; 169,851 vertical rays on a 0.2 m grid through all 206 rooms (tunnels along their own floor and crown) may not meet the rendered terrain, the water or the courtyard paving. On main: 21 room × surface failures in 17 rooms (N-cellarstair terrain + water, gate-0/gate-1 terrain, great-stair and stairtower terrain + water, all five cellars and great-c, tunnels 1–4 and tunnel-x water, tunnel-5 terrain + water). On the branch: none.
+
+Captures (headless WebGL2, `castle-plan/cellar-treads/`, `main-*` = origin/main, `after-*` = branch): the stair from its top landing at 14 h and 22 h and from the stair itself (`stair-down*`, `stair-close`: now the treads and the cellar landing, in the walls' brightness), the gate passage (`ab-gate-passage-14h`), bookmarks hero, gate, courtyard (differ from main only in clouds and water ripples, which move with time, and the gate threshold).
+
+Not checked: WebGPU (headless shows WebGL2 only); the treads now read as dark stone lit only by the floor term and the doorways, so from the top landing the lower flight is dim; whether a step edge is easy to see there on a real screen; the stair-tower and great-tower spirals and the sally-port tunnel were checked by the test only (my capture poses there missed); the rim turf is not in the test.
 ## 2026-11-07: thin white lines down shut doors (branch `claude/project-thread-ns4g2v-boardgaps`)
 
 Anders: "some white line split here? very thin but there". Plank leaves left a 4 mm joint open right through the leaf between boards, so a shut door against daylight showed hairline white verticals (seen live on WebGPU at the courtyard door of the room east of the great hall).
