@@ -184,6 +184,11 @@ export const hoodedHearth: PropKind = {
       m.box('stone', [0, Ho / 2, zb + 0.02], [Wo, Ho, 0.04]);
       m.box('stone', [0, Ho + 0.015, zb + hood / 2], [Wo, 0.04, hood - 0.04]); // soffit 5 mm under the lintel
       m.box('stone', [0, 0.085, zb + hood / 2], [Wo, 0.01, hood - 0.04]);
+      // the firebox's side walls, blackened as its back is: the cheeks' inner faces stand 0.9 m from the fire, square
+      // to it, and in clean stone they glowed near-white beside the opening (the hall, 2026-11-08). A 2 cm skin 5 mm
+      // inside each cheek's face, clear of the back plate, the hearth floor and the soffit.
+      const zc0 = zb + 0.045, zc1 = zb + hood - 0.405;
+      for (const sx of [-1, 1]) m.box('stone', [sx * (Wo / 2 + 0.005), (0.095 + Ho - 0.01) / 2, (zc0 + zc1) / 2], [0.02, Ho - 0.105, zc1 - zc0]);
     });
     m.tinted(IRON, () => m.box('iron', [0, 0.085 + Ho * 0.35, zb + 0.05], [Wo * 0.55, Ho * 0.7, 0.025], { bevel: 0.008 })); // foot 5 mm into the hearth floor
     m.with(translate(0, 0.09, 0), () => fire(m, r, Wo * 0.75, zb + 0.4, true, IRON));

@@ -17,12 +17,14 @@ So the slope, turned up toward the windows, gets a little more light than the wa
 
 **Fix** (`props/textures.ts`): `stoneTex` is set against `WALL_STONE`. Its mean goes from about 0.3 to about 0.15 (× 0.5): a little lighter than the rubble and no lighter than the ashlar. Lime renders at about 0.145, and marble stays dark. This applies to every prop in the stone bin (chimneypieces, hoods, the kitchen's spit hearth, and the stone pieces in medieval.ts). Hue unchanged (warm grey). STYLE says to fix the light, not the albedo: the light was already the walls' own, and the albedo was the wrong one.
 
+**The white panels beside the fire** (assumption, plainest choice): in the hall capture after the albedo fix, the hooded hearth's cheek walls still glowed near-white. Their inner faces are the firebox's side walls, square to the fire 0.9 m away, in clean stone. They are now sooted like the firebox's back: a 2 cm soot skin 5 mm inside each cheek (`period.ts hoodedHearth`; the kitchen's spit hearth is built on it). The round shafts in front keep their fire-lit flanks, as #76 meant. In the capture, the hood slope measured sRGB 174 before and 120 after, against 110 for the wall above the armour.
+
 **Test** (`tests/hearthStone.test.ts`, whole castle, 69 fireplaces). Bake the interior light; dress every room as the game does. For each chimneypiece, hooded hearth and spit hearth:
 - light its room-facing stone (fronts, the hood's slope, shaft fronts; not the soot) with the shader's daylight and floor × its rendered albedo (texture × the piece's tint);
 - light the wall it stands against, 0.6 m to either side at 1.0, 1.6 and 2.4 m, the same way × `WALL_STONE`;
 - nine tenths of the surround by area must be at most 1.3 × the median wall point.
 
-Before: 56 of 69 fail (with the earlier, pre-GTAO wall values), the hall's hood 1.96 ×. After: none fail, the hall's hood 1.20, worst 1.20. Firelight is left out on both sides; the fire on a hearth's own front is `roomLight.test`'s rule. A second test keeps the stone's mean between the rubble and the ashlar. `interiorMath.test.ts` checks `tableDaylight` against the exact form factor of a pane seen square on.
+Before: 56 of 69 fail (with the earlier, pre-GTAO wall values), the hall's hood 1.96 ×. After: none fail, the hall's hood 1.20, worst 1.20. Firelight is left out on both sides; the fire on a hearth's own front is `roomLight.test`'s rule. A second test keeps the stone's mean between the rubble and the ashlar. A third checks that the side walls of every hooded firebox (six variants of each kind) are soot or lie behind soot. `interiorMath.test.ts` checks `tableDaylight` against the exact form factor of a pane seen square on.
 
 Not checked: the Mac (WebGPU). `WALL_STONE` is a measurement: if the wall shader changes, it must be re-measured.
 

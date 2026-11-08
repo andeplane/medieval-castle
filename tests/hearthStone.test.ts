@@ -36,6 +36,24 @@ describe('fireplace stone in tone with the walls', () => {
     expect(a).toBeLessThanOrEqual(lum(WALL_STONE.new));
   });
 
+  it('blackens the side walls of a hooded firebox, as its back (no clean stone square to the fire beside it)', () => {
+    const make = variantPool();
+    for (const kind of ['hooded-hearth', 'spit-hearth']) for (let seed = 0; seed < 6; seed++) {
+      const b = make(kind, seed).mesh.bins.stone, faces: { c: number[]; lo: number[]; hi: number[]; soot: boolean }[] = [];
+      for (let t = 0; t * 9 < b.pos.length; t++) {
+        const v = [0, 1, 2].map((k) => [0, 1, 2].map((j) => b.pos[t * 9 + k * 3 + j])), c = [0, 1, 2].map((j) => (v[0][j] + v[1][j] + v[2][j]) / 3), nx = b.nor[t * 9];
+        // a face turned along x toward the fire (x = 0), behind the shafts (z < 0), within the opening's height
+        if (nx * Math.sign(c[0]) > -0.99 || c[2] > 0 || c[1] < 0.1 || c[1] > 1.4 || Math.abs(c[0]) > 1.4) continue;
+        faces.push({ c, lo: [0, 1, 2].map((j) => Math.min(...v.map((q) => q[j]))), hi: [0, 1, 2].map((j) => Math.max(...v.map((q) => q[j]))), soot: lum([b.col[t * 9], b.col[t * 9 + 1], b.col[t * 9 + 2]]) < 0.25 });
+      }
+      // clean stone is fine only behind a sooty face (within 3 cm nearer the fire, over its centre)
+      const covered = (f: (typeof faces)[number]) => faces.some((g) => g.soot && Math.sign(g.c[0]) === Math.sign(f.c[0]) && Math.abs(f.c[0]) - Math.abs(g.c[0]) > 0 && Math.abs(f.c[0]) - Math.abs(g.c[0]) < 0.03 && g.lo[1] <= f.c[1] && f.c[1] <= g.hi[1] && g.lo[2] <= f.c[2] && f.c[2] <= g.hi[2]);
+      const walls = faces.filter((f) => f.soot).length;
+      for (const f of faces) if (!f.soot) expect(covered(f), `${kind} ${seed}: clean stone facing the fire at ${f.c.map((x) => x.toFixed(2))}`).toBe(true);
+      expect(walls).toBeGreaterThan(0);
+    }
+  });
+
   it('lights every chimneypiece and hood no brighter than 1.3 × the wall beside it', () => {
     const { builder, lights } = buildCastle();
     const mats = Object.fromEntries(['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'pave', 'rock', 'pool', 'glow'].map((k) => [k, new THREE.MeshStandardNodeMaterial()])) as unknown as Record<MatKey, THREE.Material>;
