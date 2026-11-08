@@ -9,10 +9,11 @@
 // surface gets its room's fires as the shader sums them (roomFires → fireAt, the shader's falloff) plus the
 // readability floor, and leaves as EFFECTIVE_ALBEDO × E / π. Eye adaptation is the controller's own maths
 // (centre-weighted mean log2 → targetStops → exposure). Daylight, furniture and the flames themselves are
-// left out: daylight only lowers exposure, and the flames are small. The albedo is calibrated against the
-// headless WebGL2 read-back of main (f98c864), whose HDR means it reproduces within 5 %:
-//   hall N1-2, 1.5 m from the hooded hearth: browser 0.120, here 0.125
-//   guard room N0-0 from its doorway:       browser 0.061, here 0.062
+// left out: daylight only lowers exposure, and the flames are small. The albedo was fitted to the headless
+// WebGL2 read-back of main (f98c864, ?furniture=1); the browser's HDR means come out 0.65-0.75 × these (the
+// furniture, AO and the dark chimneypieces), so the guard errs bright:
+//   great-5 from its doorway:          browser 0.046, here 0.071
+//   W5-0, 1.5 m from its chimneypiece: browser 0.172, here 0.234
 //
 // Also the flicker the fires put on the walls: the room's fires each wavering by their own seed (the flicker
 // the fire table writes every frame), summed on the wall beside the hearth and on the floor before it.
