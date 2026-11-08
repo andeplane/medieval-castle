@@ -19,7 +19,6 @@ export default defineConfig({
     // worker threads, not forked processes: on the 4-vCPU CI runner the same run took 169-180 s against 204-239 s
     pool: 'threads',
     // all four cores (vitest's default leaves one idle): 122 s against 170 s on CI
-    maxWorkers: '100%',
     sequence: { sequencer: LongestFirst },
     coverage: {
       provider: 'v8',
