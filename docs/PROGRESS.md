@@ -1,5 +1,44 @@
 # Progress
 
+## 2026-11-08: a lit heart in the great cavern; bedded, cracked rock; soft fungi light; water that reflects; the way down stands open (branch `claude/project-thread-ns4g2v-caves3`)
+
+From the coordinator's WebGPU captures after #72 on Anders' Mac: the cavern was one flat, foggy grey; the fungi halos showed as hard cyan polygons; the pool was a black disc; the squeeze was smooth brown clay up close; and Anders never found the cellar that leads to the caves.
+
+**Why the cavern was fog.** Away from fires the interior shader's only light was the readability floor (`InteriorLight.floor`, 0.145), the same everywhere and from every direction. Under +3.2 stops it lit rock, floor and roof to one value, and the cloudy macro texture did the rest. Now:
+- The cave materials get a quarter of that floor (`CAVE_FLOOR`, `makeInteriorMaterials().adopt(src, floorK)` → `interiorIrradiance(light, floorK)`). The castle's cellars keep theirs.
+- Recesses are darker: each rock vertex bakes how open it is (`caveGeom.ts rockOpenness`: the share of 15 points out along and round its normal, at 0.45, 1 and 1.9 m, that are in air). It is computed in the worker with the mesh, carried in the rock's uv u and used as the material's `aoNode`. Shelf undersides, wall feet, niches and passages come out darker.
+- A focal light: **the smugglers' fire** (new feature `fire`, `caves.ts fireSpot`). It is a ring of stones with charred logs on the cavern floor beside the pool, clear of the pool, of every walk and of the other finds. It burns as a `brazier` through `src/light` (`caveFires`), so it is warm light, a flame sprite and flicker in the cavern's row of the fire table. Its light falls off into the recesses, and the teal fungi give the cool side.
+
+**Rock** (`render/materials.ts caveMaterials`):
+- Beds about 0.7 m thick, warped by the broad noise. Each bed has its own stone (grey limestone, buff, dark shale, rust, pale) with a thin dark parting between beds and laminae inside them.
+- Joints (3D worley cell edges, about 2 m apart) and fine cracks in patches (about 0.6 m cells). They are cut into the bump as well as darkened.
+- Pale flowstone and iron streaks run down the walls.
+- Grit at 1.1, 5.3 and 17 cycles/m, the finer octaves only near; noise at 9/m in the bump. Together they give crisp detail at 0.5–1 m.
+- Darker, glossier damp patches.
+- Round the pool (uniforms from `caveShading`): dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it that glints with the fire.
+
+**Fungi light.** The halo quads are gone (one draw call fewer). Each cluster's light on the rock is baked into the rock's uv v (`bakeFungiLight`: a gaussian of the distance from each cluster, 0.5 m, on faces turned its way) and drawn as teal light × the rock's colour. It is part of the rock surface, so no angle can show an edge. Tested: each cluster's light is above 0.5 at the cluster and exactly nothing more than 2 m from every cluster.
+
+**Pool.** It is now very dark water with a fresnel reflection of the dark roof and the fire's glint (a sharp core and a broader streak), broken by slow 3D-noise ripples, and is more opaque at grazing angles.
+
+**The way down** (assumption, plainest cue). On the shortest way from the courtyard to the caves, two doors start standing open (`nav.ts doorsOnWayToCaves` → `DoorOptions.standOpen`):
+- the door you go in by from the courtyard (court>N0-4), so its torchlit room shows from the courtyard;
+- the cellar stair's top door (N0-3>N-cellarstair), so the stair is seen going down beside its torch.
+
+The door between them and the cellar's own doors stay as they are. Rooms are drawn through open doorways however far they lead (`world/visibility.ts`). My first try opened all four doors on the way, and from the cavern that drew the whole outdoors (145 draw calls, 2.6 M triangles in the WebGL2 capture, against 30 and 122 k). The test now checks every cave room: with these doors open, at most one more room is drawn and nothing outdoors that was not drawn already. The cavern's set is unchanged. Anyone can still open or shut any of these doors. No sign was added.
+
+**The lantern in fly bookmarks.** It is on whenever the camera is in a cave room, in fly mode too: main sets the carried light every frame from `vis.state.from`. It reaches 9 m with a metre of near field, so in the squeeze (walls at 0.5 m) it dominates. In the 21 × 16 m cavern everything is 5 m or more away and gets little of it. That is why the squeeze looked lantern-lit and the cavern did not. The cavern's light is now its fire.
+
+Tests:
+- `caves.test.ts`:
+  - fire placement (by the pool, clear of walks, finds, blocks and stalagmites; a brazier emitter; shading uniforms);
+  - openness (synthetic floor, slot and overhang; the cave's own values; the cavern floor near 1);
+  - fungi bake (near, far, back faces; openness untouched);
+  - the doors on the way down, including their effect on what every cave room draws.
+- `doors.test.ts`: `standOpen`.
+- The whole-cave ray grid (no gaps from any cave view) now includes everything drawn, because there are no halos to leave out.
+- `npm test`, coverage and build pass.
+
 ## 2026-11-08: the caves read as broken stone; the lantern no longer burns out the near wall (branch `claude/project-thread-ns4g2v-caves2`)
 
 Follow-up to #69, from my own captures there: the lantern washed the near walls flat orange, the cavern read as smooth rock, the fungi were pale flakes, the great tower cellar was black at the way out, the rock was meshed on the main thread, and there were no captures of the finds.

@@ -137,11 +137,18 @@ export function floorPolys(P: InteriorPlan): Map<SpaceId, V2[]> {
 }
 
 /**
- * The doors on the shortest way from the courtyard to the caves' entrance (through the N range's ground floor,
- * down the cellar stair, into N-c1): they start standing open, so the way down shows as a line of torchlit
- * doorways (Anders never found the cellars; caves3). Anyone can still shut them.
+ * Doors that start standing open to draw the player down to the caves (Anders never found the cellars;
+ * caves3): on the shortest way from the courtyard to the caves, the door you go in by from the courtyard
+ * and the top door of the stair down, beside which the torch hangs (render/interiorFire.ts besideWayDown).
+ * The doors between and the cellar's own doors stay as they are, so no chain of open doorways joins the
+ * caves to the courtyard: the caves are drawn only through open doorways (world/visibility.ts), and such a
+ * chain would draw the whole outdoors from under the moat. Anyone can still open or shut any of them.
  */
 export function doorsOnWayToCaves(plan: InteriorPlan & { caves?: CavePlan | null }): string[] {
   const C = plan.caves, path = C && findPath(navGraph(plan), 'courtyard', C.entrance);
-  return path ? path.doors.filter((id) => plan.doors.find((d) => d.id === id)?.leaf) : [];
+  if (!path) return [];
+  const doors = path.doors.map((id) => plan.doors.find((x) => x.id === id)!).filter((d) => d.leaf);
+  const stairs = new Set(plan.stairs.map((s) => s.id));
+  const top = doors.find((d) => d.spaces.some((s) => stairs.has(s)));
+  return [...new Set([doors[0]?.id, top?.id].filter((x): x is string => !!x))];
 }

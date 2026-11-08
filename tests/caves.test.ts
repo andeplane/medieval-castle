@@ -114,14 +114,23 @@ describe('cave plan', () => {
     expect(fromCavern.has('N-c1') && fromCavern.has('great-c')).toBe(true);
   });
 
-  it('stands open every door on the way from the courtyard down to the breach, and no other', () => {
+  it('stands open the way in from the courtyard and the cellar stair\'s top door, and never opens the caves to the outdoors', () => {
     const ids = doorsOnWayToCaves(P), path = findPath(navGraph(P), 'courtyard', C.entrance)!;
-    expect(ids).toContain('N0-3>N-cellarstair'); // the cellar stair's top door
-    expect(ids).toContain('N-cellarstair>N-c1'); // and its foot
-    expect(ids.length).toBeGreaterThanOrEqual(4);
-    for (const id of ids) { expect(path.doors).toContain(id); expect(P.doors.find((d) => d.id === id)!.leaf).toBe(true); }
-    expect(ids).not.toContain('N-c1>cave-breach'); // the breach has no leaf
+    expect(ids).toEqual(['court>N0-4', 'N0-3>N-cellarstair']); // in from the courtyard, and the cellar stair's top door
+    for (const id of ids) expect(path.doors).toContain(id);
+    expect(path.doors).toContain('N-cellarstair>N-c1'); // the stair's foot door stays as it is
+    expect(path.doors).toContain('N0-3>N0-4'); // and so does the one between
     expect(doorsOnWayToCaves({ ...P, caves: null })).toEqual([]);
+    // with them open, every cave room draws at most one room more than with them shut and nothing outdoors
+    // it did not already (the climb sees out through the great tower's open tunnels): no castle under the moat
+    const g = roomGraph(P), open = new Set(ids);
+    for (const r of P.rooms.filter(isCave)) {
+      const shut = drawnSpaces(g, [r.id], 2), seen = drawnSpaces(g, [r.id], 2, (d) => open.has(d));
+      const added = [...seen].filter((s) => !shut.has(s));
+      expect(added).not.toContain('courtyard'); expect(added).not.toContain('outside');
+      expect(added.length).toBeLessThanOrEqual(1); // the breach: the stair top's room; the climb: N0-4 off the courtyard it already drew
+    }
+    expect(drawnSpaces(g, ['cave-cavern'], 2, (d) => open.has(d))).toEqual(drawnSpaces(g, ['cave-cavern'], 2));
   });
 
   it('is on the nav graph: from the N cellar to the cavern and on to the great tower', () => {
