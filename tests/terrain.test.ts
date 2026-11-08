@@ -4,11 +4,12 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
   UNDRAWN_LAYER,
-  createTerrain, defaultTerrain, buildTerrain, nearGrid, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
+  createTerrain, defaultTerrain, buildTerrain, nearGrid, mirrorIndex, polarMirrorIndex, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
   ISLAND, MOAT_OUTER, BRIDGE_END, sample, heightAt, hedgerowLines, fieldAt, streamLine, farmland,
   islandWalkable, footDist, moatSigned, COURT_BED, type Terrain,
 } from '../src/world/terrain';
 import { seededDeps } from '../src/world/deps';
+import { VIEW_LAYER, MIRROR_LAYER } from '../src/render/passLayers';
 import { RN, RX0, RZ0, RCELL } from '../src/world/relief';
 import { CROPS, LANE_HALF } from '../src/world/fields';
 import { GROUND } from '../src/castle/spec';
@@ -249,7 +250,8 @@ describe('meshes', () => {
       for (let t = 0; t < idx.length; t += 3) want.add(tri(idx, t));
       const got: string[] = [], v = new THREE.Vector3();
       for (const m of tiles) {
-        expect(m.layers.isEnabled(0)).toBe(true);
+        // the view draws the tiles (their stand-ins draw the reflection)
+        expect(m.layers.mask).toBe(1 << VIEW_LAYER);
         expect(m.geometry.attributes.position).toBe(whole.geometry.attributes.position); // shared, not copied
         expect(m.receiveShadow).toBe(whole.receiveShadow);
         const ti = m.geometry.index!.array, box = m.geometry.boundingBox!.clone().expandByScalar(1e-3);
@@ -267,6 +269,47 @@ describe('meshes', () => {
     const shown = near.filter((m) => fr.intersectsSphere(m.geometry.boundingSphere!));
     expect(shown.length).toBeLessThan(near.length * 0.6);
     expect(shown.length).toBeGreaterThan(0);
+  });
+
+  // the water's reflection draws the near grid at half its resolution (render/passLayers.ts): the same ground,
+  // from the same vertices, wherever the view has ground
+  it('gives the reflection a coarser near grid over all the same ground', () => {
+    const o = { nearSeg: 40, farRings: 12, farSegs: 48, holes: [[[10, 10], [60, 10], [60, 50], [10, 50]] as V2[]] };
+    const g = buildTerrain(new THREE.MeshBasicMaterial(), T, o);
+    const whole = (g.getObjectByName('terrain-near') as THREE.Mesh).geometry;
+    const tiles = (pre: string) => g.children.filter((c) => c.name.startsWith(pre)) as THREE.Mesh[];
+    const view = tiles('terrain-near-'), mirror = tiles('terrain-mirror-');
+    expect(mirror.length).toBe(view.length);
+    for (const m of mirror) {
+      expect(m.layers.mask).toBe(1 << MIRROR_LAYER);
+      expect(m.castShadow).toBe(false);
+      expect(m.geometry.attributes.position).toBe(whole.attributes.position); // the same vertices
+    }
+    for (const m of view) expect(m.layers.mask).toBe(1 << VIEW_LAYER);
+    const n = (ms: THREE.Mesh[]) => ms.reduce((t, m) => t + m.geometry.index!.count / 3, 0);
+    expect(n(mirror)).toBeGreaterThan(n(view) * 0.24);
+    expect(n(mirror)).toBeLessThan(n(view) * 0.27);
+    // every fine cell with ground lies in a coarse cell of the stand-in; the hole is a hole in both
+    const p = whole.attributes.position as THREE.BufferAttribute, cell = 380 / 40;
+    // a triangle's coarse cell, by its lowest corner
+    const key = (ix: ArrayLike<number>, t: number) => [p.getX, p.getZ].map((get) => Math.floor((Math.min(get.call(p, ix[t]), get.call(p, ix[t + 1]), get.call(p, ix[t + 2])) + 190) / (2 * cell) + 1e-6)).join(',');
+    const coarse = new Set<string>();
+    for (const m of mirror) { const ix = m.geometry.index!.array; for (let t = 0; t < ix.length; t += 3) coarse.add(key(ix, t)); }
+    const fine = whole.index!.array;
+    for (let t = 0; t < fine.length; t += 3) expect(coarse.has(key(fine, t))).toBe(true);
+    // the far mesh's stand-in: every other ring and spoke of the same vertices, a quarter of the triangles
+    const farWhole = (g.getObjectByName('terrain-far') as THREE.Mesh).geometry;
+    const farView = tiles('terrain-far-'), farMirror = tiles('terrain-farmirror-');
+    expect(farMirror.length).toBe(farView.length);
+    for (const m of farMirror) { expect(m.layers.mask).toBe(1 << MIRROR_LAYER); expect(m.geometry.attributes.position).toBe(farWhole.attributes.position); }
+    expect(n(farMirror) / n(farView)).toBeGreaterThan(0.23);
+    expect(n(farMirror) / n(farView)).toBeLessThan(0.27);
+    expect(polarMirrorIndex(2, 6)).toEqual([0, 2, 14, 2, 16, 14, 2, 4, 16, 4, 18, 16, 4, 6, 18, 6, 20, 18]);
+    // the coarse cell x, z in [19, 38] lies wholly in the hole, its neighbour to the north does not
+    expect(coarse.has('11,11')).toBe(false);
+    expect(coarse.has('11,8')).toBe(true);
+    // the grid's own record of its cells: one per cell, those with ground set
+    expect(mirrorIndex(whole, 1).length).toBe(fine.length);
   });
 });
 

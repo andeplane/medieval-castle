@@ -6,8 +6,11 @@ import { waterNormalData } from '../render/materials';
 import { offsetPoly } from '../castle/builder';
 import { ISLAND } from './terrain';
 import type { V2 } from '../core/math2d';
+import { MIRROR_MASK } from '../render/passLayers';
 
-export function makeWater(sunDir: THREE.Vector3, holes: V2[][] = []) {
+/** `view`: the camera whose reflection this is, whichever pass draws the water first (the AO pre-pass has
+ * a camera of its own with a nearer far plane, main.ts). */
+export function makeWater(sunDir: THREE.Vector3, holes: V2[][] = [], view?: THREE.Camera) {
   const tex = new THREE.DataTexture(waterNormalData!, 512, 512, THREE.RGBAFormat, THREE.UnsignedByteType);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.generateMipmaps = true; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
@@ -31,6 +34,19 @@ export function makeWater(sunDir: THREE.Vector3, holes: V2[][] = []) {
   // pass that draws the water, so the AO normal pre-pass and the main pass each drew the whole mirrored
   // scene again from the same camera (2 × ~1.1 M triangles and ~85 draw calls a frame, for the same image).
   const refl = reflector({ resolutionScale: 0.5, bounces: false });
+  // the mirrored camera draws layer 0 and the reflection's cheaper stand-ins (render/passLayers.ts); three
+  // clones it from the view camera, layers and all
+  const base = refl.reflector as unknown as { getVirtualCamera(c: THREE.Camera): THREE.Camera };
+  const virtualCamera = base.getVirtualCamera.bind(base);
+  base.getVirtualCamera = (c) => { const v = virtualCamera(c); v.layers.mask = MIRROR_MASK; return v; };
+  if (view) {
+    // rendered once a frame, keyed by the view's mirrored camera: three keys the once-a-frame update by the
+    // camera of the pass that asks, so the AO pre-pass's own camera made it render twice a frame
+    const r = refl.reflector as unknown as { updateBefore(f: { camera: THREE.Camera }): unknown; updateReference(f: unknown): unknown };
+    const update = r.updateBefore.bind(r);
+    r.updateBefore = (f) => update(f.camera === view ? f : Object.assign(Object.create(f), { camera: view }));
+    r.updateReference = () => base.getVirtualCamera(view);
+  }
   const dist = positionWorld.sub(cameraPosition).length();
   refl.uvNode = refl.uvNode!.add(nWorld.xz.mul(float(0.25).div(dist.add(8))).mul(4));
   const deep = vec3(0.012, 0.022, 0.018);
