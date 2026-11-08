@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
   UNDRAWN_LAYER,
-  createTerrain, defaultTerrain, buildTerrain, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
+  createTerrain, defaultTerrain, buildTerrain, nearGrid, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
   ISLAND, MOAT_OUTER, BRIDGE_END, sample, heightAt, hedgerowLines, fieldAt, streamLine, farmland,
   islandWalkable, footDist, moatSigned, COURT_BED, type Terrain,
 } from '../src/world/terrain';
@@ -222,6 +222,16 @@ describe('meshes', () => {
     let up = 0, tot = 0; const n = corridor.geometry.attributes.normal;
     for (let i = 0; i < n.count; i++) { const col = i % 29; if (col < 2 || col > 26) continue; tot++; if (n.getY(i) > 0.3) up++; }
     expect(up / tot).toBeGreaterThan(0.99);
+  });
+
+  // nearGrid is buildTerrain's near grid on its own (the whole-castle ground checks read it): the same mesh
+  it('gives the near grid alone exactly as buildTerrain lays it, holes and all', () => {
+    const holes: V2[][] = [[[0, 0], [30, 0], [30, 30], [0, 30]]], o = { nearSeg: 40, farRings: 12, farSegs: 48, holes };
+    const whole = (buildTerrain(new THREE.MeshBasicMaterial(), T, o).getObjectByName('terrain-near') as THREE.Mesh).geometry, alone = nearGrid(T, o);
+    expect(Object.keys(alone.attributes).sort()).toEqual(Object.keys(whole.attributes).sort());
+    for (const k of Object.keys(whole.attributes)) expect(alone.getAttribute(k).array).toEqual(whole.getAttribute(k).array);
+    expect(alone.index!.array).toEqual(whole.index!.array);
+    expect(alone.index!.count).toBeLessThan(nearGrid(T, { nearSeg: 40 }).index!.count); // the hole is cut
   });
 
   // The near and far meshes are drawn as tiles so frustum culling can skip ground out of view: the same
