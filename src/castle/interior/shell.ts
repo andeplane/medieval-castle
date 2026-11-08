@@ -21,6 +21,8 @@ import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 import { STAIR_SLIT } from '../openings';
 import { PAVE_Y } from '../paving';
 import { buildTorchHolder, type TorchHolder } from './torch';
+import { CAVE_ZONE } from './caves';
+import { buildCaves, type CavePortal } from './caveGeom';
 
 type V3 = [number, number, number];
 export interface ShellGroup { key: string; zone: string; floor: number; B: Builder; rooms: string[] }
@@ -141,7 +143,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   for (const r of P.rooms) makeEdges(r.id);
 
   // ------------------------------------------------ doors
-  for (const d of P.doors) door(d);
+  // the caves' natural openings are no doorways: the rock runs on through them (caveGeom.ts)
+  const natural = new Set(P.caves?.openings ?? []);
+  for (const d of P.doors) if (!natural.has(d.id)) door(d);
 
   // ------------------------------------------------ windows → embrasures
   let nWin = 0, skipped = 0;
@@ -155,6 +159,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   for (const r of P.rooms) {
     const g = groupOf(r); g.rooms.push(r.id);
     if (r.zone === 'tunnel' && !P.round[r.id]) { tunnelRoom(g.B, r); tunnelCarve(r); continue; }
+    // a cave room is built with the whole cave below; anything of the castle in it (wall feet, plinths
+    // under the ground at the doorways) is carved away, 0.1 m on into the wall behind its face
+    if (r.zone === CAVE_ZONE) { carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.7, r.y1 + 0.05, BEHIND)); continue; }
     cell(g.B, r);
     carveVols.push(prismVolume(outline.get(r.id)!, r.y0 - 0.02, r.y1 + 0.02, BEHIND));
   }
@@ -164,6 +171,18 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   // ------------------------------------------------ exterior clean-up volumes
   courtyardPlinth(carveVols);
   const groundHoles: GroundHoles = P.sallyPort ? portal(ext, P, deps, carveVols) : { terrain: [], water: [] };
+  if (P.caves) {
+    const cave = P.rooms.find((r) => r.zone === CAVE_ZONE)!;
+    const portals: CavePortal[] = [];
+    for (const d of P.doors) {
+      const k = d.spaces.findIndex((s) => room.get(s)?.zone === CAVE_ZONE);
+      if (k < 0 || natural.has(d.id)) continue;
+      portals.push({ door: d, clear: doorOutlines(d, P.rise[d.id]).clear, cave: k as 0 | 1 });
+    }
+    buildCaves(groupOf(cave).B, P.caves, P.seed, portals);
+    // the moat's water plane runs on under the island at y 0: none in a cave room that rises near it
+    for (const r of P.rooms) if (r.zone === CAVE_ZONE && r.y1 > -0.5) groundHoles.water.push(outline.get(r.id)!);
+  }
 
   return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped, embrasures, groundHoles };
 

@@ -1,12 +1,13 @@
 // Interior entry point: plan → shell → carve the exterior → meshes per visibility group.
 // Call between buildCastle() and builder.build(): the exterior bins are carved in place.
 import * as THREE from 'three/webgpu';
-import type { Builder, MatKey } from '../builder';
+import type { Builder, MatKey, BinKey } from '../builder';
 import type { InteriorGroup } from './types';
 import { planInterior, stairOpts, type PlanX } from './plan';
 import { stairCollisionRamp } from './stairs';
 import { buildShell, type GroundHoles, type ShellDeps } from './shell';
 import { carve } from './carve';
+import { caveRampSoups } from './caveGeom';
 
 export interface InteriorResult {
   plan: PlanX;
@@ -25,7 +26,7 @@ export interface InteriorResult {
 
 export interface InteriorDeps extends ShellDeps { plan?: PlanX }
 
-export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Builder, deps: InteriorDeps = {}): InteriorResult {
+export function buildInterior(materials: Record<MatKey, THREE.Material> & Partial<Record<BinKey, THREE.Material>>, ext: Builder, deps: InteriorDeps = {}): InteriorResult {
   const plan = deps.plan ?? planInterior();
   const shell = buildShell(plan, ext, deps);
   const t0 = performance.now();
@@ -40,7 +41,7 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
     const object = new THREE.Group();
     object.name = `interior:${g.key}`;
     const all: number[] = [];
-    for (const k of Object.keys(g.B.bins) as MatKey[]) {
+    for (const k of Object.keys(g.B.bins) as BinKey[]) {
       const b = g.B.bins[k];
       if (!b.pos.length) continue;
       const geo = new THREE.BufferGeometry();
@@ -48,13 +49,13 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
       geo.computeBoundingSphere();
-      const m = new THREE.Mesh(geo, materials[k]);
+      const m = new THREE.Mesh(geo, materials[k] ?? materials.old);
       m.name = `interior-${g.key}-${k}`;
-      m.castShadow = k !== 'glass' && k !== 'void';
+      m.castShadow = k !== 'glass' && k !== 'void' && k !== 'pool' && k !== 'glow';
       m.receiveShadow = true;
       object.add(m);
       triangles += b.pos.length / 9;
-      if (k !== 'glass') for (const v of b.pos) all.push(v);
+      if (k !== 'glass' && k !== 'pool' && k !== 'glow') for (const v of b.pos) all.push(v); // walk on the pool's bed, through the fungi
     }
     const bounds = new THREE.Box3().setFromObject(object);
     groups.push({ key: g.key, zone: g.zone, floor: g.floor, object, bounds, rooms: g.rooms });
@@ -67,6 +68,13 @@ export function buildInterior(materials: Record<MatKey, THREE.Material>, ext: Bu
     const ramp = stairCollisionRamp(s, stairOpts(plan, s));
     if (ramp) { ramp.name = `ramp:${s.id}`; collision.push(ramp); }
   }
+  // the caves' rough steps: a walking ramp over their nosings (caveGeom.ts)
+  if (plan.caves) caveRampSoups(plan.caves).forEach((soup, i) => {
+    const ramp = new THREE.BufferGeometry();
+    ramp.setAttribute('position', new THREE.Float32BufferAttribute(soup, 3));
+    ramp.name = `ramp:cave-${i}`;
+    collision.push(ramp);
+  });
   return { plan, groups, collision, triangles, groundHoles: shell.groundHoles, stats: { windows: shell.windows, windowsSkipped: shell.skipped, carved: cut.removed, carveMs: Math.round(carveMs) } };
 }
 

@@ -6,7 +6,7 @@
 import * as THREE from 'three/webgpu';
 import {
   texture, uv, positionWorld, normalWorld, mix, vec2, vec3, vec4, float, int, color, smoothstep, normalMap, clamp, fract, floor, round, abs, min, max, sin, cos, time, fwidth,
-  positionLocal, instanceIndex, positionView, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If,
+  positionLocal, instanceIndex, positionView, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If, bumpMap, pow,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import { LITHS, LITH_DETAIL, DETAIL_TILE, RUBBLE, ASHLAR, DRESSED, COBBLES, FLAGS, type TexSet } from './texgen';
@@ -201,6 +201,8 @@ export interface Materials {
   slate: THREE.MeshStandardNodeMaterial; lead: THREE.MeshStandardNodeMaterial; wood: THREE.MeshStandardNodeMaterial;
   iron: THREE.MeshStandardNodeMaterial; void: THREE.MeshStandardNodeMaterial; glass: THREE.MeshStandardNodeMaterial;
   pave: THREE.MeshStandardNodeMaterial; terrain: THREE.MeshStandardNodeMaterial; macro: THREE.DataTexture;
+  /** The natural caves (castle/interior/caveGeom.ts): bare rock, the pool's still water, glowing fungi. */
+  rock: THREE.MeshStandardNodeMaterial; pool: THREE.MeshStandardNodeMaterial; glow: THREE.MeshStandardNodeMaterial;
 }
 
 export async function makeMaterials(): Promise<Materials> {
@@ -363,7 +365,7 @@ export async function makeMaterials(): Promise<Materials> {
   const terrain = makeTerrainMaterial(T.ground as unknown as GroundData, macro);
   const pave = paving(ts('cobbles'), ts('flags'), pavingPlan(), macro, detail);
 
-  return { old, new: nw, trim, slate: slateM, lead, wood, iron, void: voidM, glass, pave, terrain, macro };
+  return { old, new: nw, trim, slate: slateM, lead, wood, iron, void: voidM, glass, pave, terrain, macro, ...caveMaterials(macro, detail) };
 }
 
 /** Distance (m) from a world point (x, z) to the segment a–b. */
@@ -484,3 +486,37 @@ export function windOffset(strength = 0.15) {
 }
 
 export { abs };
+
+/**
+ * The caves' materials. Rock: no masonry, so no uvs: the macro noise and the detail grain projected on
+ * the three world planes (triplanar), as a dark, damp grey-brown limestone with strata, iron staining,
+ * pale calcite runs down the walls and a bump from the same noise. Pool: still black water that takes
+ * only the highlights of the fires. Glow: the fungi's own cold light (emissive; they light nothing).
+ */
+function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
+  const p = positionWorld, an = abs(normalWorld);
+  const w = pow(an, vec3(4)), wn = w.div(w.x.add(w.y).add(w.z));
+  const tri = (s: number) => texture(macro, p.zy.mul(s)).mul(wn.x).add(texture(macro, p.xz.mul(s)).mul(wn.y)).add(texture(macro, p.xy.mul(s)).mul(wn.z));
+  const big = tri(1 / 9), mid = tri(1 / 2.3), grain = texture(detail, p.xz.mul(1.1)).r.mul(wn.y).add(texture(detail, p.zy.mul(1.1)).r.mul(wn.x)).add(texture(detail, p.xy.mul(1.1)).r.mul(wn.z));
+  const rock = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
+  rock.name = 'cave-rock';
+  // strata: gently wavy beds a few decimetres thick
+  const bed = sin(p.y.mul(5.3).add(big.r.mul(6)).add(mid.g.mul(1.5))).mul(0.5).add(0.5);
+  let col = mix(vec3(0.25, 0.235, 0.21), vec3(0.36, 0.34, 0.305), big.g).mul(float(0.8).add(bed.mul(0.25))).mul(float(0.82).add(mid.r.mul(0.36)));
+  const iron = smoothstep(0.62, 0.8, big.b).mul(0.6);
+  col = mix(col, col.mul(vec3(1.25, 0.92, 0.66)), iron);
+  // calcite: pale runs down the upright walls, broken up by the grain
+  const run = smoothstep(0.7, 0.85, texture(macro, vec2(p.x.add(p.z).mul(0.6), p.y.mul(0.05))).a).mul(float(1).sub(an.y));
+  col = mix(col, vec3(0.55, 0.54, 0.5), run.mul(0.55));
+  col = col.mul(float(0.88).add(grain.mul(0.24)));
+  rock.colorNode = col;
+  // damp: wetter, shinier low down and on the floors
+  rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).sub(run.mul(0.25)).clamp(0.4, 1);
+  rock.normalNode = bumpMap(big.r.mul(0.6).add(mid.g.mul(0.3)).add(grain.mul(0.06)), float(1.2));
+  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x06090b, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.86 });
+  pool.name = 'cave-pool';
+  const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
+  glow.name = 'cave-glow';
+  glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(1.4);
+  return { rock, pool, glow };
+}
