@@ -291,15 +291,16 @@ export interface ExposureCfg {
   strength: number;    // 0..1: how much of a luminance change exposure compensates
   maxStops: number;    // ceiling above base (interiors)
   deepStops: number;   // ceiling underground
+  minInside: number;   // floor indoors (stops, ≤ 0): the eye closes a little next to a fire
   tauDark: number;     // s, adapting to a darker scene (exposure rising)
   tauBright: number;   // s, adapting to a brighter scene
 }
-export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -3.0, strength: 0.85, maxStops: 2.5, deepStops: 3.2, tauDark: 1.4, tauBright: 0.6 };
+export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -3.0, strength: 0.85, maxStops: 2.5, deepStops: 3.2, minInside: -1, tauDark: 1.4, tauBright: 0.6 };
 
 /** Target exposure in stops above `base` for a measured mean log2 luminance. */
-export function targetStops(meanLog2: number, deep: boolean, cfg = EXPOSURE) {
+export function targetStops(meanLog2: number, deep: boolean, cfg = EXPOSURE, inside = false) {
   const s = (cfg.refLog2 - meanLog2) * cfg.strength;
-  return Math.max(0, Math.min(deep ? cfg.deepStops : cfg.maxStops, s));
+  return Math.max(inside ? cfg.minInside : 0, Math.min(deep ? cfg.deepStops : cfg.maxStops, s));
 }
 
 /** One step of exponential adaptation in log space; `stops` is the current offset above base. */
@@ -469,8 +470,8 @@ export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, grow = 0.32): { pol
 /** A world box cut into cells; `data` holds room index + 1 per cell (0 = no room), x fastest, then y, then z. */
 export interface RoomGrid { origin: V3; cell: V3; size: [number, number, number]; data: Float32Array }
 
-/** An empty grid over the rooms' bounds (+ `pad` m), `cell` metres per cell. */
-export function roomGridFor(rooms: RoomSpec[], cell: V3 = [0.5, 1, 0.5], pad = 2): RoomGrid {
+/** An empty grid over the rooms' bounds (+ `pad` m, more than fillRoomGrid reaches, so its edge stays empty), `cell` metres per cell. */
+export function roomGridFor(rooms: RoomSpec[], cell: V3 = [0.5, 1, 0.5], pad = 3): RoomGrid {
   if (!rooms.length) return { origin: [0, 0, 0], cell, size: [1, 1, 1], data: new Float32Array(1) };
   const xs = rooms.flatMap((r) => r.poly.map((p) => p[0])), zs = rooms.flatMap((r) => r.poly.map((p) => p[1]));
   const lo: V3 = [Math.min(...xs) - pad, Math.min(...rooms.map((r) => r.y0)) - pad, Math.min(...zs) - pad];

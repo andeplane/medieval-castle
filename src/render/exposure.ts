@@ -1,8 +1,8 @@
 // Eye adaptation (threejs-postprocessing / post-processing.md: exposure is the camera). Every few frames
 // the linear HDR scene colour (before tone mapping) is reduced to a 32×18 grid of log-luminance taps,
 // read back asynchronously, centre-weighted and averaged; exposure then eases towards a target in log
-// space (darker scenes ~1.4 s, brighter ~0.6 s). Exposure never drops below the exterior's 0.72 and
-// rises at most 2.5 stops in rooms, ~3.2 underground. ?exposure=N fixes it; ?shot sets it directly
+// space (darker scenes ~1.4 s, brighter ~0.6 s). Outdoors exposure never drops below 0.72; indoors it
+// may close one stop more beside a fire (EXPOSURE.minInside), and it rises at most 2.5 stops in rooms, ~3.2 underground. ?exposure=N fixes it; ?shot sets it directly
 // from where the camera is (inside / underground / outside) so captures are deterministic.
 // The controller takes its collaborators (the luminance reader, the exposure target) as interfaces;
 // gpuLumaReader is the real reader.
@@ -37,7 +37,7 @@ export function createAutoExposure(o: { target: ExposureTarget; reader: LumaRead
     update(dt: number, where: Where) {
       if (o.fixed == null && o.shot) state.stops = where.deep ? SHOT_STOPS.deep : where.inside ? SHOT_STOPS.inside : 0;
       else if (o.fixed == null) {
-        if (measured !== null) { state.meanLog2 = measured; state.target = targetStops(measured, where.deep, cfg); }
+        if (measured !== null) { state.meanLog2 = measured; state.target = targetStops(measured, where.deep, cfg, where.inside); }
         state.stops = adaptStops(state.stops, state.target, dt, cfg);
       }
       apply();

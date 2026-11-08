@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   EXPOSURE, adaptStops, apertureFrame, apertureRadiance, ceilingSkins, doorsToApertures, inPoly, meanLog2, nearestRoom, packTable, polyArea, polyDist,
-  passageSkins, polyPerimeter, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
+  passageSkins, polyPerimeter, roomGridFor, fillRoomGrid, gridRoom, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
 } from '../src/render/interiorMath';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -140,6 +140,10 @@ describe('exposure maths', () => {
     expect(targetStops(-20, true)).toBe(EXPOSURE.deepStops);
     const mid = targetStops(EXPOSURE.refLog2 - 1, false);
     expect(mid).toBeCloseTo(EXPOSURE.strength);
+    // indoors the eye may also close a little below the exterior's exposure, next to a fire
+    expect(targetStops(0, false, EXPOSURE, true)).toBe(EXPOSURE.minInside);
+    expect(targetStops(EXPOSURE.refLog2 + 0.5, false, EXPOSURE, true)).toBeCloseTo(-0.5 * EXPOSURE.strength);
+    expect(targetStops(0, true, EXPOSURE, false)).toBe(0); // outdoors: never below 0.72
   });
   test('adaptation is exponential, slower into the dark than into the light', () => {
     const up = adaptStops(0, 2, 0.5), down = adaptStops(2, 0, 0.5);
@@ -219,5 +223,22 @@ describe('bake helpers', () => {
     const [c] = ceilingSkins([hall], 0.5, 0.2);
     expect(c.y).toBe(6.5);
     expect(c.poly[0][0]).toBeLessThan(0);
+  });
+});
+
+describe('room grid', () => {
+  test('a point in a room finds it; a point in a doorway or reveal finds the room beside it', () => {
+    const g = fillRoomGrid(roomGridFor(rooms), rooms);
+    expect(gridRoom(g, [5, 3, 4])).toBe(0);
+    expect(gridRoom(g, [16, 3, 4])).toBe(1);
+    expect(gridRoom(g, [5, 9, 4])).toBe(2);
+    // the 1.4 m wall between the hall (x < 12) and the chamber (x > 13.4): its two halves
+    expect(gridRoom(g, [12.3, 1, 5])).toBe(0);
+    expect(gridRoom(g, [13.2, 1, 5])).toBe(1);
+    expect(gridRoom(g, [-40, 1, 5])).toBe(-1); // outside the grid: clamped to its empty edge
+    expect(g.size.every((n) => n >= 1)).toBe(true);
+    const none = roomGridFor([]);
+    expect(none.size).toEqual([1, 1, 1]);
+    expect(gridRoom(fillRoomGrid(none, []), [0, 0, 0])).toBe(-1);
   });
 });
