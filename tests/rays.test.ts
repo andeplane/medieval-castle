@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import * as T3 from 'three';
 import { MeshBVH, SAH } from 'three-mesh-bvh';
-import { rayIndex } from './helpers/rays';
+import { rayIndex, soupTris } from './helpers/rays';
 import { mulberry32 } from '../src/core/rng';
 
 type V3 = [number, number, number];
@@ -31,18 +31,18 @@ describe('ray index', () => {
     const g = new T3.BufferGeometry(); g.setAttribute('position', new T3.BufferAttribute(a, 3));
     const bvh = new MeshBVH(g, { strategy: SAH }), ray = new T3.Ray();
     let n = 0, hits = 0;
-    const check = (o: V3, to: V3, near: number, far: number) => {
+    const check = (o: V3, to: V3, near: number, far: number, side: T3.Side = T3.DoubleSide) => {
       const d = new T3.Vector3(to[0] - o[0], to[1] - o[1], to[2] - o[2]);
       if (d.length() < 1e-9) return;
       ray.origin.set(...o); ray.direction.copy(d.normalize());
       const want = tris.some((t) => {
         A.set(...t.a); B.set(...t.b); C.set(...t.c);
-        if (!ray.intersectTriangle(A, B, C, false, P)) return false;
+        if (!(side === T3.BackSide ? ray.intersectTriangle(C, B, A, true, P) : ray.intersectTriangle(A, B, C, side !== T3.DoubleSide, P))) return false;
         const dd = ray.origin.distanceTo(P);
         return dd >= near && dd <= far;
       });
-      expect(idx.hits(ray, near, far), `${o} → ${to} [${near}, ${far}]`).toBe(want);
-      if (generic) expect(bvh.raycastFirst(ray, T3.DoubleSide, near, far) !== null, `three-mesh-bvh ${o} → ${to}`).toBe(want);
+      expect(idx.hits(ray, near, far, side), `${o} → ${to} [${near}, ${far}] side ${side}`).toBe(want);
+      if (generic) expect(bvh.raycastFirst(ray, side, near, far) !== null, `three-mesh-bvh ${o} → ${to} side ${side}`).toBe(want);
       n++; if (want) hits++;
     };
     const A = new T3.Vector3(), B = new T3.Vector3(), C = new T3.Vector3(), P = new T3.Vector3();
@@ -62,10 +62,14 @@ describe('ray index', () => {
       check(o, to, 0, dist - 0.02); // ends just short of what it aims at
       check(o, to, 0, dist + 1e-7);
       check(o, to, dist * 0.5, dist + 3);
+      check(o, to, 0.01, 600, T3.FrontSide);
+      check(o, to, 0.01, 600, T3.BackSide);
     }
-    expect(n).toBeGreaterThan(7_500);
+    expect(n).toBeGreaterThan(11_000);
     expect(hits).toBeGreaterThan(n / 4);
     expect(n - hits).toBeGreaterThan(n / 10);
     expect(rayIndex([]).hits(ray, 0, 1e9)).toBe(false);
+    // a flat soup reads as the same triangles
+    expect(soupTris([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])).toEqual([{ a: [0, 1, 2], b: [3, 4, 5], c: [6, 7, 8] }]);
   });
 });

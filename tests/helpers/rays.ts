@@ -1,7 +1,8 @@
 // Any-hit ray queries over a triangle soup, for the whole-castle checks that cast hundreds of thousands of
-// rays (tests/world.test.ts). The same answer as three-mesh-bvh's `raycastFirst(ray, DoubleSide, near, far)
-// !== null`: each candidate triangle is tested with three's own Ray.intersectTriangle (no backface culling)
-// and kept when the distance from the ray's origin to the hit is within [near, far], as three-mesh-bvh does.
+// rays (tests/world.test.ts and others). The same answer as three-mesh-bvh's `raycastFirst(ray, side, near,
+// far) !== null`: each candidate triangle is tested with three's own Ray.intersectTriangle (culling back
+// faces for FrontSide, front faces for BackSide, as three-mesh-bvh does) and kept when the distance from the
+// ray's origin to the hit is within [near, far].
 // Only the tree is ours: one flat loop with the box tests inline, which v8 coverage slows far less than the
 // library's many small calls (4× slower under coverage, against ~1.3× here). Boxes are padded by EPS, so a
 // box test never drops a triangle the exact test would hit.
@@ -9,6 +10,11 @@ import * as T3 from 'three';
 
 const EPS = 1e-6, LEAF = 8;
 type V3 = ArrayLike<number>;
+
+/** A flat position soup (x, y, z per vertex, three vertices per triangle) as triangles for rayIndex. */
+export const soupTris = (pos: ArrayLike<number>) => Array.from({ length: Math.floor(pos.length / 9) }, (_, i) => ({
+  a: [pos[i * 9], pos[i * 9 + 1], pos[i * 9 + 2]], b: [pos[i * 9 + 3], pos[i * 9 + 4], pos[i * 9 + 5]], c: [pos[i * 9 + 6], pos[i * 9 + 7], pos[i * 9 + 8]],
+}));
 
 export function rayIndex(tris: { a: V3; b: V3; c: V3 }[]) {
   const n = tris.length, pos = new Float32Array(n * 9), cen = new Float64Array(n * 3);
@@ -49,8 +55,8 @@ export function rayIndex(tris: { a: V3; b: V3; c: V3 }[]) {
   const B = Float64Array.from(box), I = Int32Array.from(info), stack = new Int32Array(1 << 16);
   const a = new T3.Vector3(), b = new T3.Vector3(), c = new T3.Vector3(), hit = new T3.Vector3();
   return {
-    /** Does the ray meet a triangle (either face) at a distance in [near, far]? */
-    hits(ray: T3.Ray, near: number, far: number): boolean {
+    /** Does the ray meet a triangle (from `side`: its front, its back or either) at a distance in [near, far]? */
+    hits(ray: T3.Ray, near: number, far: number, side: T3.Side = T3.DoubleSide): boolean {
       if (!n) return false;
       const ox = ray.origin.x, oy = ray.origin.y, oz = ray.origin.z, dx = ray.direction.x, dy = ray.direction.y, dz = ray.direction.z;
       const ix = 1 / dx, iy = 1 / dy, iz = 1 / dz, lo = near - EPS, hi = far + EPS;
@@ -80,7 +86,7 @@ export function rayIndex(tris: { a: V3; b: V3; c: V3 }[]) {
         for (let i = first; i < first + count; i++) {
           const p = order[i] * 9;
           a.set(pos[p], pos[p + 1], pos[p + 2]); b.set(pos[p + 3], pos[p + 4], pos[p + 5]); c.set(pos[p + 6], pos[p + 7], pos[p + 8]);
-          if (ray.intersectTriangle(a, b, c, false, hit) === null) continue;
+          if ((side === T3.BackSide ? ray.intersectTriangle(c, b, a, true, hit) : ray.intersectTriangle(a, b, c, side !== T3.DoubleSide, hit)) === null) continue;
           const d = ray.origin.distanceTo(hit);
           if (d >= near && d <= far) return true;
         }
