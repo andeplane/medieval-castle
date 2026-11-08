@@ -30,14 +30,22 @@ export interface ShellResult {
   groups: ShellGroup[]; carve: Volume[]; windows: number; skipped: number;
   /** Door openings that could not be cut into a room face (`door@room`); empty when the plan is sound. */
   droppedHoles: string[];
-  /** The exterior opening behind each embrasure built: room, outward plan normal, centre on the face, sill. */
-  embrasures: { room: string; dir: V2; mid: V2; s0: number; s1: number; yb: number }[];
+  /** The exterior opening behind each embrasure built: room, outward plan normal, centre on the face, sill,
+   * and where the niche opens in the room's wall (`face`). */
+  embrasures: { room: string; dir: V2; mid: V2; s0: number; s1: number; yb: number; face: WindowFace }[];
   /** Where the outdoor ground must not be drawn although world/terrain.ts groundHole keeps it: the
    * sally port's last flight, which rises out of the outer bank into its housing (terrain), and from where
    * its crown is above the water to the end (water: the moat plane runs on under the bank). */
   groundHoles: GroundHoles;
 }
 export interface GroundHoles { terrain: V2[][]; water: V2[][] }
+/**
+ * Where a window's embrasure opens in its room's wall, as the shell cut it: `c` the middle of the hole on
+ * the room face (plan x/z), `n` the face's normal into the room, `t` along the face, `w` the hole's width
+ * there, from `y0` (bottom) up to `ys` where its head springs and `y1` its crown. `slit` for the narrow
+ * ones (arrow slits, loops: exterior opening under 0.5 m). Read-only for the furniture (props/dress.ts).
+ */
+export interface WindowFace { room: string; c: V2; n: V2; t: V2; w: number; y0: number; ys: number; y1: number; slit: boolean }
 export interface ShellDeps {
   heightAt?: (x: number, z: number) => number;
   /** Wall torches placed by render/interiorFire.ts wallTorches: each holder is built into its room's group. */
@@ -152,7 +160,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
   const embrasures: ShellResult['embrasures'] = [];
   for (const [id, ws] of winFor) {
     const r = room.get(id)!, g = groupOf(r);
-    for (const w of ws) { if (embrasure(g.B, r, w)) { nWin++; embrasures.push({ room: id, dir: w.dir, mid: w.mid, s0: w.s0, s1: w.s1, yb: w.yb }); } else skipped++; }
+    for (const w of ws) { const face = embrasure(g.B, r, w); if (face) { nWin++; embrasures.push({ room: id, dir: w.dir, mid: w.mid, s0: w.s0, s1: w.s1, yb: w.yb, face }); } else skipped++; }
   }
 
   // ------------------------------------------------ room cells
@@ -344,13 +352,13 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     void top; void clear;
   }
 
-  function embrasure(B: Builder, r: RoomSpec, w: Win): boolean {
+  function embrasure(B: Builder, r: RoomSpec, w: Win): WindowFace | null {
     // the room face behind the window
     const e = edgeFacing(r.id, w);
-    if (!e) return false;
+    if (!e) return null;
     const T = dot(sub(e.a, w.mid), scale(w.dir, -1)); // depth of the room face behind the exterior plane
     const back = w.curved ? -0.1 : w.depth;           // depth of the niche's back plane
-    if (T - back < 0.15) return false;
+    if (T - back < 0.15) return null;
     const old = P.phase[r.id] === 'old';
     const head: Head = old ? 'round' : 'segmental';
     const sp = nicheSplay(T - back);
@@ -367,17 +375,17 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const W = (s: number, y: number, dd: number): V3 => at(w.f, s, y, -dd);
     const ptsF = frontO.map(([s, y]) => toEdge(e, W(s, y, T)));
     const sMin = Math.min(...ptsF.map((p) => p[0])), sMax = Math.max(...ptsF.map((p) => p[0]));
-    if (sMin < 0.12 || sMax > e.L - 0.12 || low < r.y0 - 1e-6 || yfT > r.y1) return false;
+    if (sMin < 0.12 || sMax > e.L - 0.12 || low < r.y0 - 1e-6 || yfT > r.y1) return null;
     for (const h of e.holes) {
       const hs = h.pts.map((p) => p[0]), hy = h.pts.map((p) => p[1]);
       const above = slit && (Math.min(...hy) > yfT + 0.15 || Math.max(...hy) < low - 0.15); // a spiral's slits stack on one strip
-      if (!above && Math.min(...hs) < sMax + 0.15 && Math.max(...hs) > sMin - 0.15) return false;
+      if (!above && Math.min(...hs) < sMax + 0.15 && Math.max(...hs) > sMin - 0.15) return null;
     }
     // the niche must not run into another space (stair shafts, the room next door)
     const foot: V2[] = [[cx - wf / 2, T], [cx + wf / 2, T], [cx + wb / 2, back], [cx - wb / 2, back]].map(([s, dd]) => { const p = W(s, 0, dd); return [p[0], p[2]] as V2; });
     for (const o of P.rooms) {
       if (o.id === r.id || o.y1 <= ybB || o.y0 >= yfT) continue;
-      if (convexOverlap(foot, outline.get(o.id)!, 0.05)) return false;
+      if (convexOverlap(foot, outline.get(o.id)!, 0.05)) return null;
     }
     e.holes.push({ pts: ptsF, kind: 'window' });
     // reveals (index-matched outlines)
@@ -409,7 +417,9 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       if (w.glass) B.planar('glass', fi, rectPts(w.s0, w.s1, w.yb, w.yt), -0.098);
       carveVols.push(extrudeVolume([w.f.o[0], w.f.o[2]], [w.f.r[0], w.f.r[2]], [w.f.n[0], w.f.n[2]], rectPts(w.s0, w.s1, w.yb, w.yt), -0.8, w.glass ? 0.097 : 0.14));
     }
-    return true;
+    // the hole in the room face, as cut (frontO): its middle on the edge, its width and heights
+    const u = norm(sub(e.b, e.a)), sc = (sMin + sMax) / 2;
+    return { room: r.id, c: add(e.a, scale(u, sc)), n: e.n, t: u, w: sMax - sMin, y0: low, ys: yfT - riseF, y1: yfT, slit: w.s1 - w.s0 < 0.5 };
   }
 
   function edgeFacing(id: string, w: Win): Edge | null {

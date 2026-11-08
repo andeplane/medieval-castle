@@ -163,7 +163,7 @@ async function main() {
   if (interior && params.get('furniture') === '1') {
     const { workerJobs, poolSize } = await import('./props/furnishWorker');
     const worker = () => new Worker(new URL('./props/furnish.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerPort;
-    furnitureJobs = workerJobs(worker, poolSize(navigator.hardwareConcurrency), { plan: interior.plan, maxRooms: interiorLight.maxRooms });
+    furnitureJobs = workerJobs(worker, poolSize(navigator.hardwareConcurrency), { plan: interior.plan, maxRooms: interiorLight.maxRooms, windows: interior.windows });
     propTextures = furnitureJobs.textures();
   }
   let course: { info: CourseInfo; object: THREE.Object3D } | null = null;

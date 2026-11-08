@@ -5,7 +5,7 @@ import type { Builder, MatKey, BinKey } from '../builder';
 import type { InteriorGroup } from './types';
 import { planInterior, stairOpts, type PlanX } from './plan';
 import { stairCollisionRamp } from './stairs';
-import { buildShell, type GroundHoles, type ShellDeps } from './shell';
+import { buildShell, type GroundHoles, type ShellDeps, type WindowFace } from './shell';
 import { carve } from './carve';
 import { caveRampSoups } from './caveGeom';
 
@@ -21,6 +21,8 @@ export interface InteriorResult {
   triangles: number;
   /** Outdoor ground to leave out beyond world/terrain.ts groundHole (main.ts: terrain, water, its collider). */
   groundHoles: GroundHoles;
+  /** Where each window's embrasure opens into its room (shell.ts WindowFace): the furniture hangs shutters there. */
+  windows: WindowFace[];
   stats: { windows: number; windowsSkipped: number; carved: number; carveMs: number };
 }
 
@@ -75,8 +77,9 @@ export function buildInterior(materials: Record<MatKey, THREE.Material> & Partia
     ramp.name = `ramp:${id}`;
     collision.push(ramp);
   });
-  return { plan, groups, collision, triangles, groundHoles: shell.groundHoles, stats: { windows: shell.windows, windowsSkipped: shell.skipped, carved: cut.removed, carveMs: Math.round(carveMs) } };
+  return { plan, groups, collision, triangles, groundHoles: shell.groundHoles, windows: shell.embrasures.map((e) => e.face), stats: { windows: shell.windows, windowsSkipped: shell.skipped, carved: cut.removed, carveMs: Math.round(carveMs) } };
 }
 
 export { planInterior, validatePlan } from './plan';
 export type { PlanX } from './plan';
+export type { WindowFace } from './shell';
