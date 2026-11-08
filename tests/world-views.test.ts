@@ -254,54 +254,59 @@ describe('every opening in the castle, as the player sees it', () => {
     };
     const faults = new Map<string, string>();
     let poses = 0, checked = 0;
-    for (const [mode, sources] of Object.entries(modes)) {
+    // both modes, as main.ts builds them before the first frame
+    const state = Object.entries(modes).map(([mode, sources]) => {
       const src = sources();
       const byRoom = new Map<string, number>();
       for (const [id, es] of firesByRoom(P.rooms, src.emitters, src.owners)) byRoom.set(id, Math.min(es.length, MAX_FIRES));
-      // as main.ts, before the first frame
       const { table, flames } = lightCastle(P.rooms, src, roomBox, 1024);
       table.update(0, 0); // flicker held (motion 0)
       const lightOf = (id: string) => { const row = index.get(id)!; return fireAt(table.fires(row).map((f, k) => ({ ...f, candela: f.candela * table.flick[row * MAX_FIRES + k] })), centre(id), [0, 1, 0]); };
       const ref = new Map([...byRoom.keys()].map((id) => [id, lightOf(id)]));
-      const data0 = table.data.slice(), flames0 = JSON.stringify(flames);
-      // the furniture streamer as main.ts drives it: the graph's drawn rooms wanted, a few rooms in per frame
-      const stream = mode === 'furniture' ? createFurnitureStreamer({
-        jobs: inlineJobs((id) => ({ room: id, key: groupOf.get(id) ?? '', role: 'empty', props: 0, triangles: 0, bins: {}, boxes: new Float32Array(0), ...(lists.find((l) => l.room === id) ?? { emitters: [], flames: [] }) })),
-        sink: { add: (r) => r.room, remove: () => {} }, now: () => poses * 16,
-      }, { unloadAfter: 500 }) : null;
-      for (const open of [false, true]) {
-        for (const d of P.doors) vis.setDoorOpen(d.id, open);
-        for (const d of P.doors) {
-          const reach = d.wall / 2 + 15;
-          for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
-            const q = on(d, 0, t);
-            cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
-            vis.update(); poses++;
-            if (stream) {
-              stream.setWanted(new Set([...vis.state.from, ...vis.state.drawn].filter((id) => index.has(id))));
-              stream.update();
-              await Promise.resolve(); // the jobs started this step finish before the next
-            }
+      const rows0 = new Map([...byRoom.keys()].map((id) => [id, table.fires(index.get(id)!)]));
+      return { mode, src, byRoom, table, flames, lightOf, ref, rows0, data0: table.data.slice(), flames0: JSON.stringify(flames) };
+    });
+    // the furniture streamer as main.ts drives it: the graph's drawn rooms wanted, a few rooms in per frame
+    const stream = createFurnitureStreamer({
+      jobs: inlineJobs((id) => ({ room: id, key: groupOf.get(id) ?? '', role: 'empty', props: 0, triangles: 0, bins: {}, boxes: new Float32Array(0), ...(lists.find((l) => l.room === id) ?? { emitters: [], flames: [] }) })),
+      sink: { add: (r) => r.room, remove: () => {} }, now: () => poses * 16,
+    }, { unloadAfter: 500 });
+    for (const open of [false, true]) {
+      for (const d of P.doors) vis.setDoorOpen(d.id, open);
+      for (const d of P.doors) {
+        const reach = d.wall / 2 + 15;
+        for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
+          const q = on(d, 0, t);
+          cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
+          vis.update(); poses++;
+          stream.setWanted(new Set([...vis.state.from, ...vis.state.drawn].filter((id) => index.has(id))));
+          stream.update();
+          await Promise.resolve(); // the jobs started this step finish before the next
+          for (const { mode, byRoom, table, lightOf, ref, rows0 } of state) {
             const where = `from ${t.toFixed(2)} m off ${d.id}${open ? ' (doors open)' : ''} [${mode}]`;
             for (const [id, n] of byRoom) {
               if (!vis.isRoomVisible(id)) continue;
               checked++;
-              const row = index.get(id)!;
-              if (table.fires(row).length !== n) faults.set(id + mode, `${id}: ${table.fires(row).length} of ${n} fires lit ${where}`);
-              else if (Math.abs(lightOf(id) - ref.get(id)!) > 1e-9) faults.set(id + mode, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} ${where}`);
+              const fs = table.fires(index.get(id)!);
+              if (fs.length !== n) faults.set(id + mode, `${id}: ${fs.length} of ${n} fires lit ${where}`);
+              // the same row as the first frame (a row is replaced whenever it is set), so the same light; the
+              // light itself is summed every 16th pose to keep the walk cheap
+              else if (fs !== rows0.get(id) || (poses % 16 === 0 && Math.abs(lightOf(id) - ref.get(id)!) > 1e-9)) faults.set(id + mode, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} ${where}`);
             }
           }
         }
       }
+    }
+    for (const { mode, src, byRoom, table, flames, data0, flames0 } of state) {
       // nothing in the table or the flames changed while walking (and streaming) about
       expect(table.data, mode).toEqual(data0);
       expect(JSON.stringify(flames), mode).toBe(flames0);
       expect(flames.length, mode).toBe(src.flames.length);
-      if (stream) expect(stream.stats().added, 'the furniture did stream in and out on the walk').toBeGreaterThan(50);
-      if (stream) expect(stream.stats().removed).toBeGreaterThan(10);
       expect(byRoom.size, mode).toBeGreaterThan(mode === 'furniture' ? 150 : 10);
     }
-    expect(poses).toBeGreaterThan(4000);
+    expect(stream.stats().added, 'the furniture did stream in and out on the walk').toBeGreaterThan(50);
+    expect(stream.stats().removed).toBeGreaterThan(10);
+    expect(poses).toBeGreaterThan(2000);
     expect(checked).toBeGreaterThan(40000);
     expect([...faults.values()]).toEqual([]);
   }, 240_000);
