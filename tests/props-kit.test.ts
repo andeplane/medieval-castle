@@ -98,11 +98,11 @@ describe('19th-century pieces', () => {
     }
     expect(makeProp('hooded-hearth', 1).meta.emitters[0].intensity).toBeGreaterThan(makeProp('chimneypiece', 1).meta.emitters[0].intensity);
   });
-  it('takes the textile colour from the variant seed: v % 3 is crimson, green, leather or blue', () => {
+  it('takes the textile colour from the variant seed: v % 6 is the room\'s palette (0 crimson, 1 green, 2 blue with leather seats…)', () => {
     for (const name of ['armchair', 'sofa', 'footstool']) {
       const [a, b, c] = [0, 1, 2].map((v) => clothMean(name, v));
       expect(a[0]).toBeGreaterThan(a[1] * 2); expect(b[1]).toBeGreaterThan(b[0]); expect(c[0]).toBeGreaterThan(c[2]);
-      const a2 = clothMean(name, 3); expect(a2[0]).toBeGreaterThan(a2[1] * 2); // same tone, another variant
+      const a2 = clothMean(name, 6); expect(a2[0]).toBeGreaterThan(a2[1] * 2); // same palette, another variant
     }
     const blue = makeProp('four-poster', 2).mesh.bins.cloth.col;
     expect(blue.filter((_, i) => i % 3 === 2).some((x, i) => x > blue[i * 3] * 2)).toBe(true); // blue hangings
