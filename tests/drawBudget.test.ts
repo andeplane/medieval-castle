@@ -86,6 +86,7 @@ describe('draw calls per frame on WebGPU, from the scene graph', () => {
     const cells = [...sets.active.map((d) => [doors, d.id, d.spaces] as const), ...sets.locked.map((d) => [locked, d.id, d.spaces] as const), [doors, port.id, gate.spaces] as const, ...(port.winch?.room ? [[doors, port.id + ':winch', [port.winch.room, port.winch.room]] as const] : [])];
     show = () => {
       vis.update();
+      doors.lod(cam.position); locked.lod(cam.position); // as main.ts, every frame
       for (const [sys, id, sp] of cells) sys.setVisible(id, vis.isRoomVisible(sp[0]) || vis.isRoomVisible(sp[1]));
       scene.traverse((o) => { (o as THREE.Mesh).onBeforeRender?.(null!, null!, null!, null!, null!, null!); }); // the door batches flush
     };
@@ -135,9 +136,11 @@ describe('draw calls per frame on WebGPU, from the scene graph', () => {
 
   // Triangles (BRIEF: 1–3 M a frame, shadow passes included) at every bookmark, outdoors and in. 2026-11-08:
   // 3.3–3.5 M at the hero and gate views on Anders' Mac; the reflection drew the near terrain and rocks at
-  // full detail and the AO pre-pass drew out to the horizon (render/passLayers.ts, render/aoCamera.ts).
-  // Not built here: vegetation (≈ 0.25 M over the frame at the hero view), 3D stones, flames, water and
-  // furniture (≈ 0.15 M), so the budget for this part leaves them room under 3 M.
+  // full detail and the AO pre-pass drew out to the horizon (render/passLayers.ts, render/aoCamera.ts), and
+  // every door leaf was drawn with its chamfers and nail heads however far (doors.ts DOOR_FAR).
+  // Built here as main.ts builds them: terrain, rocks and ground cover too. Not built: trees, 3D stones,
+  // flames, water and furniture (≈ 0.15–0.5 M over the frame), so the budget for this part leaves them
+  // room under 3 M.
   it('stays within the triangle budget at every bookmark', () => {
     const views = [...VIEWS, ...interiorViews(plan)];
     const rows: string[] = [];

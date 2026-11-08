@@ -95,7 +95,7 @@ export function slab(b: PartBin, poly: P2[], zb: number, zf: number, bev: number
 const rectP = (x0: number, y0: number, x1: number, y1: number): P2[] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
 
 /** Nail / stud head: low pyramid on a face at z, pointing toward dir (±1). */
-function stud(b: PartBin, x: number, y: number, z: number, dir: 1 | -1, a: number, h: number) {
+function studHead(b: PartBin, x: number, y: number, z: number, dir: 1 | -1, a: number, h: number) {
   const tip: V3 = [x, y, z + dir * h];
   const c: V3[] = [[x - a, y - a, z], [x + a, y - a, z], [x + a, y + a, z], [x - a, y + a, z]];
   for (let i = 0; i < 4; i++) {
@@ -160,7 +160,7 @@ const ledgeUV = (y0: number, y1: number, plank: number, uOff: number): UvFn => (
 
 // ---------------------------------------------------------------- leaves
 
-interface PlankOpts { W: number; H: number; top: (x: number) => number; flat: boolean; apexX: number | null; kind: LeafKind; r: Rng }
+interface PlankOpts { W: number; H: number; top: (x: number) => number; flat: boolean; apexX: number | null; kind: LeafKind; r: Rng; far: boolean }
 
 /** Ledges' (y0, y1) pairs for a leaf: bottom, top below the lowest edge of the head, and middles. */
 function ledgeRows(edgeTop: number, kind: LeafKind): [number, number][] {
@@ -188,7 +188,7 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   const { t, ledge: L } = KIND[kind];
   const { zFront: zf, zBack: zb } = leafDepth(kind);
   const boards = boardEdges(W, r, 0.004, kind === 'postern' ? 0.2 : 0.23);
-  const bev = Math.min(0.012, t * 0.15);
+  const bev = o.far ? 0 : Math.min(0.012, t * 0.15);
   const planks = boards.map(() => Math.floor(r() * 6)), vOffs = boards.map(() => r() * 4);
   // whole boards, each shaped to the head
   boards.forEach(([x0, x1], i) => slab(g.wood, underTop(x0, x1, 0, top, o.flat, o.apexX), zb, zf, bev, boardUV(x0, x1, planks[i], vOffs[i])));
@@ -201,7 +201,9 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   const edgeTop = Math.min(top(0.04), top(W - 0.04));
   const rows = ledgeRows(edgeTop, kind);
   const lx0 = 0.04, lx1 = W - lx0;
-  const lb = 0.006;
+  const lb = o.far ? 0 : 0.006;
+  const ib = o.far ? 0 : 1; // iron chamfers (1.5 mm at most) only near
+  const stud = o.far ? () => {} : studHead;
   rows.forEach(([y0, y1], i) => slab(g.wood, rectP(lx0, y0, lx1, y1), zf, zf + L, lb, ledgeUV(y0, y1, (i * 2 + 1) % 6, r() * 3)));
   // braces between ledges, foot on the hinge side (x small), head on the latch side
   const bw = 0.15;
@@ -224,7 +226,7 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   for (const [y0, y1] of strapRows) {
     const yc = (y0 + y1) / 2, hw = sw / 2, tip = sw * 1.4;
     const len = sLen;
-    slab(g.iron, [[0, yc - hw], [len - tip, yc - hw], [len - tip * 0.55, yc - hw * 1.5], [len, yc], [len - tip * 0.55, yc + hw * 1.5], [len - tip, yc + hw]], zs0, zs1, 0.0015);
+    slab(g.iron, [[0, yc - hw], [len - tip, yc - hw], [len - tip * 0.55, yc - hw * 1.5], [len, yc], [len - tip * 0.55, yc + hw * 1.5], [len - tip, yc + hw]], zs0, zs1, 0.0015 * ib);
     slab(g.iron, [[0, yc - hw], [0.02, yc - hw], [0.02, yc + hw], [0, yc + hw]], zs0 - 0.004, zs1, 0); // wrap to the knuckle
     cylY(g.iron, 0, 0, 0.017, yc - hw * 0.95, yc + hw * 0.95, 8);
     for (let x = 0.12; x < len - tip; x += 0.2) stud(g.iron, x, yc, zs1, 1, 0.009, 0.006);
@@ -240,7 +242,7 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
     const bands = rows.map(([y0, y1]) => (y0 + y1) / 2);
     for (const y of bands) {
       const hw = 0.035;
-      slab(g.iron, rectP(0.01, y - hw, W - 0.01, y + hw), zb - 0.006, zb, 0.0015);
+      slab(g.iron, rectP(0.01, y - hw, W - 0.01, y + hw), zb - 0.006, zb, 0.0015 * ib);
       for (const [x0, xb] of boards) stud(g.iron, (x0 + xb) / 2, y, zb - 0.006, -1, 0.016, 0.012);
     }
     // diamond grid of studs between the bands
@@ -269,7 +271,8 @@ function plankLeaf(o: PlankOpts, g: LeafGeom) {
   }
 }
 
-function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeom) {
+function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeom, far: boolean) {
+  const cb = far ? 0 : 0.003;
   const { zFront: zf, zBack: zb } = leafDepth('grille');
   const s = 0.035, h = s / 2, sp = 0.2;
   const zh0 = zf, zh1 = zf + KIND.grille.ledge;
@@ -277,7 +280,7 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
   for (let i = 0; i <= n; i++) {
     const x = h + ((W - 2 * h) * i) / n;
     const yt = Math.min(top(Math.max(0, x - h)), top(Math.min(W, x + h)));
-    slab(g.iron, rectP(x - h, 0, x + h, yt - (i === 0 || i === n ? 0 : 0.01)), zb, zf, 0.003);
+    slab(g.iron, rectP(x - h, 0, x + h, yt - (i === 0 || i === n ? 0 : 0.01)), zb, zf, cb);
   }
   const m = Math.max(2, Math.round((H - 0.1) / sp));
   for (let j = 0; j <= m; j++) {
@@ -285,13 +288,13 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
     let xa = -1, xb = -1;
     for (let x = 0; x <= W + 1e-6; x += 0.005) if (top(x) - h - 0.01 >= y + h) { if (xa < 0) xa = x; xb = x; }
     if (xa < 0 || xb - xa < 0.1) continue;
-    slab(g.iron, rectP(xa, y - h, xb, y + h), zh0, zh1, 0.003);
+    slab(g.iron, rectP(xa, y - h, xb, y + h), zh0, zh1, cb);
   }
   // head bar following the outline
   const k = 18;
   for (let i = 0; i < k; i++) {
     const xa = (W * i) / k, xb = (W * (i + 1)) / k, ya = top(xa), yb = top(xb);
-    slab(g.iron, [[xa, ya - s], [xb, yb - s], [xb, yb], [xa, ya]], zb, zf, 0.003);
+    slab(g.iron, [[xa, ya - s], [xb, yb - s], [xb, yb], [xa, ya]], zb, zf, cb);
   }
   // hinge plates, knuckles and pintles; a drop bolt at the latch side
   for (const yc of [0.25, Math.min(H, top(0)) - 0.25]) {
@@ -303,8 +306,13 @@ function grilleLeaf(W: number, H: number, top: (x: number) => number, g: LeafGeo
   slab(g.iron, rectP(W - 0.1, 0.9, W - 0.07, 1.25), zh1, zh1 + 0.02, 0.002);
 }
 
-/** Geometry for one leaf class. `r` seeds board widths and grain offsets. */
-export function leafGeometry(cls: LeafClass, r: Rng): LeafGeom {
+/**
+ * Geometry for one leaf class. `r` seeds board widths and grain offsets. `far`: the leaf as drawn from
+ * beyond DOOR_FAR (doors.ts), the same boards, ledges, braces, straps and handles with square edges and
+ * no nail heads: chamfers of 1.5–12 mm and heads of 1–1.6 cm are under half a pixel there, and they were
+ * about half a leaf's triangles. The same `r` sequence gives the same boards.
+ */
+export function leafGeometry(cls: LeafClass, r: Rng, far = false): LeafGeom {
   const kind = cls.kind;
   const sill = cls.sill;
   const topO = leafHead(cls);
@@ -315,11 +323,11 @@ export function leafGeometry(cls: LeafClass, r: Rng): LeafGeom {
   const { zBack } = leafDepth(kind);
   const g: LeafGeom = { wood: bin(), iron: bin(), fixed: bin(), boxes: [], width: W, height: H };
   if (kind === 'grille') {
-    grilleLeaf(W, H, top, g);
+    grilleLeaf(W, H, top, g, far);
     g.boxes.push({ min: [0, 0, zBack], max: [W, H, 0] });
     return g;
   }
-  plankLeaf({ W, H, top, flat: cls.head === 'flat', apexX, kind, r }, g);
+  plankLeaf({ W, H, top, flat: cls.head === 'flat', apexX, kind, r, far }, g);
   g.boxes.push({ min: [0, 0, zBack], max: [W, H, 0] });
   return g;
 }

@@ -378,6 +378,8 @@ async function main() {
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs
   const locked = buildDoors(doorSets.locked, inMats(IMu), physics, { ajar: 0, initial: 0 });
   scene.add(locked.object);
+  // leaves beyond DOOR_FAR drawn without chamfers and nail heads (doors.ts lod)
+  const doorLod = () => { doors.lod(camera.position); locked.lod(camera.position); };
   // the fly camera's floor in the gate passage is the sill, not the terrain under the gatehouse
   rig.groundAt = (x, z) => { const d = gateSpecs.find((g) => inDoorway(g, x, z, 0, 0.2)); return d ? d.centre[1] : heightAt(x, z); };
   // the player blocks leaves by its body in walk mode; a flying camera by where it is
@@ -553,7 +555,7 @@ async function main() {
   // shaders in pieces (render/precompile.ts): each pass compiles for its own target, then two warm-up
   // frames build what that cannot reach, first without the water (shadow maps, post passes), then with
   // it (its reflection of the scene), drawn whether or not it can be seen from here (vis hides it then)
-  const frameState = () => { stones.update(camera.position); rockLod.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
+  const frameState = () => { stones.update(camera.position); rockLod.update(camera.position); doorLod(); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
   const pre = prePass;
   const nestedRenders = { rendered: 0, skipped: 0 };
   let deferred = null as DeferredPipelines | null;
@@ -575,7 +577,7 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     // captures wait for the furniture of every room they show (settle), before the frame's counters reset
-    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); rockLod.update(camera.position); veg?.update(camera); vis.update(); sunCasters(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); rockLod.update(camera.position); doorLod(); veg?.update(camera); vis.update(); sunCasters(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
@@ -666,6 +668,7 @@ async function main() {
     tick(dt);
     stones.update(camera.position);
     rockLod.update(camera.position);
+    doorLod();
     veg?.update(camera);
     vis.update();
     updateFurniture();

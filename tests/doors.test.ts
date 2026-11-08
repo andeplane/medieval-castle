@@ -8,7 +8,7 @@ import {
   OPEN_ANGLE, LIP, GROW, FIT, STOP_GAP, BIN, BACK_ANGLE, stopDepth, KIND, leafDepth,
 } from '../src/castle/interior/doorGeom';
 import { leafGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
-import { buildDoors, instancesByGeometry, m4quat, rayBox, rayEnters, REACH_NPC } from '../src/castle/interior/doors';
+import { buildDoors, instancesByGeometry, m4quat, rayBox, rayEnters, REACH_NPC, DOOR_FAR, DOOR_LOD_BAND, doorFar } from '../src/castle/interior/doors';
 import { pickTarget } from '../src/game/interact';
 import { planInterior } from '../src/castle/interior/plan';
 import { playDoors } from '../src/player/setup';
@@ -272,6 +272,25 @@ describe('leaf placement', () => {
 });
 
 describe('leaf geometry', () => {
+  it('draws every leaf class of the castle far away as the same leaf, square-edged and unstudded', () => {
+    // DOOR_FAR: only how a leaf is drawn changes (no chamfers or nail heads), never its boards or outline
+    const box = (b: PartBin) => { const v = verts(b); return [0, 1, 2].flatMap((k) => [Math.min(...v.map((p) => p[k])), Math.max(...v.map((p) => p[k]))]); };
+    let near = 0, far = 0;
+    const seen = new Set<string>();
+    for (const d of playDoors([], planInterior().doors).active) for (const pl of placeLeaves(d)) {
+      if (seen.has(pl.classKey)) continue;
+      seen.add(pl.classKey);
+      const cls = leafClassFor(d, pl.kind), a = leafGeometry(cls, mulberry32(3)), f = leafGeometry(cls, mulberry32(3), true);
+      const ba = box(pl.kind === 'grille' ? a.iron : a.wood), bf = box(pl.kind === 'grille' ? f.iron : f.wood);
+      ba.forEach((x, k) => expect(bf[k]).toBeCloseTo(x, 6));
+      expect(f.boxes).toEqual(a.boxes);
+      expect(f.wood.pos.length + f.iron.pos.length).toBeLessThan(a.wood.pos.length + a.iron.pos.length);
+      near += a.wood.pos.length + a.iron.pos.length; far += f.wood.pos.length + f.iron.pos.length;
+    }
+    expect(seen.size).toBeGreaterThan(5);
+    expect(far / near).toBeLessThan(0.7);
+  });
+
   it('is deterministic per seed and differs between seeds', () => {
     const cls = leafClassFor(spec(), 'plank');
     const a = leafGeometry(cls, mulberry32(5)), b = leafGeometry(cls, mulberry32(5)), c = leafGeometry(cls, mulberry32(6));
@@ -410,8 +429,8 @@ describe('door system', () => {
     expect(fb.made.map((m) => m.name)).toEqual(['doors-wood', 'doors-iron']);
     expect(sys.object.children).toHaveLength(2);
     const leaves = doors.reduce((n, d) => n + placeLeaves(d).length, 0);
-    // one wood instance per leaf (it has one seat, whichever way it swings)
-    expect(fb.made[0].inst.length).toBe(doors.filter((d) => d.kind !== 'grille').length);
+    // one wood instance per leaf and level (it has one seat, whichever way it swings; near and DOOR_FAR)
+    expect(fb.made[0].inst.length).toBe(2 * doors.filter((d) => d.kind !== 'grille').length);
     expect(fb.made[0].inst.length - fb.made[0].hidden.size).toBe(leaves - doors.filter((d) => d.kind === 'grille').length);
     expect(sys.triangles / leaves).toBeLessThan(2500);
     // geometry is shared by class: far fewer geometries than leaves
@@ -426,6 +445,39 @@ describe('door system', () => {
     expect(fb.made[1].hidden.size).toBeGreaterThan(hidden0[1]);
     sys.setVisible(d0.id, true); sys.setVisible('nope', false);
     expect([fb.made[0].hidden.size, fb.made[1].hidden.size]).toEqual(hidden0);
+    // level of detail: from far away every leaf swaps to its far instances, as many shown, none of the same
+    const shownSet = (k: number) => new Set(fb.made[k].inst.map((_, i) => i).filter((i) => !fb.made[k].hidden.has(i)));
+    const near0 = shownSet(0);
+    sys.lod({ x: 5000, y: 0, z: 0 });
+    const far0 = shownSet(0);
+    expect(far0.size).toBe(near0.size);
+    expect([...far0].some((i) => near0.has(i))).toBe(false);
+    // hidden by its cell, a far leaf stays hidden at either level, and comes back far
+    sys.setVisible(d0.id, false);
+    expect(shownSet(0).size).toBe(far0.size - placeLeaves(d0).length);
+    sys.lod({ x: 0, y: 0, z: 0 }); sys.lod({ x: 5000, y: 0, z: 0 });
+    sys.setVisible(d0.id, true);
+    expect(shownSet(0)).toEqual(far0);
+    sys.lod({ x: d0.centre[0], y: d0.centre[1], z: d0.centre[2] });
+    expect(shownSet(0).size).toBe(near0.size);
+  });
+
+  it('swaps a leaf to its far level past DOOR_FAR and back only inside the band', () => {
+    expect(doorFar(DOOR_FAR - 1, false)).toBe(false);
+    expect(doorFar(DOOR_FAR + 0.1, false)).toBe(true);
+    expect(doorFar(DOOR_FAR - 1, true)).toBe(true);
+    expect(doorFar(DOOR_FAR - DOOR_LOD_BAND - 0.1, true)).toBe(false);
+    const a = single({ id: 'a' }), fb = fakeBatch();
+    const sys = buildDoors([a], M, undefined, { batch: fb.factory, ajar: 0 });
+    const shown = () => fb.made[0].inst.map((_, i) => i).filter((i) => !fb.made[0].hidden.has(i));
+    const n0 = shown(), [cx, cy, cz] = a.centre, at = (dx: number) => ({ x: cx + dx, y: cy, z: cz });
+    sys.lod(at(DOOR_FAR - 2)); expect(shown()).toEqual(n0);
+    sys.lod(at(DOOR_FAR + 2)); const f = shown(); expect(f).not.toEqual(n0);
+    sys.lod(at(DOOR_FAR - 2)); expect(shown()).toEqual(f);
+    sys.lod(at(1)); expect(shown()).toEqual(n0);
+    // a far leaf still swings: its far instances follow the matrix
+    sys.lod(at(100)); sys.setOpen('a', true, true);
+    for (const i of shown()) expect(fb.made[0].mats.get(i)).toEqual(sys.leafPose('a'));
   });
 
   it('adds instances grouped by geometry: one draw per shown geometry on WebGPU, whatever is hidden', () => {

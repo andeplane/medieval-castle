@@ -6,7 +6,9 @@
 // reflection is split in two: the full version on VIEW_LAYER (the view: AO pre-pass and scene; and the sun's
 // shadow maps) and the stand-in on MIRROR_LAYER (the water's reflection only). Both cover the same ground,
 // so this decides only how the reflection draws something, never whether: everything that can be seen in
-// the water is still in it. Now: the terrain's near grid (world/terrain.ts mirrorIndex).
+// the water is still in it. Now: the terrain's near grid and far mesh at half resolution (world/terrain.ts
+// mirrorIndex, polarMirrorIndex), and the grass, far grass and reeds with straight blades, the far grass
+// with half of them (world/grass.ts).
 // Layer 1 is the trees' shadow-only casters (world/trees.ts).
 
 export const VIEW_LAYER = 2;
