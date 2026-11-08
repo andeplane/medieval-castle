@@ -22,6 +22,7 @@
 import type { DoorSpec, V3 } from './types';
 import type { V2 } from '../../core/math2d';
 import { archOutline } from './geom';
+import { pointInPoly } from '../../core/math2d';
 
 export const LIP = 0.08;          // rebate recess beyond the clear opening (per side and at the head)
 export const GROW = 0.05;         // leaf beyond the clear opening: how far it laps the stop
@@ -86,11 +87,19 @@ export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2
   const leafy = d.leaf && d.kind !== 'gate', y = d.centre[1];
   const clear = archOutline(0, y, d.width, d.height, d.head, leafy ? headRise(d.head, d.width) : rise ?? headRise(d.head, d.width));
   if (!leafy) return { clear, reb: clear, sweep: clear };
-  // a back-swinging leaf fills its rebate: the rebate is the leaf's own outline (its size class) grown by FIT
+  // a back-swinging leaf fills its rebate: the rebate is the leaf's own outline (its size class) grown by FIT,
+  // and by as much more as its head's chords need to clear the leaf's boards (cut 1 cm under the curve)
   const cls = leafClassFor(d, d.kind as LeafKind), back = !!d.swingsBack;
-  const grown = back ? headTop(d.head, cls.ow, cls.oh, -(GROW + FIT)) : headTop(d.head, d.width, d.height, -LIP);
-  const k = back ? (cls.ow + 2 * (GROW + FIT)) / d.width : 1 + (2 * LIP) / d.width;
-  const reb = clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)]));
+  const rebOf = (g: number, ow: number, oh: number, w: number) => {
+    const grown = headTop(d.head, ow, oh, -g), k = (ow + 2 * g) / w;
+    return clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)]));
+  };
+  let reb = rebOf(LIP, d.width, d.height, d.width);
+  if (back) {
+    const lt = headTop(d.head, cls.ow, cls.oh, -GROW), hw = cls.ow / 2 + GROW - 0.005;
+    const boards = Array.from({ length: 41 }, (_, i): V2 => { const u = -hw + (2 * hw * i) / 40; return [u, y + lt(u) - 0.01]; });
+    for (let g = GROW + FIT; g < LIP + 1e-9; g += 0.001) { reb = rebOf(g, cls.ow, cls.oh, d.width); if (boards.every(([u, yy]) => pointInPoly(reb, u, yy))) break; }
+  }
   // the back sweep's recess: square-headed, LIP beyond the clear jambs, SWEEP_HEAD over the leaf's top
   const top = y + cls.sill + leafTop(cls) + SWEEP_HEAD, ks = 1 + (2 * LIP) / d.width;
   return { clear, reb, sweep: clear.map(([u, yy], i): V2 => (i < 2 ? [u * ks, yy] : [u * ks, top])) };
