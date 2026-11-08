@@ -600,6 +600,7 @@ describe('door system', () => {
       return [d.id, mine[0]];
     }));
     const shutPose = new Map(doors.map((d) => [d.id, [...fb.made[0].mats.get(inst.get(d.id)!)!]]));
+    const shutBody = new Map(doors.map((d) => [d.id, [...body.get(d.id)!.pose!.p, ...body.get(d.id)!.pose!.q]]));
     const bad: string[] = [];
     let cases = 0, away = 0;
     for (const d of doors) for (const side of [0, 1] as const) {
@@ -626,6 +627,8 @@ describe('door system', () => {
       for (let i = 0; i < 300 && sys.state()[d.id] > 0; i++) sys.update(1 / 60, by);
       if (sys.state()[d.id] !== 0) bad.push(`${d.id}: did not shut`);
       else if (fb.made[0].mats.get(inst.get(d.id)!)!.some((v, j) => Math.abs(v - shutPose.get(d.id)![j]) > 1e-9)) bad.push(`${d.id} from ${d.spaces[side]}: shut somewhere else`);
+      // and its collider too (on main before this fix, 189 colliders came to rest up to 2 m off after opening from the far side)
+      else if ([...body.get(d.id)!.pose!.p, ...body.get(d.id)!.pose!.q].some((v, j) => Math.abs(v - shutBody.get(d.id)![j]) > 1e-9)) bad.push(`${d.id} from ${d.spaces[side]}: collider shut somewhere else`);
     }
     expect(cases).toBe(doors.length * 2);
     expect(bad).toEqual([]);
