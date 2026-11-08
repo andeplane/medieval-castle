@@ -8,11 +8,14 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three/webgpu';
 import * as T3 from 'three';
 import { buildInterior, type PlanX } from '../src/castle/interior';
-import { heightAt } from '../src/world/terrain';
+import { heightAt, nearGrid } from '../src/world/terrain';
 import { pointInPoly } from '../src/core/math2d';
 import { mats, islandCastle } from './world';
 import type { WindowInput } from '../src/render/interiorMath';
-import { drawnSpaces, roomGraph } from '../src/world/visibility';
+import { drawnSpaces, roomGraph, createVisibility } from '../src/world/visibility';
+import { PAVE_Y } from '../src/castle/paving';
+import { interiorViews } from '../src/camera/interiorViews';
+import { rayIndex, soupTris } from './helpers/rays';
 import { caveWalk, CAVE_ZONE } from '../src/castle/interior/caves';
 import { wallTorches } from '../src/render/interiorFire';
 import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
@@ -20,7 +23,7 @@ import type { LightEmitter } from '../src/light/types';
 import { worldViews, OUTDOOR, on, bvhOf, type V3 } from './helpers/worldViews';
 
 describe('every opening in the castle, as the player sees it', () => {
-  const { set, cam, baked, makeVis, castleSolid, allGroupTris, shutLeaf, openingsOf, playerPoses } = worldViews();
+  const { set, cam, baked, makeVis, castleSolid, allGroupTris, shutLeaf, openingsOf, playerPoses, court, inCourt, roofs } = worldViews();
   let P: PlanX, inner: ReturnType<typeof buildInterior>;
   beforeAll(() => {
     const isl = islandCastle(); // the castle as main.ts lays it, cut by the interior as main.ts does
@@ -252,4 +255,93 @@ describe('every opening in the castle, as the player sees it', () => {
     expect(checked).toBeGreaterThan(5000);
     expect([...faults.values()]).toEqual([]);
   }, 120_000);
+
+  // The water's reflection renders the whole scene again from below (1.1 M of 3.2 M triangles at the hall on
+  // Anders' Mac). It is skipped when no line of sight can reach the water (world/waterView.ts). From poses all
+  // over the island (outdoors round the castle, the courtyard, every room, the bookmarks) rays through a grid
+  // of pixels, against the castle, the interiors and the ground: wherever one meets the water first, the
+  // water must be drawn (so its reflection is rendered that frame: never missing, never stale). Indoors it
+  // is skipped from most rooms, and from the hall, chamber and tower room bookmarks.
+  it('draws the water wherever it can be seen, and skips it (and its reflection) where it cannot', () => {
+    // the castle, the rooms, and buildTerrain's own near grid (its holes as main.ts gives them)
+    const ground = nearGrid(undefined, { holes: inner.groundHoles.terrain }).toNonIndexed().getAttribute('position').array;
+    const occ = rayIndex([...castleSolid(), ...allGroupTris(), ...soupTris(ground)]);
+    const pc = new T3.PerspectiveCamera(55, 16 / 10, 0.25, 30000), water = { visible: true, name: 'water' };
+    const fr = new T3.Frustum(), m = new T3.Matrix4(), v = new T3.Vector3();
+    const frustum = () => {
+      pc.updateMatrixWorld();
+      fr.setFromProjectionMatrix(m.multiplyMatrices(pc.projectionMatrix, pc.matrixWorldInverse));
+      const corners = ([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).map(([x, y]) => v.set(x, y, 1).unproject(pc).sub(pc.position).normalize().toArray() as V3);
+      return { planes: fr.planes, corners };
+    };
+    const vis = createVisibility(pc, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs, scene: { getObjectByName: (n: string) => (n === 'water' ? water : undefined) }, frustum });
+    const ray = new T3.Ray(), nd = new T3.Vector3();
+    /** Does a pixel of the grid see water first (y 0 where the ground is below it)? */
+    const seesWater = (W = 32, H = 20) => {
+      for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+        nd.set(((i + 0.5) / W) * 2 - 1, ((j + 0.5) / H) * 2 - 1, 1).unproject(pc).sub(pc.position).normalize();
+        if (nd.y >= 0 || pc.position.y <= 0) continue; // (under the water: the rock is between)
+        const t = -pc.position.y / nd.y, x = pc.position.x + nd.x * t, z = pc.position.z + nd.z * t;
+        if (heightAt(x, z) >= 0) continue;
+        ray.origin.copy(pc.position); ray.direction.copy(nd);
+        if (!occ.hits(ray, 0, t)) return true;
+      }
+      return false;
+    };
+    
+    const misses: string[] = [], skipped: string[] = [];
+    let poses = 0, seen = 0, indoor = 0;
+    const look = (label: string, eye: V3, yaw: number, pitch: number, isIndoor: boolean) => {
+      pc.position.set(...eye);
+      pc.lookAt(eye[0] + Math.cos(yaw) * Math.cos(pitch), eye[1] + Math.sin(pitch), eye[2] + Math.sin(yaw) * Math.cos(pitch));
+      water.visible = true;
+      vis.update(); poses++;
+      if (isIndoor) { indoor++; if (!water.visible) skipped.push(label); }
+      // Only a skipped water can be a miss, so the rays are cast where it is skipped; every 8th pose still casts
+      // them, so the count seen below shows the rays reach the water (as the openings check above)
+      if (water.visible && poses % 8) return true;
+      const truth = seesWater();
+      if (truth) seen++;
+      if (truth && !water.visible) misses.push(`${label}, yaw ${yaw.toFixed(2)} pitch ${pitch.toFixed(2)}`);
+      return water.visible;
+    };
+    const yaws = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => (k * Math.PI) / 4);
+    // outdoors, 45 m and 80 m from the castle's centre, level, down and up
+    for (const R of [45, 80]) for (const a of yaws) {
+      const x = Math.cos(a + 0.2) * R, z = Math.sin(a + 0.2) * R, eye: V3 = [x, Math.max(heightAt(x, z), 0) + 1.7, z];
+      for (const yaw of yaws) for (const pitch of [-0.3, 0, 0.35]) look(`outside at (${x.toFixed(0)}, ${z.toFixed(0)})`, eye, yaw, pitch, false);
+    }
+    // the courtyard, on a 6 m grid
+    const xs = court.map((q) => q[0]), zs = court.map((q) => q[1]);
+    for (let x = Math.min(...xs) + 2; x < Math.max(...xs); x += 6) for (let z = Math.min(...zs) + 2; z < Math.max(...zs); z += 6) {
+      if (!inCourt(x, z)) continue;
+      for (const yaw of yaws) for (const pitch of [0, 0.3]) look(`courtyard (${x.toFixed(0)}, ${z.toFixed(0)})`, [x, PAVE_Y + 1.7, z], yaw, pitch, false);
+    }
+    // every room but the caves, from its middle, four ways and a little down; with the doors shut, then
+    // with every leaf open (the rays below see through leaves either way: they are not in the occluder)
+    for (const open of [false, true]) {
+      for (const d of P.doors) vis.setDoorOpen(d.id, open);
+      for (const r of P.rooms) {
+        if (r.zone === CAVE_ZONE) continue;
+        const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
+        if (!pointInPoly(r.poly, c[0], c[1])) continue;
+        for (const yaw of [0, 1, 2, 3].map((k) => (k * Math.PI) / 2)) look(`${r.id}${open ? ', doors open' : ''}`, [c[0], r.y0 + 1.6, c[1]], yaw, -0.15, true);
+      }
+    }
+    for (const d of P.doors) vis.setDoorOpen(d.id, false);
+    // the bookmarks
+    const marks = interiorViews(P).filter((w) => ['hall', 'chamber', 'towerroom'].includes(w.name));
+    const markShown = marks.map((w) => {
+      const d = [w.target[0] - w.pos[0], w.target[1] - w.pos[1], w.target[2] - w.pos[2]], l = Math.hypot(d[0], d[2]);
+      const shown = look(w.name, w.pos as V3, Math.atan2(d[2], d[0]), Math.atan2(d[1], l), true);
+      return [w.name, shown, seesWater(320, 200)] as const;
+    });
+    expect(poses).toBeGreaterThan(1000);
+    console.info(`water: ${poses} poses, ${seen} see it, ${skipped.length} of ${indoor} indoor skipped`);
+    expect(seen).toBeGreaterThan(20); // 27 measured: every 8th pose casts its rays
+    expect(misses.slice(0, 10)).toEqual([]);
+    expect(skipped.length).toBeGreaterThan(indoor / 2);
+    // none of the three sees the water (at 320 × 200 rays), and none draws it
+    expect(markShown).toEqual([['hall', false, false], ['chamber', false, false], ['towerroom', false, false]]);
+  }, 600_000);
 });

@@ -15,8 +15,8 @@ import * as THREE from 'three/webgpu';
 import { LightingNode } from 'three/webgpu';
 import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix, isolate } from 'three/tsl';
-import { interiorIrradiance, paneGlow, fireIrradiance } from './interiorShader';
+import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix, transformDirection, cameraViewMatrix } from 'three/tsl';
+import { interiorIrradiance, paneGlow, fireLights } from './interiorShader';
 import { FIRE_W, MAX_FIRES, type Fire, type FireTable } from '../light/roomLight';
 import { tagBoxes } from '../world/visibility';
 import { Builder, type MatKey } from '../castle/builder';
@@ -106,18 +106,21 @@ export function setCarried(light: InteriorLight, f: Fire | null, k = 1) {
   c.range.value = f.range;
 }
 
-/** Daylight (irradiance only, as before) plus firelight: diffuse irradiance, and for metals (brass, iron)
- * a rough reflection of it, so a candlestick catches the fire it stands by. */
-class InteriorEnvNode extends LightingNode {
-  constructor(private day: THREE.Node, private fire: THREE.Node) { super(); }
+/** Daylight (irradiance only, as before) plus the fires as point lights (interiorShader.fireLights): the
+ * lighting model gives them diffuse and a specular highlight, so brass and iron are dark but for the
+ * glint of the fire they face, as metal by a fire is. (They went in as a uniform environment before,
+ * so every metal near a fire reflected it from all sides and shone near-white: the hall's armour.) */
+export class InteriorEnvNode extends LightingNode {
+  /** `fires(add)`: hands every light of the fragment to `add` (interiorShader.fireLights, in the lighting stack). */
+  constructor(private day: THREE.Node, private fires: (add: (L: THREE.Node<'vec3'>, c: THREE.Node<'vec3'>) => void) => void) { super(); }
   setup(builder: THREE.NodeBuilder) {
-    const ctx = builder.context as unknown as Record<'irradiance' | 'radiance' | 'iblIrradiance', THREE.Node & { addAssign(n: unknown): void }>;
-    const fire = isolate(this.fire) as unknown as THREE.Node<'vec3'>;
-    // as three's EnvironmentNode does: iblIrradiance feeds both the diffuse and the multi-scattered
-    // specular (so it must not also go into `irradiance`, which would count the fire twice)
+    const ctx = builder.context as unknown as {
+      irradiance: THREE.Node & { addAssign(n: unknown): void };
+      lightingModel: { direct(d: { lightDirection: unknown; lightColor: unknown; reflectedLight: unknown }, b: THREE.NodeBuilder): void };
+      reflectedLight: unknown;
+    };
     ctx.irradiance.addAssign(this.day);
-    ctx.radiance.addAssign(fire.mul(1 / Math.PI));
-    ctx.iblIrradiance.addAssign(fire);
+    this.fires((L, c) => ctx.lightingModel.direct({ lightDirection: transformDirection(L, cameraViewMatrix), lightColor: c, reflectedLight: ctx.reflectedLight }, builder));
     return null;
   }
 }
@@ -126,17 +129,18 @@ class InteriorEnvNode extends LightingNode {
  * Interior clones of the stone, timber, iron and glass materials. Same surface look; lit by the
  * shadowed sun plus the interior irradiance instead of the outdoor hemisphere and sky IBL.
  * `sun: null` gives the underground set: no direct sun at all (cellars and tunnels get daylight only
- * through their openings, via the irradiance, and firelight from the fire table, fireIrradiance).
+ * through their openings, via the irradiance, and firelight from the fire table, fireLights).
  */
 export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardNodeMaterial>, sun: THREE.Light | null, light: InteriorLight): InteriorMaterialSet {
   const base = sun ? [sun] : [];
   const sunOnly = lights(base);
-  const irr = interiorIrradiance(light), fire = fireIrradiance(light);
+  const irr = interiorIrradiance(light);
   const mk = (src: THREE.MeshStandardNodeMaterial, name: string) => {
     const m = src.clone() as THREE.MeshStandardNodeMaterial;
     m.name = sun ? `interior-${name}` : `interior-under-${name}`;
     m.lightsNode = sunOnly;
-    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, fire);
+    // (fireLights emits TSL: it runs when the renderer builds the shader, checked by the captures)
+    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, /* v8 ignore next */ (add) => fireLights(light, add));
     return m;
   };
   const glass = mk(M.glass, 'glass');

@@ -20,7 +20,7 @@ import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
 import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, footDist, defaultTerrain } from './world/terrain';
 import { rngFor } from './core/rng';
 import { makeSky } from './world/sky';
-import { makeWater } from './world/water';
+import { makeWater, cameraFrustum } from './world/water';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint } from './camera/controls';
 import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
@@ -384,7 +384,7 @@ async function main() {
   // space) and eye adaptation (render/exposure.ts); above the lowest wing's parapet the camera is in the
   // courtyard and outside at once
   const courtPoly = courtyard();
-  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, court: (x, z) => pointInPoly(courtPoly, x, z), roofs: Math.min(...WINGS.map((w) => w.top)) });
+  const vis = createVisibility(camera, lit.groups, lit.plan, { scene, apertures: bake.apertures, ground: heightAt, court: (x, z) => pointInPoly(courtPoly, x, z), roofs: Math.min(...WINGS.map((w) => w.top)), frustum: () => cameraFrustum(camera) });
   // firelight (src/light): the furniture's fixtures, or a few wall torches without furniture; the
   // rig lights the nearest ones (whatever is drawn), and the interior materials take its light pool
   const groupOf = new Map<string, string>();
@@ -536,14 +536,14 @@ async function main() {
   await breathe();
   // shaders in pieces (render/precompile.ts): each pass compiles for its own target, then two warm-up
   // frames build what that cannot reach, first without the water (shadow maps, post passes), then with
-  // it (its reflection of the scene)
+  // it (its reflection of the scene), drawn whether or not it can be seen from here (vis hides it then)
   const frameState = () => { stones.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
   const pre = prePass;
   const nestedRenders = { rendered: 0, skipped: 0 };
   let deferred = null as DeferredPipelines | null;
   await precompile({
     passes: [...(pre ? [() => { performance.mark('compile: AO pre-pass'); return pre.compileAsync(renderer); }] : []), () => { performance.mark('compile: scene pass'); return scenePass.compileAsync(renderer); }],
-    warm: [() => { performance.mark('compile: warm-up 1'); water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { performance.mark('compile: warm-up 2'); frameState(); pipeline.render(); exposure.measure(); }],
+    warm: [() => { performance.mark('compile: warm-up 1'); water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { performance.mark('compile: warm-up 2'); frameState(); water.visible = true; pipeline.render(); exposure.measure(); }],
     breathe,
     // the AO pre-pass and the water's reflection render the whole scene once per compile item otherwise
     quiet: () => renderOnce(renderer, nestedRenders),

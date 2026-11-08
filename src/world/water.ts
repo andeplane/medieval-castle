@@ -61,3 +61,15 @@ export function waterGeometry(size = 9000, island: V2[] = ISLAND, holes: V2[][] 
   for (const p of [offsetPoly(island, -0.5), ...holes]) shape.holes.push(new THREE.Path(p.map(([x, z]) => new THREE.Vector2(x, -z))));
   return new THREE.ShapeGeometry(shape);
 }
+
+const _m = new THREE.Matrix4(), _f = new THREE.Frustum(), _v = new THREE.Vector3();
+/** The camera's frustum planes and the directions from it to its far corners (world/waterView.ts). */
+export function cameraFrustum(camera: THREE.PerspectiveCamera): { planes: THREE.Plane[]; corners: [number, number, number][] } {
+  camera.updateMatrixWorld();
+  _f.setFromProjectionMatrix(_m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const corners = ([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).map(([x, y]) => {
+    _v.set(x, y, 1).unproject(camera).sub(camera.position).normalize();
+    return [_v.x, _v.y, _v.z] as [number, number, number];
+  });
+  return { planes: _f.planes, corners };
+}

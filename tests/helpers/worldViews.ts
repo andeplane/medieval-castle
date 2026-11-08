@@ -125,5 +125,5 @@ export function worldViews() {
     }
     return poses;
   };
-  return { set, cam, baked, makeVis, castleSolid, allGroupTris, shutLeaf, openingsOf, playerPoses };
+  return { set, cam, baked, makeVis, castleSolid, allGroupTris, shutLeaf, openingsOf, playerPoses, court, inCourt, roofs };
 }
