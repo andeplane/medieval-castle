@@ -7,6 +7,19 @@ import { ATLAS } from './geom';
 
 export interface PropTex { size: number; albedo: Uint8Array; normal: Uint8Array; rough: Uint8Array }
 
+/**
+ * The castle's own walls as the game draws them, mean linear RGB under a uniform light: rubble (old), ashlar
+ * (new) and dressed stone (trim). Measured 2026-11-08 in two steps:
+ * - the wall shader (render/materials.ts stone(): the texgen albedo × its tint, per-stone shade, mortar, grime,
+ *   drift and its AO), a 4 × 4 m patch of each at the hall's height lit by an ambient light of irradiance π,
+ *   no tone mapping (headless WebGL2): 0.172, 0.19 and 0.22 in luminance;
+ * - × 0.82 for the screen-space AO (GTAO), which reads the parallax joints of a wall as occlusion and leaves a
+ *   flat prop face alone: in the game at the hall hearth, the readability floor alone lit the rubble 0.8 × as
+ *   much, for the same albedo, as in the step above.
+ * The prop stone is set against these (stoneTex), not against the raw lithology colours (texgen LITH_COL ≈ 0.28).
+ */
+export const WALL_STONE = { old: [0.15, 0.141, 0.121], new: [0.167, 0.156, 0.133], trim: [0.197, 0.18, 0.15] } as const satisfies Record<string, readonly [number, number, number]>;
+
 const toByte = (v: number) => Math.max(0, Math.min(255, Math.round(Math.pow(Math.max(0, v), 1 / 2.2) * 255)));
 
 /** Height field (0..1, wraps) to a tangent-space normal map. Row 0 is v = 0. */
@@ -114,8 +127,11 @@ export function brassTex(N = 256): PropTex {
   }, 1.5);
 }
 
-/** Dressed stone (1 m tile), as dark as the castle's own walls (linear albedo ≈ 0.3, texgen LITH_COL) so hearths and altars sit in them: fine grain, bedding, claw-tool striations, soot and wear; warm
- * so tints give grey limestone, sandstone or a dark polished marble. */
+/** Dressed stone (1 m tile): fine grain, bedding, claw-tool striations, soot and wear; warm so tints give grey
+ * limestone, sandstone or a dark polished marble. Its mean (linear ≈ 0.15) is set against the walls as the game
+ * draws them (WALL_STONE): a little lighter than the rubble, no lighter than the ashlar, so hearths and altars
+ * sit in them. (#73 set it to the raw lithology colours, ≈ 0.3, which the walls render at ≈ 0.14: the hall's
+ * hood was twice its wall on the albedo alone, and more lit, near-white.) */
 export function stoneTex(N = 512): PropTex {
   const n = new TileNoise(hashSeed('prop-stone'));
   return bake(N, (u, v) => {
@@ -126,7 +142,7 @@ export function stoneTex(N = 512): PropTex {
     const grain = n.n(u, v, 256) * 0.5 + 0.5, mottle = n.fbm(u, v, 4, 4) * 0.5 + 0.5;
     const claw = Math.sin((u * 3 + v * 2) * 160 + n.n(u, v, 32) * 4) * 0.5 + 0.5; // diagonal tooling
     const k = joint ? 0.5 + 0.1 * grain : (0.6 + 0.1 * mottle + 0.1 * block) * (0.9 + 0.1 * grain) * (0.97 + 0.03 * claw);
-    return { c: [k * 0.48, k * 0.46, k * 0.42], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
+    return { c: [k * 0.24, k * 0.23, k * 0.21], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
   }, 2.2);
 }
 

@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-11-08: chimneypieces and hoods in tone with the walls (branch `claude/project-thread-ns4g2v-chimney`)
+
+From Anders' Mac (WebGPU, live 9006baa and later, `?furniture=1`, bookmark `hall`): the hall's hooded chimneypiece read near-white, white shafts and a pale bluish-grey hood against the warm rubble; the same hearth in the kitchen read dark.
+
+**Cause: the prop stone was about twice as light as the walls as they render.** #73 set the prop stone texture to a linear albedo of about 0.3, "as dark as the walls", meaning the raw lithology colours (texgen `LITH_COL` ≈ 0.28). The wall shader (`render/materials.ts stone()`) takes those down by its tint (0.79), per-stone shade, mortar, grime, drift and AO. Rendered under one uniform light (a 4 × 4 m patch each, headless WebGL2, no tone mapping), the walls come out at linear luminance 0.172 (rubble), 0.19 (ashlar) and 0.22 (dressed), and the prop stone at 0.283 (lime), 0.244 (grey), 0.26 (sand). Lime on rubble was 1.65 × on albedo alone.
+
+The light path is the same for both. Checked on the CPU with the shader's own daylight (`tableDaylight`, new, a line-for-line mirror of `interiorIrradiance` over the baked room table):
+- every hood and shaft triangle is tagged to its room (N1-2 for the hall), never OUTDOOR_TAG;
+- prop and wall materials are adopted by the same `makeInteriorMaterials` clone (sun, daylight, floor, fires as point lights; same tone mapping);
+- at the hall hearth (luminance; floor 0.147 everywhere): the hood slope gets daylight 0.59 (bounce 0.22 + windows 0.37) and fire 0.77 from the hall's other fires. The wall beside it gets daylight 0.55–0.58 and fire 0.37–1.0.
+
+So the slope, turned up toward the windows, gets a little more light than the wall (about 1.1–1.4 ×), and that multiplied the 1.65 × albedo. The firebox flanks of the shafts get the fire's near field (5.5 against about 0.4 on the wall): that is the fire lighting the stone it burns beside, kept as #76 meant it. In the kitchen the hearth's walls get no daylight in the bake (floor 0.147 plus fire), so 1.65 × of very little still read dark.
+
+**And the walls are darker again in the game:** the screen-space AO (GTAO) reads the parallax joints of a wall as occlusion and leaves a flat prop face alone. In the hall capture, the readability floor alone (all terms minus the floor switched off) lit the rubble about 0.8 × as much as the hood stone per unit albedo. So the walls as the game draws them are about 0.141 (rubble), 0.156 (ashlar) and 0.18 (dressed) (`WALL_STONE`).
+
+**Fix** (`props/textures.ts`): `stoneTex` is set against `WALL_STONE`. Its mean goes from about 0.3 to about 0.15 (× 0.5): a little lighter than the rubble and no lighter than the ashlar. Lime renders at about 0.145, and marble stays dark. This applies to every prop in the stone bin (chimneypieces, hoods, the kitchen's spit hearth, and the stone pieces in medieval.ts). Hue unchanged (warm grey). STYLE says to fix the light, not the albedo: the light was already the walls' own, and the albedo was the wrong one.
+
+**The white panels beside the fire** (assumption, plainest choice): in the hall capture after the albedo fix, the hooded hearth's cheek walls still glowed near-white. Their inner faces are the firebox's side walls, square to the fire 0.9 m away, in clean stone. They are now sooted like the firebox's back: a 2 cm soot skin 5 mm inside each cheek (`period.ts hoodedHearth`; the kitchen's spit hearth is built on it). The round shafts in front keep their fire-lit flanks, as #76 meant. In the capture, the hood slope measured sRGB 174 before and 120 after, against 110 for the wall above the armour.
+
+**Test** (`tests/hearthStone.test.ts`, whole castle, 69 fireplaces). Bake the interior light; dress every room as the game does. For each chimneypiece, hooded hearth and spit hearth:
+- light its room-facing stone (fronts, the hood's slope, shaft fronts; not the soot) with the shader's daylight and floor × its rendered albedo (texture × the piece's tint);
+- light the wall it stands against, 0.6 m to either side at 1.0, 1.6 and 2.4 m, the same way × `WALL_STONE`;
+- nine tenths of the surround by area must be at most 1.3 × the median wall point.
+
+Before: 56 of 69 fail (with the earlier, pre-GTAO wall values), the hall's hood 1.96 ×. After: none fail, the hall's hood 1.20, worst 1.20. Firelight is left out on both sides; the fire on a hearth's own front is `roomLight.test`'s rule. A second test keeps the stone's mean between the rubble and the ashlar. A third checks that the side walls of every hooded firebox (six variants of each kind) are soot or lie behind soot. `interiorMath.test.ts` checks `tableDaylight` against the exact form factor of a pane seen square on.
+
+Not checked: the Mac (WebGPU). `WALL_STONE` is a measurement: if the wall shader changes, it must be re-measured.
+
 ## 2026-11-08: rooms of one role no longer read as copies: a character per room, wall dressing, clutter, no empty quarter (branch `claude/project-thread-ns4g2v-variety`, behind `?furniture=1`)
 
 Anders: "All rooms have furniture, and are unique and great?", "fix all rooms next, in a smart way". After #70 every room had its role's focal piece and a different set of pieces, but 26 bedchambers, 23 solars and 20 studies were built by one recipe each: the same arrangement, three textile colours for the whole castle, the same wall decor, and bare corners.
