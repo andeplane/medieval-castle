@@ -22,7 +22,7 @@ import { wingQuads, towerCentre, squareTowerPoly, gatehouseFrame, eastTurretFram
 import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3 } from './types';
 import { spiralStartFor, validateStair, planStair, spiralNosingY, spiralStonesAt, type StairOpts, type SpiralPlan } from './stairs';
 import { masses, fits, boxOf, STAIR_SLIT, type Face, type DoorHole, type SpiralBehind } from '../openings';
-import { placeLeaves, leafPoint, leafSwing, leafDepth, LIP, BACK_ANGLE, doorCuts, doorOutlines, backReach, type LeafPlace } from './doorGeom';
+import { placeLeaves, leafPoint, leafSwing, leafMatrix, leafDepth, LIP, BACK_ANGLE, doorCuts, doorOutlines, backReach, type LeafPlace } from './doorGeom';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -688,6 +688,11 @@ export function doorHoles(P: PlanX): DoorHole[] {
 
 /** A point of a leaf swung by `a` (forward > 0, back < 0), from its local coordinates. */
 const leafAt = (pl: LeafPlace, a: number, p: V3) => leafPoint(pl, leafSwing(pl, a), p);
+/** leafAt for many points at one angle: the matrix once. */
+const leafAtAngle = (pl: LeafPlace, a: number) => {
+  const m = leafMatrix(pl, leafSwing(pl, a)), s = pl.mirrored ? -1 : 1;
+  return (p: V3): V3 => [m[0] * s * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * s * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * s * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];
+};
 
 /**
  * Whether a door's leaf, swung through its whole arc forward (dir 1, into spaces[swingInto]) or back (dir −1,
@@ -721,10 +726,10 @@ function inSweep(q: V3, L: LeafPlace): boolean {
 /** Do two leaves' sweeps cross (one leaf, somewhere in its swing either way, inside the other's)? */
 export function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
   if (Math.hypot(a.pivot[0] - b.pivot[0], a.pivot[2] - b.pivot[2]) > a.width + b.width + 0.2 || Math.abs(a.pivot[1] - b.pivot[1]) > Math.max(a.height, b.height)) return false;
-  for (const [p, q] of [[a, b], [b, a]]) for (let i = -12; i <= 12; i++) for (let k = 1; k <= 4; k++) for (const y of [0.1, p.height / 2]) {
-    const ang = i < 0 ? (p.backAngle * i) / 12 : (p.maxAngle * i) / 12;
+  for (const [p, q] of [[a, b], [b, a]]) for (let i = -12; i <= 12; i++) {
     if (i < 0 && !p.backAngle) continue;
-    if (inSweep(leafAt(p, ang, [(p.width * k) / 4, y, 0]), q)) return true;
+    const at = leafAtAngle(p, i < 0 ? (p.backAngle * i) / 12 : (p.maxAngle * i) / 12);
+    for (let k = 1; k <= 4; k++) for (const y of [0.1, p.height / 2]) if (inSweep(at([(p.width * k) / 4, y, 0]), q)) return true;
   }
   return false;
 }
@@ -737,12 +742,17 @@ const SWING_OUT = new Set<SpaceId>(['courtyard']);
  * Does a leaf swung back stay clear of a stair's steps: a spiral's newel and steps (each a stone from its tread
  * down to its soffit, or to the floor when built solid), a straight flight's steps (solid from the tread down)?
  */
+const stairPlans = new WeakMap<object, ReturnType<typeof planStair>>();
 function clearOfSteps(P: Partial<Pick<PlanX, 'stairs'>> & Pick<InteriorPlan, 'rooms'>, id: SpaceId, pl: LeafPlace): boolean {
   const s = P.stairs?.find((x) => x.id === id);
   if (!s) return false;
-  const plan = planStair(s, stairOpts(P as InteriorPlan, s)), T = Math.PI * 2, { zBack } = leafDepth(pl.kind);
-  for (let i = 0; i <= 24; i++) for (let k = 0; k <= 8; k++) for (const y of [0, pl.height / 4, pl.height / 2, (3 * pl.height) / 4, pl.height - 0.02]) for (const z of [zBack, 0]) {
-    const q = leafAt(pl, (-pl.backAngle * i) / 24, [(pl.width * k) / 8, y, z]);
+  if (!stairPlans.has(s)) stairPlans.set(s, planStair(s, stairOpts(P as InteriorPlan, s)));
+  const plan = stairPlans.get(s)!, T = Math.PI * 2, { zBack } = leafDepth(pl.kind);
+  // only the steps at the leaf's height (a soffit lies at most T under its tread's nosing, which is above its tread)
+  const lo = pl.pivot[1] - 0.05, hi = pl.pivot[1] + pl.height + 0.05;
+  const near = plan.kind === 'spiral' ? plan.steps.filter((st) => st.y + 0.02 > lo && (st.solid || st.y - plan.T - 0.02 < hi)) : [];
+  for (let i = 0; i <= 24; i++) for (let k = 0, at = leafAtAngle(pl, (-pl.backAngle * i) / 24); k <= 8; k++) for (const y of [0, pl.height / 4, pl.height / 2, (3 * pl.height) / 4, pl.height - 0.02]) for (const z of [zBack, 0]) {
+    const q = at([(pl.width * k) / 8, y, z]);
     if (plan.kind === 'straight') {
       // a flight: each step solid from its tread down (the leaf's bottom must clear every tread it passes over)
       const dx = q[0] - plan.o[0], dz = q[2] - plan.o[2], sa = dx * plan.d[0] + dz * plan.d[1], across = dx * plan.side[0] + dz * plan.side[1];
@@ -755,7 +765,8 @@ function clearOfSteps(P: Partial<Pick<PlanX, 'stairs'>> & Pick<InteriorPlan, 'ro
     if (rr > sp.R) continue;
     if (rr < sp.rn + 0.02) return false;
     const prog0 = (Math.atan2(ez, ex) - sp.theta0) * sp.dir;
-    for (const st of sp.steps) {
+    for (const st of near) {
+      if (q[1] >= st.y + 0.02) continue;
       const prog = prog0 + Math.round((st.a0 - prog0) / T) * T;
       if (prog < st.a0 || prog > st.a1) continue;
       const under = st.solid ? sp.yFloor - 1 : spiralNosingY(sp, prog) - sp.T;
