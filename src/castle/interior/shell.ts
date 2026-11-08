@@ -267,12 +267,13 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     };
     if (!leafy) ring(clear, (u) => depthOn(0, u), (u) => depthOn(1, u));
     else {
-      // who sees each stretch: the rebate is the swing face's (in front of the shut leaf), the rest the other
-      // side's; a step faces into the bigger stretch: the stop behind a one-way leaf is seen past it from the
-      // swing side, a back-swinging leaf's rear arch from the other, its far stop from both (when it is open)
+      // who sees each stretch: the rebate is the swing face's (in front of the shut leaf), the clear rest the
+      // other side's; a step faces into the bigger stretch: the stop behind a one-way leaf is seen past it from
+      // the swing side. A back-swinging leaf's recess and its steps are seen from the other side, and from the
+      // swing side through the hair's gap round the shut leaf (its boards stop 1 cm under the head): both.
       const k = d.swingInto, rank = { clear: 0, reb: 1, sweep: 2 } as const;
-      const bandOwners = (b: Cut['band']) => (b === 'reb' ? [k] : [1 - k]);
-      const stepOwners = (a: Cut['band'], b: Cut['band']) => (a === 'clear' || b === 'clear' ? (a === 'reb' || b === 'reb' ? [k] : [0, 1]) : [1 - k]);
+      const bandOwners = (b: Cut['band']) => (b === 'reb' ? [k] : b === 'sweep' ? [0, 1] : [1 - k]);
+      const stepOwners = (a: Cut['band'], b: Cut['band']) => (a === 'sweep' || b === 'sweep' ? [0, 1] : [k]);
       cuts.forEach((cut, i) => {
         const tA = i === 0 ? (u: number) => depthOn(0, u) : () => cut.t0, tB = i === cuts.length - 1 ? (u: number) => depthOn(1, u) : () => cut.t1;
         ring(cut.o, tA, tB, bandOwners(cut.band));
