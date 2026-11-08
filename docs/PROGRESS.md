@@ -12,7 +12,8 @@ Anders (`?furniture=1`): a room with a fireplace looked washed out and flickerin
 | #71: study N2-0, 1.5 m from the chimneypiece | 1.13 | 6.6 | 249 | 0.72 | yes | 23 % |
 | before: great-5 (a drawing room) from its doorway, the model's worst view | 0.046 | 0.44 | 11.7 | 3.27 | no | 1.7 % |
 | before: W5-0, 1.5 m from its chimneypiece, the model's brightest hearth view | 0.172 | 1.52 | 48 | 1.51 | no (floor 0.36) | 3.1 % |
-(after: see below)
+| after (this branch, with #80–#83): great-5 from its doorway | 0.025 | 0.20 | 6.1 | 4.07 (ceiling) | no | 0.8 % |
+| after: W5-0, 1.5 m from its chimneypiece | 0.080 | 0.49 | 14.9 | 2.65 | no | 1.3 % |
 What is still over white is the flames and the glow of the firebox and fire irons.
 
 **A trap in the read-back:** the first read after moving the camera returns the frame before it (the start view: mean 0.276, p50 0.305), so each pose is stepped once more and read again.
@@ -25,7 +26,7 @@ What is still over white is the flames and the glow of the firebox and fire iron
 
 **Assumption for Anders:** a rug, skin or carpet is never laid over another one (two rooms lose a carpet, two a skin, one a rug).
 
-Captures (`castle-plan/fix-hearthroom/`, headless WebGL2, settled exposure): `before-great-5-door`, `before-W5-0-hearth0-1.5m`, `before-N1-2-hearth0-1.5m` and `before-N2-0-hearth0-1.5m` (these two from a read that may have been the stale frame; their pictures are of the right pose); `after-*` as listed in the PR.
+Captures (`castle-plan/fix-hearthroom/`, headless WebGL2, settled exposure): `before-great-5-door`, `before-W5-0-hearth0-1.5m`, `before-N1-2-hearth0-1.5m` and `before-N2-0-hearth0-1.5m` (these two from a read that may have been the stale frame; their pictures are of the right pose); `after-great-5-door`, `after-W5-0-hearth0-1.5m`. Main has got darker since f98c864 (#83's prop stone): great-5 now settles at the exposure ceiling.
 
 Not checked: Anders' Mac / WebGPU (headless WebGL2 only; its renderer crashed for lack of memory on nearly every pose on the shared machine, so the browser read-back covers the poses in the table, and the rest of the castle is the model); daylight in the model; the browser numbers are from main before #80 (fires listed up front; the per-room fires and caps are the same).
 ## 2026-11-08: every bookmark under 3 M triangles, with and without furniture (branch `claude/project-thread-ns4g2v-tris`)
