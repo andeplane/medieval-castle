@@ -38,7 +38,7 @@ import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLi
 import type { WindowInput } from '../src/render/interiorMath';
 import { createVisibility, drawnSpaces, roomGraph } from '../src/world/visibility';
 import * as T3 from 'three';
-import { buildTerrain } from '../src/world/terrain';
+import { nearGrid } from '../src/world/terrain';
 import { PAVE_Y } from '../src/castle/paving';
 import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
@@ -881,8 +881,9 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   // at the courtyard face. From both sides of every outdoor doorway, every ray down across the threshold
   // meets a floor, a riser or the ground: none reaches the sky.
   it('meets the ground at every outdoor doorway: no sky through the threshold', () => {
-    const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: inner.groundHoles.terrain });
-    const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain.getObjectByName('terrain-near')!) } } } as unknown as Builder);
+    // buildTerrain's own near grid (terrain-near, its holes as main.ts gives them): the real ground at every doorway
+    const terrain = new THREE.Mesh(nearGrid(undefined, { holes: inner.groundHoles.terrain }));
+    const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain) } } } as unknown as Builder);
     const faults: string[] = [], ray = new T3.Ray(), castle = castleSolid(), rooms = allGroupTris();
     let rays = 0;
     for (const d of P.doors) {
