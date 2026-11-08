@@ -1,5 +1,58 @@
 # Progress
 
+## 2026-11-08: a lit heart in the great cavern; bedded, cracked rock; soft fungi light; water that reflects; the way down stands open (branch `claude/project-thread-ns4g2v-caves3`)
+
+From the coordinator's WebGPU captures after #72 on Anders' Mac: the cavern was one flat, foggy grey; the fungi halos showed as hard cyan polygons; the pool was a black disc; the squeeze was smooth brown clay up close; and Anders never found the cellar that leads to the caves.
+
+**Why the cavern was fog.** Away from fires the interior shader's only light was the readability floor (`InteriorLight.floor`, 0.145), the same everywhere and from every direction. Under +3.2 stops it lit rock, floor and roof to one value, and the cloudy macro texture did the rest. Now:
+- The cave materials get a quarter of that floor (`CAVE_FLOOR`, `makeInteriorMaterials().adopt(src, floorK)` → `interiorIrradiance(light, floorK)`). The castle's cellars keep theirs.
+- Recesses are darker: each rock vertex bakes how open it is (`caveGeom.ts rockOpenness`: the share of 15 points out along and round its normal, at 0.45, 1 and 1.9 m, that are in air). It is computed in the worker with the mesh, carried in the rock's uv u and used as the material's `aoNode`. Shelf undersides, wall feet, niches and passages come out darker.
+- A focal light: **the smugglers' fire** (new feature `fire`, `caves.ts fireSpot`). It is a ring of stones with charred logs on the cavern floor beside the pool, clear of the pool, of every walk and of the other finds. It burns as a `brazier` through `src/light` (`caveFires`), so it is warm light, a flame sprite and flicker in the cavern's row of the fire table. Its light falls off into the recesses, and the teal fungi give the cool side.
+
+**Rock** (`render/materials.ts caveMaterials`):
+- Beds about 0.7 m thick, warped by the broad noise. Each bed has its own stone (grey limestone, buff, dark shale, rust, pale) with a thin dark parting between beds and laminae inside them.
+- Joints (3D worley cell edges, about 2 m apart) and fine cracks in patches (about 0.6 m cells). They are cut into the bump as well as darkened.
+- Pale flowstone and iron streaks run down the walls.
+- Relief as a height in metres: broad swells, sharp ridged knuckles (2.7/m) and octaves at 7.5 and 19/m, all within about 7 m, with the joints, cracks and partings cut in. The darker hollows of that relief show under the lantern's frontal light too. Grit in the colour at 1.1, 5.3 and 17 cycles/m.
+- **Why the squeeze was smooth clay:** three's `bumpMap` takes its slope by sampling the height again at uvs offset by a pixel. A height made from world-position noise does not change with uv, so it got no slope at all, and only the texture terms bumped. Now `rockBump` takes the height's own screen derivatives: Mikkelsen's surface gradient, unnormalised, so the slope is the height's own in metres per metre. The grit textures stay out of the relief because their sub-millimetre detail turned into pixel noise.
+- The broad variation (bed warp, drift, damp) comes from 3D noise of the position. The triplanar macro texture's three projections differ, and on the curved rock they met in hard-edged lighter and darker patches wherever the normal turned. That was much of the "cloudy" look.
+- Darker, glossier damp patches.
+- **Hard-edged lighter patches on the rock** (the coordinator's "clipped polygons" were partly this): every natural opening between two cave rooms was a daylight portal aperture (`render/interiorMath.ts doorsToApertures`). The shader gives each aperture a box (its embrasure) where everything sees all of it, and on the curved rock that box cut lighter squares and curves. Openings between two cave rooms are no longer apertures; they carried no daylight worth having. The castle doorways into the caves still are. Tested in `interiorMath.test.ts`.
+- Rock that is not the soup (fallen blocks, stalagmites and stalactites, collars, steps) had one fixed openness (0.8), so a block against a recess wall was lighter than the wall it came out of. Now `bakePartOpenness` gives every such vertex the same field's openness as the soup round it (about 60 k vertices, ~115 ms more on the main thread at load). Tested in `caves.test.ts`. **Not fixed by it:** at 0.5 m in the squeeze (`walk-squeeze`), lighter shapes with hard curved edges remain. They did not change with this bake or with the aperture fix, the triangles there all carry the same room, and the bed, joint and parting lines run on through them. My reading is that they are knuckles of rock nearer the lantern than the wall behind, flat-lit by its frontal light, so their silhouettes read as cut-outs. Unconfirmed; flagged for a look on the Mac.
+- Round the pool (uniforms from `caveShading`): dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it that glints with the fire.
+
+**Fungi light.** The halo quads are gone (one draw call fewer). Each cluster's light on the rock is baked into the rock's uv v (`bakeFungiLight`: a gaussian of the distance from each cluster, 0.5 m, on faces turned its way) and drawn as teal light × the rock's colour. It is part of the rock surface, so no angle can show an edge. Tested: each cluster's light is above 0.5 at the cluster and exactly nothing more than 2 m from every cluster.
+
+**Pool.** Very dark water (a physical material with no specular of its own; its isotropic firelight made a brown sheen). Its reflection is in the emissive:
+- the roof, dim and warmer near the fire;
+- the fire's glint (a sharp core and a broader streak).
+
+Both are weighted by fresnel and broken by slow 3D-noise ripples. The water is more opaque at grazing angles. The bookmarks see no glint: the mirror image of a fire on the near shore falls on the shore, not the water.
+
+**The way down** (assumption, plainest cue). On the shortest way from the courtyard to the caves, two doors start standing open (`nav.ts doorsOnWayToCaves` → `DoorOptions.standOpen`):
+- the door you go in by from the courtyard (court>N0-4), so its torchlit room shows from the courtyard;
+- the cellar stair's top door (N0-3>N-cellarstair), so the stair is seen going down beside its torch.
+
+The door between them and the cellar's own doors stay as they are. Rooms are drawn through open doorways however far they lead (`world/visibility.ts`). My first try opened all four doors on the way, and from the cavern that drew the whole outdoors (145 draw calls, 2.6 M triangles in the WebGL2 capture, against 30 and 122 k). The test now checks every cave room: with these doors open, at most one more room is drawn and nothing outdoors that was not drawn already. The cavern's set is unchanged. Anyone can still open or shut any of these doors. No sign was added.
+
+**The lantern in fly bookmarks.** It is on whenever the camera is in a cave room, in fly mode too: main sets the carried light every frame from `vis.state.from`. It reaches 9 m with a metre of near field, so in the squeeze (walls at 0.5 m) it dominates. In the 21 × 16 m cavern everything is 5 m or more away and gets little of it. That is why the squeeze looked lantern-lit and the cavern did not. The cavern's light is now its fire.
+
+**Room fires lit nothing after #76** (found when merging it; fix in `render/interiorShader.ts fireLights`). #76 hands each fire to three's lighting model (`lightingModel.direct`) from inside a TSL `Loop` over the row's fires, under an `If` on the row. In the headless WebGL2 captures, no light added there reached the surface: the cavern was black but for the carried lantern, which is added after the loop and outside it. Bisected in captures: without the rock's bump normal, still black; the first fire added with no `Loop` or `If`, lit as before. Now the 12 fire slots are unrolled in JS, each an unconditional light whose colour is × 0 past the row's count. This is the same lights and the same maths, with no control flow round `direct`. It is probably the same for every castle room's fires in WebGL2 (the hall is in this round's captures). Not checked on WebGPU. Cost: 12 point-light evaluations per interior fragment instead of a loop that stops at the row's count.
+
+**The caves drawn from outdoors** (found by the draw-call bisect, #75): the cave group `interior:cave:-1` was drawn from the hero view, 7 draws a pass. Its tagging was right: the group holds only cave rooms and is not always-visible. The cause was `world/visibility.ts drawnSpaces`. It draws two steps over any edge, then floods on through open doorways, and that flood started from every space of the two steps. From outside, two steps reach the great cellar (outside → tunnel-5 by the leafless tunnel mouth → great-c behind a shut door), and from there the flood ran through great-c's open way into the caves and on through every leafless cave opening. Now the flood starts at the camera's own spaces only. A room two steps off behind a shut door is still drawn, but what lies open beyond it is not, until a door on the way opens. This is a pure draw decision: the graph, the openings and the doors are unchanged. It also changes what "deep" means for the outdoors: a cellar whose way out is two shut doors off now hides the water and trees. `world-views.test.ts` holds the rule over the whole castle: from every outdoor pose (more than 900, near and far in front of every outdoor doorway, the courtyard, outside up to 150 m), with doors shut, no cave room is drawn. It fails on the old code (every cave room drawn from in front of gate-main). The existing whole-castle rule (every opening seen from any pose, doors shut or open, draws what is behind it) still passes. `visibility.test.ts` was updated to the new rule.
+
+Tests:
+- `caves.test.ts`:
+  - fire placement (by the pool, clear of walks, finds, blocks and stalagmites; a brazier emitter; shading uniforms);
+  - openness (synthetic floor, slot and overhang; the cave's own values; the cavern floor near 1);
+  - fungi bake (near, far, back faces; openness untouched);
+  - the doors on the way down, including their effect on what every cave room draws.
+- `doors.test.ts`: `standOpen`.
+- The whole-cave ray grid (no gaps from any cave view) now includes everything drawn, because there are no halos to leave out.
+- `npm test`, coverage and build pass.
+
+Captures (headless WebGL2, after merging main through #76; `castle-plan/caves3/`): caves 26 draw calls / 121 k triangles, cave-pool 22, walk-squeeze (walk mode, 0.5 m from the wall) 25, cave-squeeze 31, cave-wall 20, cave-drop 29, cave-steps 43, cave-ossuary 31, cave-cache 22, cave-entrance 42, way-down 245, way-in 258, cave-exit 214, hall 312, hero 582, courtyard 482, gate 514. The hero, courtyard and gate counts are not comparable with the round before #76. That the hero draws no cave room is shown by `world-views.test.ts`, not by the capture.
+
 ## 2026-11-08: the hall's hearth surround lit from a hand's breadth; metal by a fire near-white; the water's reflection rendered from every room (branch `claude/project-thread-ns4g2v-glow2`)
 
 **1. The hall's hooded chimneypiece and the armour beside it near-white (`?furniture=1`).** Measured on Anders' Mac (live b097e26, WebGPU, read-only: the light knobs switched off one at a time at a fixed exposure, 4 m in front of the hall hearth): the lintel and hood front went 135 → 55 sRGB with the fire table zeroed (daylight off: 135 → 106; sun off: no change); the wall beside it 20–56. Causes:

@@ -20,7 +20,7 @@ export function islandCastle() {
   return { builder, plan, lights, bridge: bridgeInfo(plan.walkable, plan.d) };
 }
 
-export const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'pave', 'rock', 'pool', 'glow', 'halo'] as BinKey[]).map((k) => [k, m])) as unknown as Record<BinKey, THREE.Material>; };
+export const mats = () => { const m = new THREE.MeshBasicMaterial(); return Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'pave', 'rock', 'pool', 'glow'] as BinKey[]).map((k) => [k, m])) as unknown as Record<BinKey, THREE.Material>; };
 export const doorMats = () => ({ wood: new THREE.MeshBasicMaterial(), iron: new THREE.MeshBasicMaterial(), trim: new THREE.MeshBasicMaterial() });
 
 /** Where the test terrain's near rock sits (12 m in from an island outline vertex). */

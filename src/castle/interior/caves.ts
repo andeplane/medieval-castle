@@ -38,7 +38,7 @@ export interface CavePassage {
   /** Whether each end meets the castle's wall (a doorway with a collar of rock round it) rather than a chamber. */
   portal: [boolean, boolean];
 }
-export type CaveFeatureKind = 'bones' | 'shrine' | 'cache' | 'lantern' | 'lost-lantern';
+export type CaveFeatureKind = 'bones' | 'shrine' | 'cache' | 'lantern' | 'lost-lantern' | 'fire';
 export interface CaveFeature { kind: CaveFeatureKind; room: SpaceId; at: V3; dir: V2 }
 
 export interface CavePlan {
@@ -151,8 +151,35 @@ export function planCaves(rng: () => number, ent: CaveAnchor, ext: CaveAnchor): 
   const uC11 = side(away(C11, C7.c));
   features.push({ kind: 'lost-lantern', room: C11.id, at: toward(C11, uC11, 0.45), dir: uC11 });
   features.push({ kind: 'bones', room: C7.id, at: toward(C7, scale(side(C7.axis), -1), 0.55), dir: C7.axis });
+  const fire = fireSpot(C7, passages, features);
+  if (fire) features.push({ kind: 'fire', room: C7.id, at: fire, dir: C7.axis });
 
   return { plan: { chambers, passages, features, openings, entrance: 'cave-breach', exit: 'cave-climb' }, rooms, doors };
+}
+
+/**
+ * The smugglers' fire in the great cavern (the cavern's lit heart, 2026-11-08 caves3): on the floor beside
+ * the pool, clear of the pool, of every walk from a passage mouth to the centre and of the other finds;
+ * of the spots round the pool that are, the one nearest the cavern's middle (towards where you come in).
+ */
+export function fireSpot(k: CaveChamber, passages: CavePassage[], features: CaveFeature[]): V3 | null {
+  if (!k.pool) return null;
+  const segDist = (q: V2, a: V2, b: V2) => {
+    const d = sub(b, a), L2 = dot(d, d) || 1, t = Math.max(0, Math.min(1, dot(sub(q, a), d) / L2));
+    return Math.hypot(q[0] - a[0] - d[0] * t, q[1] - a[1] - d[1] * t);
+  };
+  const walks = passages.flatMap((p) => p.ends.flatMap((e, i) => (e === k.id ? [i ? p.to : p.from] : []))).map((e): V2 => [e[0], e[2]]);
+  let best: V2 | null = null, bd = Infinity;
+  for (let i = 0; i < 24; i++) for (const off of [1.1, 1.5, 1.9]) {
+    const t = (i / 24) * Math.PI * 2, q: V2 = [k.pool.c[0] + Math.cos(t) * (k.pool.r + off), k.pool.c[1] + Math.sin(t) * (k.pool.r + off)];
+    const dx = q[0] - k.c[0], dz = q[1] - k.c[1];
+    if (Math.hypot(dot([dx, dz], k.axis) / k.a, dot([dx, dz], side(k.axis)) / k.b) > 0.7) continue;
+    if (walks.some((w) => segDist(q, w, k.c) < 1.6)) continue;
+    if (features.some((f) => Math.hypot(q[0] - f.at[0], q[1] - f.at[2]) < 2.5)) continue;
+    const d = Math.hypot(dx, dz);
+    if (d < bd) { bd = d; best = q; }
+  }
+  return best && [best[0], k.y, best[1]];
 }
 
 /** Is this space a cave room? */

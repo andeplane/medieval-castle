@@ -32,7 +32,7 @@ import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
-import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins, syncFires as syncFireTextures, setCarried } from './render/interiorLight';
+import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins, syncFires as syncFireTextures, setCarried, CAVE_FLOOR } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility, shadowInView } from './world/visibility';
 import { wallTorches, type FireSources } from './render/interiorFire';
@@ -69,7 +69,8 @@ import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
 import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 import { CAVE_ZONE } from './castle/interior/caves';
-import { caveFires } from './castle/interior/caveGeom';
+import { doorsOnWayToCaves } from './castle/interior/nav';
+import { caveFires, caveShading } from './castle/interior/caveGeom';
 import { lanternFire, lanternAt, lanternLit } from './player/lantern';
 
 const params = new URLSearchParams(location.search);
@@ -135,7 +136,7 @@ async function main() {
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
     revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
-  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow, halo: M.halo };
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
   // built by the shell into each room's group, their flames and lights fed to the light rig below
@@ -201,7 +202,8 @@ async function main() {
   const keys = ['old', 'new', 'trim', 'wood', 'iron', 'glass'] as const;
   const swap = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IM[k]]));
   const swapUnder = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IMu[k]]));
-  for (const k of ['rock', 'pool', 'glow'] as const) swapUnder.set(M[k], IMu.adopt(M[k])); // the caves: underground only
+  for (const k of ['rock', 'pool', 'glow'] as const) swapUnder.set(M[k], IMu.adopt(M[k], CAVE_FLOOR)); // the caves: underground only, darker
+  if (iplan?.caves) { const s = caveShading(iplan.caves); M.caveShade.pool.value.fromArray(s.pool); M.caveShade.fire.value.fromArray(s.fire); }
   let lit: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: [] };
   const shells: THREE.Object3D[] = [castle];
   if (interior) {
@@ -358,7 +360,7 @@ async function main() {
   // and tunnels have no sun), and so does the portcullis, for its windlass room; a courtyard or outside
   // door's faces that look out take the exterior wood and iron, which the sun and sky light
   const inMats = (set: typeof IM) => ({ wood: set.adopt(M.wood), iron: set.adopt(M.iron) });
-  const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined, portcullis: port };
+  const doorOpts = { sound: audio, characters: play.characters, initial: params.has('doors') ? Number(params.get('doors')) : undefined, portcullis: port, standOpen: new Set(iplan ? doorsOnWayToCaves(iplan) : []) };
   const doors = buildCastleDoors(doorSets.active, { above: inMats(IM), under: inMats(IMu), outdoor: { wood: M.wood, iron: M.iron } }, GROUND, physics, doorOpts);
   scene.add(doors.object);
   // locked doors: their own system, never opened, with no interactables and no request() from NPCs

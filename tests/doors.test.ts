@@ -397,6 +397,12 @@ describe('door system', () => {
     return new THREE.Vector3(d.centre[0] + d.normal[0] * s * (d.wall / 2 + dist), d.centre[1] + 1.6, d.centre[2] + d.normal[1] * s * (d.wall / 2 + dist));
   };
 
+  it('starts the doors it is told to wide open (the way to the caves), the rest shut', () => {
+    const a = single({ id: 'a' }), b = single({ id: 'b', centre: [5, 0, 0] });
+    const sys = buildDoors([a, b], M, undefined, { batch: fakeBatch().factory, ajar: 0, standOpen: new Set(['b']) });
+    expect(sys.state()).toEqual({ a: 0, b: 0.9 });
+  });
+
   it('batches every door into one wood and one iron draw call, ~1k triangles a leaf', () => {
     const fb = fakeBatch();
     const doors = randomSpecs(150, 11);

@@ -18,7 +18,6 @@ import { type CavePlan, type CaveChamber, type CavePassage, passageFrame, passag
 
 /** Grid step of the surface nets (m). */
 export const CAVE_CELL = 0.4;
-const ROCK_TILE = 4;
 /** How far a passage's tube runs on into a chamber, and back into the wall at a castle doorway. */
 const EXT_CHAMBER = 1.0, EXT_PORTAL = 0.6;
 /** How far a chamber wall's ledges stand out (m). */
@@ -159,8 +158,11 @@ export function behindPortal(P: CavePlan) {
   });
 }
 
-/** The rock as an indexed soup: positions and normals (3 per vertex), triangles (3 vertex indices each). */
-export interface CaveSoup { pos: ArrayLike<number>; nor: ArrayLike<number>; tris: ArrayLike<number> }
+/**
+ * The rock as an indexed soup: positions and normals (3 per vertex), triangles (3 vertex indices each) and
+ * each vertex's openness (rockOpenness: 1 in the open, towards 0 deep in a recess).
+ */
+export interface CaveSoup { pos: ArrayLike<number>; nor: ArrayLike<number>; tris: ArrayLike<number>; open: ArrayLike<number> }
 const cache = new Map<string, CaveSoup>();
 const keyOf = (P: CavePlan, seed: number) => `${seed}:${JSON.stringify([P.chambers, P.passages])}`;
 /** The cave rock as an indexed soup (cached by plan; caveOffThread.ts can make it in a worker and prime the cache). */
@@ -168,12 +170,38 @@ export function caveRock(P: CavePlan, seed: number): CaveSoup {
   const key = keyOf(P, seed);
   let r = cache.get(key);
   if (!r) {
-    const F = caveField(P, seed);
-    r = surfaceNets(F.f, F.lo, F.hi, CAVE_CELL, behindPortal(P));
+    const F = caveField(P, seed), S = surfaceNets(F.f, F.lo, F.hi, CAVE_CELL, behindPortal(P));
+    r = { ...S, open: rockOpenness(F.f, S.pos, S.nor) };
     primeCaveRock(P, seed, r);
   }
   return r;
 }
+/** Sample directions round the normal for rockOpenness: the normal and four 55° off it. */
+const OPEN_TILT = Math.sin((55 * Math.PI) / 180), OPEN_UP = Math.cos((55 * Math.PI) / 180), OPEN_D = [0.45, 1.0, 1.9];
+/**
+ * How open each vertex is, 0..1: the share of points out along the normal and four directions round it, at
+ * 0.45, 1 and 1.9 m, that are in the air (soft over ±0.15 m of the field). Shelf undersides, niches, the
+ * corners where floor meets wall and narrow passages come out low: baked darkness for the recesses.
+ */
+export function rockOpenness(f: (x: number, y: number, z: number) => number, pos: ArrayLike<number>, nor: ArrayLike<number>): Float32Array {
+  const n = pos.length / 3, out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const p: V3 = [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]], N: V3 = [nor[3 * i], nor[3 * i + 1], nor[3 * i + 2]];
+    const t1 = norm3(Math.abs(N[1]) < 0.9 ? cross3(N, [0, 1, 0]) : cross3(N, [1, 0, 0])), t2 = cross3(N, t1);
+    let air = 0, cnt = 0;
+    for (let d = 0; d < 5; d++) {
+      const [a, b] = d === 0 ? [0, 0] : [[1, 0], [-1, 0], [0, 1], [0, -1]][d - 1];
+      const dir: V3 = d === 0 ? N : [N[0] * OPEN_UP + (t1[0] * a + t2[0] * b) * OPEN_TILT, N[1] * OPEN_UP + (t1[1] * a + t2[1] * b) * OPEN_TILT, N[2] * OPEN_UP + (t1[2] * a + t2[2] * b) * OPEN_TILT];
+      for (const s of OPEN_D) {
+        const v = f(p[0] + dir[0] * s, p[1] + dir[1] * s, p[2] + dir[2] * s);
+        air += Math.max(0, Math.min(1, 0.5 - v / 0.3)); cnt++;
+      }
+    }
+    out[i] = air / cnt;
+  }
+  return out;
+}
+
 /** Hand the cache a soup made elsewhere (the worker) for this plan and seed. */
 export function primeCaveRock(P: CavePlan, seed: number, soup: CaveSoup) {
   if (cache.size > 4) cache.clear();
@@ -191,11 +219,6 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
   const rock = B.bins.rock;
   const fix = (i: number): V3 => [R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]];
   const nrm = (i: number): V3 => [R.nor[3 * i], R.nor[3 * i + 1], R.nor[3 * i + 2]];
-  const uvOf = (p: V3, n: V3): [number, number] => {
-    const ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
-    if (ay >= ax && ay >= az) return [p[0] / ROCK_TILE, p[2] / ROCK_TILE];
-    return ax > az ? [p[2] / ROCK_TILE, p[1] / ROCK_TILE] : [p[0] / ROCK_TILE, p[1] / ROCK_TILE];
-  };
   for (let t = 0; t < R.tris.length; t += 3) {
     const ids = [R.tris[t], R.tris[t + 1], R.tris[t + 2]], p = ids.map(fix), n = ids.map(nrm);
     // face the air: surface nets wind every quad the same way round (into the rock), so reversing all of them
@@ -203,22 +226,58 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
     // flipped ~150 triangles at sharp creases, where the field's gradient points across the fold: they were
     // culled and showed as slivers of nothing.)
     const e1 = sub3(p[2], p[0]), e2 = sub3(p[1], p[0]), fn = cross3(e1, e2);
-    const ns: V3 = [n[0][0] + n[1][0] + n[2][0], n[0][1] + n[1][1] + n[2][1], n[0][2] + n[1][2] + n[2][2]];
     const tri = [0, 2, 1];
     // partly the facet's own normal: crisper broken faces, most of the field's so they do not read as low-poly
     const face = norm3(fn);
     const facet = (v: V3) => norm3([face[0] * FACETED + v[0] * (1 - FACETED), face[1] * FACETED + v[1] * (1 - FACETED), face[2] * FACETED + v[2] * (1 - FACETED)]);
-    rock.triN(tri.map((i) => p[i]), tri.map((i) => facet(n[i])), tri.map((i) => uvOf(p[i], ns)));
+    rock.triN(tri.map((i) => p[i]), tri.map((i) => facet(n[i])), tri.map((i) => [R.open[ids[i]], 0] as [number, number]));
   }
-  const rockTris = R.tris.length / 3;
+  const rockTris = R.tris.length / 3, part0 = rock.pos.length / 3;
   for (const pt of portals) collar(rock, pt, P);
   for (const p of P.passages) if (p.steps) steps(B, p, seed);
   for (const k of P.chambers) if (k.pool) pool(B.bins.pool, k);
   for (const b of fallenBlocks(P, seed)) boulder(rock, b);
   for (const sp of speleothems(R, P, seed)) cone(rock, sp);
-  fungi(B.bins.glow, B.bins.halo, R, P, seed);
+  const spots = fungi(B.bins.glow, R, P, seed);
   for (const f of P.features) feature(B, f, seed);
+  bakePartOpenness(rock, part0, caveField(P, seed).f);
+  bakeFungiLight(rock, spots);
   return { rock: rockTris };
+}
+
+/**
+ * The rock that is not the soup (collars, steps, blocks, cones) takes its openness from the same field as
+ * the soup round it: with one fixed value a block against a recess wall showed as a lighter, hard-edged
+ * patch wherever it came out of the rock.
+ */
+export function bakePartOpenness(bin: { pos: number[]; nor: number[]; uv: number[] }, from: number, f: (x: number, y: number, z: number) => number) {
+  const open = rockOpenness(f, bin.pos.slice(3 * from), bin.nor.slice(3 * from));
+  open.forEach((o, i) => { bin.uv[2 * (from + i)] = o; });
+}
+
+/** How far the fungi's own light reaches over the rock round a cluster (m, gaussian radius). */
+export const FUNGI_REACH = 0.38;
+/**
+ * The fungi's faint light on the rock round each cluster, baked into the rock's uv v (the rock material
+ * reads it as teal light): a gaussian of the distance from each cluster, on faces turned its way. No quads
+ * of their own, so nothing to show an edge from any side. Everything in the rock bin gets it (blocks and
+ * stalagmites by a cluster too).
+ */
+export function bakeFungiLight(bin: { pos: number[]; nor: number[]; uv: number[] }, spots: { p: V3; n: V3 }[]) {
+  const cell = 2 * FUNGI_REACH, grid = new Map<string, number[]>(), key = (x: number, y: number, z: number) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  spots.forEach((s, i) => { const k = key(s.p[0], s.p[1], s.p[2]); if (!grid.has(k)) grid.set(k, []); grid.get(k)!.push(i); });
+  for (let v = 0; v < bin.pos.length / 3; v++) {
+    const x = bin.pos[3 * v], y = bin.pos[3 * v + 1], z = bin.pos[3 * v + 2];
+    let g = 0;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+      for (const i of grid.get(key(x + a * cell, y + b * cell, z + c * cell)) ?? []) {
+        const s = spots[i], dx = x - s.p[0], dy = y - s.p[1], dz = z - s.p[2];
+        const facing = bin.nor[3 * v] * s.n[0] + bin.nor[3 * v + 1] * s.n[1] + bin.nor[3 * v + 2] * s.n[2];
+        g += Math.exp(-(dx * dx + dy * dy + dz * dz) / (FUNGI_REACH * FUNGI_REACH)) * Math.max(0, Math.min(1, facing + 0.6));
+      }
+    }
+    bin.uv[2 * v + 1] = Math.min(1, g);
+  }
 }
 
 /** Rock round a castle doorway, in the cave room's face: the cave's tube ends in it (behind it, in the wall). */
@@ -232,9 +291,10 @@ function collar(bin: Bin, pt: CavePortal, P: CavePlan) {
   const hole = pt.clear.filter((q, i, a) => { const r = a[(i + 1) % a.length]; return Math.hypot(r[0] - q[0], r[1] - q[1]) > 1e-4; });
   const all = [...outer, ...hole];
   const tris = ShapeUtils.triangulateShape(outer.map((q) => new Vector2(q[0], q[1])), [hole.map((q) => new Vector2(q[0], q[1]))]);
-  for (const [i, j, k] of tris) bin.tri(W(all[i][0], all[i][1]), W(all[j][0], all[j][1]), W(all[k][0], all[k][1]), n, uvW(all[i]), uvW(all[j]), uvW(all[k]));
+  for (const [i, j, k] of tris) bin.tri(W(all[i][0], all[i][1]), W(all[j][0], all[j][1]), W(all[k][0], all[k][1]), n, PART, PART, PART);
 }
-const uvW = (q: V2): [number, number] => [q[0] / ROCK_TILE, q[1] / ROCK_TILE];
+/** The uv of rock not from the soup (collars, steps, blocks, cones) until bakePartOpenness and bakeFungiLight. */
+const PART: [number, number] = [0.8, 0];
 
 /** Rough steps down a passage: one block per tread, its top on the riser line, its ends in the rock. */
 export function stepBlocks(p: CavePassage, seed: number) {
@@ -254,7 +314,7 @@ function steps(B: Builder, p: CavePassage, seed: number) {
   for (const { c, size: [sx, sy, sz], dir: d } of stepBlocks(p, seed)) {
     const n: V2 = [d[1], -d[0]], y0 = c[1] - sy / 2, y1 = c[1] + sy / 2;
     const at = (s: number, t: number, y: number): V3 => [c[0] + d[0] * s * sx / 2 + n[0] * t * sz / 2, y, c[2] + d[1] * s * sx / 2 + n[1] * t * sz / 2];
-    const quad = (a: V3, b: V3, e: V3, f: V3, nn: V3) => { bin.tri(a, b, e, nn, [0, 0], [1, 0], [1, 1]); bin.tri(a, e, f, nn, [0, 0], [1, 1], [0, 1]); };
+    const quad = (a: V3, b: V3, e: V3, f: V3, nn: V3) => { bin.tri(a, b, e, nn, PART, PART, PART); bin.tri(a, e, f, nn, PART, PART, PART); };
     quad(at(-1, -1, y1), at(1, -1, y1), at(1, 1, y1), at(-1, 1, y1), [0, 1, 0]);
     for (const [s0, t0, s1, t1, nn] of [[-1, -1, 1, -1, [-n[0], 0, -n[1]]], [1, -1, 1, 1, [d[0], 0, d[1]]], [1, 1, -1, 1, [n[0], 0, n[1]]], [-1, 1, -1, -1, [-d[0], 0, -d[1]]]] as [number, number, number, number, V3][])
       quad(at(s0, t0, y0), at(s1, t1, y0), at(s1, t1, y1), at(s0, t0, y1), nn);
@@ -304,16 +364,14 @@ export function fungiSpots(R: { pos: ArrayLike<number>; nor: ArrayLike<number> }
 }
 /**
  * Each spot: a cluster of tiny stalked caps (uv v = 1 on the cap's crown, 0 at its rim and stem, so the glow
- * shader brightens the crowns) and, flat on the rock behind it, one soft halo quad (the 'halo' bin, additive,
- * its uv the quad's corners) so the cluster sits in its own faint pool of light rather than reading as flakes.
+ * shader brightens the crowns). Their light on the rock round them is baked into the rock (bakeFungiLight).
+ * Returns the spots.
  */
-function fungi(bin: Bin, halo: Bin, R: CaveSoup, P: CavePlan, seed: number) {
-  const r = mulberry32(hashSeed('cave-fungi-caps', seed));
-  for (const s of fungiSpots(R, P, seed)) {
+function fungi(bin: Bin, R: CaveSoup, P: CavePlan, seed: number) {
+  const r = mulberry32(hashSeed('cave-fungi-caps', seed)), spots = fungiSpots(R, P, seed);
+  for (const s of spots) {
     const n = norm3(s.n), t1 = norm3(cross3(n, [0, 1, 0])), t2 = cross3(n, t1);
     const at = (u: number, v: number, w: number): V3 => [s.p[0] + t1[0] * u + t2[0] * v + n[0] * w, s.p[1] + t1[1] * u + t2[1] * v + n[1] * w, s.p[2] + t1[2] * u + t2[2] * v + n[2] * w];
-    const hs = 0.35 + r() * 0.25, q = [at(-hs, -hs, 0.04), at(hs, -hs, 0.04), at(hs, hs, 0.04), at(-hs, hs, 0.04)];
-    halo.tri(q[0], q[1], q[2], n, [0, 0], [1, 0], [1, 1]); halo.tri(q[0], q[2], q[3], n, [0, 0], [1, 1], [0, 1]);
     const caps = 6 + Math.floor(r() * 9);
     for (let c = 0; c < caps; c++) {
       const u = (r() - 0.5) * 0.24, v = (r() - 0.5) * 0.2, rad = 0.01 + r() * r() * 0.03, stem = rad * (1.2 + r() * 1.5);
@@ -331,6 +389,7 @@ function fungi(bin: Bin, halo: Bin, R: CaveSoup, P: CavePlan, seed: number) {
       }
     }
   }
+  return spots;
 }
 
 // ---------------------------------------------------------------- broken stone
@@ -386,7 +445,7 @@ function boulder(bin: Bin, b: Boulder) {
   });
   for (const [i, j, k] of ICO_F) {
     const m: V3 = [(v[i][0] + v[j][0] + v[k][0]) / 3 - b.c[0], (v[i][1] + v[j][1] + v[k][1]) / 3 - b.c[1], (v[i][2] + v[j][2] + v[k][2]) / 3 - b.c[2]];
-    bin.tri(v[i], v[j], v[k], norm3(m), [v[i][0] / ROCK_TILE, v[i][2] / ROCK_TILE], [v[j][0] / ROCK_TILE, v[j][2] / ROCK_TILE], [v[k][0] / ROCK_TILE, v[k][2] / ROCK_TILE]);
+    bin.tri(v[i], v[j], v[k], norm3(m), PART, PART, PART);
   }
 }
 
@@ -427,7 +486,7 @@ function cone(bin: Bin, s: Speleothem) {
   const ring = Array.from({ length: n }, (_, i) => { const t = (i / n) * Math.PI * 2 + s.base[0]; return [s.base[0] + Math.cos(t) * s.r, s.base[1], s.base[2] + Math.sin(t) * s.r] as V3; });
   for (let i = 0; i < n; i++) {
     const a = ring[i], b = ring[(i + 1) % n], m: V3 = [(a[0] + b[0]) / 2 - s.base[0], 0, (a[2] + b[2]) / 2 - s.base[2]];
-    bin.tri(a, b, tip, norm3([m[0], s.dir * s.r * 0.3 / s.len, m[2]]), [i / n, 0], [(i + 1) / n, 0], [(i + 0.5) / n, s.len / ROCK_TILE]);
+    bin.tri(a, b, tip, norm3([m[0], s.dir * s.r * 0.3 / s.len, m[2]]), PART, PART, PART);
   }
 }
 
@@ -469,6 +528,16 @@ function feature(B: Builder, f: CavePlan['features'][number], seed: number) {
       for (const y of [0.12, 0.68]) B.cyl('iron', c[0], c[2], 0.29, 0.295, c[1] + y, c[1] + y + 0.04, 14, { top: null });
     }
     for (const c of L.crates) B.box('wood', c.c, [c.s, c.s * 1.0, c.s * 1.2], f.dir);
+  } else if (f.kind === 'fire') {
+    // the smugglers' fire: a ring of stones, charred logs crossed in it (the flame and its light: caveFires)
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + r() * 0.3, s = 0.17 + r() * 0.08;
+      boulder(B.bins.rock, { c: P(Math.cos(a) * 0.5, Math.sin(a) * 0.5, s * 0.15), size: [s, s * 0.7, s * 0.9], yaw: r() * Math.PI, seed: Math.floor(r() * 1e9) });
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI + r() * 0.4;
+      B.box('wood', P(0, 0, 0.05 + i * 0.07), [0.75, 0.08, 0.09], [Math.cos(a), Math.sin(a)], { bottom: false });
+    }
   } else if (f.kind === 'lantern') {
     const p = cacheLayout(f.at, f.dir).lantern;
     lanternBody(B, p, f.dir);
@@ -486,7 +555,7 @@ function lanternBody(B: Builder, base: V3, dir: V2) {
 }
 const pick2 = (p: V3): [number, number] => [p[0], p[2]];
 
-/** The caves' fire for src/light: the smugglers' lantern, still burning on its crate. */
+/** The caves' fires for src/light: the smugglers' lantern, still burning on its crate, and their fire in the great cavern. */
 export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[]; flames: Flame[]; group: string[] } {
   const out = { emitters: [] as LightEmitter[], flames: [] as Flame[], group: [] as string[] };
   for (const f of P.features) if (f.kind === 'lantern') {
@@ -495,7 +564,26 @@ export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[
     out.emitters.push({ kind: 'lantern', position: [base[0], base[1] + 0.08, base[2]], colour: [1, 0.93, 0.82], intensity: 0.6, flicker: 0.35 });
     out.group.push(group);
   }
+  for (const f of P.features) if (f.kind === 'fire') {
+    out.flames.push({ kind: 'brazier', base: [f.at[0], f.at[1] + 0.12, f.at[2]], height: 0.4 });
+    out.emitters.push(fireEmitter(f.at));
+    out.group.push(group);
+  }
   return out;
+}
+/** The cavern fire's light: low and broad, a little above the logs. */
+export const fireEmitter = (at: V3): LightEmitter => ({ kind: 'brazier', position: [at[0], at[1] + 0.5, at[2]], colour: [1, 0.86, 0.7], intensity: 1.3, flicker: 0.4 });
+
+/**
+ * What the cave shaders need of the plan: the pool's still water (centre, level and radius; r 0 if none),
+ * for the wet rim and the water, and the cavern fire (position and candela-ish strength; 0 if none), for the
+ * glints on wet rock and water. Uniforms in render/materials.ts caveMaterials.
+ */
+export function caveShading(P: CavePlan): { pool: [number, number, number, number]; fire: [number, number, number, number] } {
+  const k = P.chambers.find((c) => c.pool), f = P.features.find((x) => x.kind === 'fire');
+  const pool: [number, number, number, number] = k ? [k.pool!.c[0], poolDisc(k).y, k.pool!.c[1], k.pool!.r] : [0, -1e4, 0, 0];
+  const e = f && fireEmitter(f.at);
+  return { pool, fire: e ? [e.position[0], e.position[1], e.position[2], e.intensity] : [0, -1e4, 0, 0] };
 }
 
 /**

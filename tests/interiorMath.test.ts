@@ -96,6 +96,12 @@ describe('apertures', () => {
     expect(by('grille')[0].n[2]).toBe(1);
     expect(by('g2').every((a) => a.kind === 'portal')).toBe(true);
     expect(by('nowhere')).toHaveLength(0);
+    // natural openings between two cave rooms are no apertures (the caves are firelit); into the castle they are
+    const cv = (id: string) => ({ ...rooms[0], id, zone: 'cave' });
+    const caves = { rooms: [...rooms, cv('K1'), cv('K2')], stairs: [], doors: [door({ id: 'kk', spaces: ['K1', 'K2'], leaf: false }), door({ id: 'hk', spaces: ['H', 'K1'], leaf: false })] };
+    const ka = doorsToApertures(caves, new Map(caves.rooms.map((r, i) => [r.id, i])));
+    expect(ka.filter((a) => a.door === 'kk')).toHaveLength(0);
+    expect(ka.filter((a) => a.door === 'hk')).toHaveLength(2);
   });
 });
 

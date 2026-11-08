@@ -304,7 +304,7 @@ describe('interior shell', () => {
 
 describe('buildInterior', () => {
   it('makes one mesh per material per group, colliders, and stays inside the budget', () => {
-    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow', 'halo'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
+    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
     const ext = buildCastle().builder;
     const excl0 = ext.stoneExcl.length;
     const res = buildInterior(mats, ext, { plan: P, heightAt: () => 2.6 });
