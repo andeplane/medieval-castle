@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   EXPOSURE, adaptStops, apertureFrame, apertureRadiance, ceilingSkins, doorsToApertures, inPoly, meanLog2, nearestRoom, packTable, polyArea, polyDist,
-  passageSkins, polyPerimeter, outdoorRevealTest, OUTDOOR_TAG, roomGridFor, fillRoomGrid, gridRoom, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
+  passageSkins, polyPerimeter, outdoorRevealTest, OUTDOOR_TAG, roomGridFor, fillRoomGrid, gridRoom, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tableDaylight, tagTriangles, AP_TEXELS, targetStops, windowsToApertures, type Aperture, type Daylight,
 } from '../src/render/interiorMath';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -135,6 +135,34 @@ describe('daylight', () => {
     expect(shut.light[1].bounce[0]).toBe(0);
     const shaded = solveRooms(rooms, aps, day, [0]);
     expect(shaded.light[0].bounce[0]).toBeLessThan(dark.light[0].bounce[0]);
+  });
+});
+
+describe('the shader\'s daylight on the CPU (tableDaylight)', () => {
+  // a 2 × 2 m pane facing +z into room 0, 1 cm deep, radiance 0.5; its room's bounce 0.1
+  const ap: Aperture = { id: 'w', kind: 'glass', c: [0, 1.5, 0], n: [0, 0, -1], w: 2, h: 2, depth: 0.01, wi: 2, hi: 2, yi: 0, outer: 0, room: 0, open: 1 };
+  const texW = 1 + 2 * AP_TEXELS, data = packTable(new Float32Array(texW * 4), texW, 2, 1, [ap], { light: [{ bounce: [0.1, 0.1, 0.1], direct: [0, 0, 0] }], radiance: [[0.5, 0.5, 0.5]] });
+  /** Form factor of a w × h rectangle seen square on from distance c on its axis (four corner rectangles). */
+  const ff = (a: number, b: number, c: number) => { const X = a / c, Y = b / c; return (4 / (2 * Math.PI)) * (X / Math.hypot(1, X) * Math.atan(Y / Math.hypot(1, X)) + Y / Math.hypot(1, Y) * Math.atan(X / Math.hypot(1, Y))); };
+  test('matches the exact form factor square on, and the bounce × gain', () => {
+    const d = tableDaylight(data, texW, 0, [0, 1.5, 1.01], [0, 0, -1], 12);
+    expect(d.bounce[0]).toBeCloseTo(1.2);
+    expect(d.apertures[0] / (0.5 * Math.PI * 12)).toBeCloseTo(ff(1, 1, 1.01), 2);
+  });
+  test('nothing facing away, behind the pane, or past the room\'s count', () => {
+    expect(tableDaylight(data, texW, 0, [0, 1.5, 1.01], [0, 0, 1], 12).apertures[0]).toBe(0);
+    expect(tableDaylight(data, texW, 0, [0, 1.5, -1], [0, 0, 1], 12).apertures[0]).toBe(0);
+    const empty = packTable(new Float32Array(texW * 4), texW, 2, 1, [], { light: [{ bounce: [0, 0, 0], direct: [0, 0, 0] }], radiance: [] });
+    expect(tableDaylight(empty, texW, 0, [0, 1.5, 1.01], [0, 0, -1], 12).apertures[0]).toBe(0);
+  });
+  test('a sloped face turned up toward a high window sees more of it than the wall below the window', () => {
+    const high = { ...ap, c: [0, 4, 0] as [number, number, number] };
+    const t = packTable(new Float32Array(texW * 4), texW, 2, 1, [high], { light: [{ bounce: [0, 0, 0], direct: [0, 0, 0] }], radiance: [[0.5, 0.5, 0.5]] });
+    // across the room, 6 m off, looking back at it: an upward-tilted slope versus the upright wall
+    const wall = tableDaylight(t, texW, 0, [0, 1.5, 6], [0, 0, -1], 12).apertures[0], slope = tableDaylight(t, texW, 0, [0, 1.5, 6], [0, 0.43, -0.9], 12).apertures[0];
+    expect(slope).toBeGreaterThan(wall);
+    // inside the embrasure: the whole pane
+    expect(tableDaylight(t, texW, 0, [0, 4, 0.005], [0, 0, -1], 12).apertures[0]).toBeGreaterThan(0);
   });
 });
 
