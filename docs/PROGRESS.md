@@ -121,6 +121,28 @@ Tests (`precompile.test.ts`): `asyncPipelines` turns a render's null `promises` 
 
 Not checked: the branch build itself on his Mac (the deploy happens on merge; the emulation applies the same wrapper to the live bundle); a 60 Hz or Intel Mac; Safari/Firefox WebGPU; the caption's percentage, which lives on the page thread and still pauses during the step's longest page task (0.6 s). Seen in passing, not changed: after ready the live game issues about 1,000 `writeBuffer` calls per frame (7,000–15,000 per 100 ms) (uniforms per object).
 
+After (headless WebGL2, built bundles of origin/main and this branch, `?shot&furniture=1`, scene-pass HDR read back; "display" = HDR × the exposure live auto-exposure settles on there, a mean over all pixels; captures in `castle-plan/glow/`, `*-adapted.png` at that exposure):
+
+| pose | before: exposure, display mean, p99 | after: exposure, display mean, p99 |
+|---|---|---|
+| hall N1-2, 1.5 m from the hearth | 0.72 (floor), 0.68, 7.9 | 0.64, 0.17, 1.17 |
+| hall N1-2, room view | 0.89, 0.15, 1.55 | 1.25, 0.12, 0.84 |
+| study N2-0, room view | 1.28, 0.22, 2.49 | 1.60, 0.17, 1.51 |
+| study N2-0, 1.5 m from the chimneypiece | 0.72 (floor), 0.74, 5.5 | 0.66, 0.16, 0.73 |
+| study wall, 0.5 m (close-range) | 0.89, 0.09, 0.16 | 1.49, 0.09, 0.17 |
+| courtyard door reveal (eye (10.5, 3.8, −1.5)) | Mac: black reveal | 0.77, 0.10, 0.20: daylit stone, darker than the wall face |
+
+The headless before matches the Mac (hall hearth display mean 0.68 vs 0.76, at the exposure floor). After: warm pools round each fire, stone texture readable on every wall, the far corners dark, nothing at the hearths clipping over the room. Draw calls are unchanged (no lights or meshes added; the fire is a few uniforms and two small textures in the interior shader).
+
+Not checked:
+- The fix on Anders' Mac (WebGPU) and the live auto-exposure in a real browser: needs the deploy. Headless WebGL2 only, with the exposure computed from the same `targetStops`.
+- Fire on brass and iron is now a rough reflection only (no sharp point-light glints).
+- Fire stays in its room: it does not spill through an open doorway into the next room (each room sums only its own fires). Door leaves take the room the room grid gives them, so a leaf's two faces are lit by the rooms they face; seen only in tests, not in a capture of an open door.
+- Sun on outdoor reveals: they take the courtyard's sky and ground ambient, not direct sun or its shadow.
+- `lights.html` and the prop preview still use the old `LightRig` (they light props, not rooms).
+- Captures of torch-lit rooms after the change were not finished (the container's Chrome kept getting killed for memory); the torch-lit rooms' numbers are unchanged by construction (`roomFires` never dims them: whole-castle test), but their light now has the soft radius and no 1.6 × range cut-off.
+- In the full `npm run coverage` on this container, under a load average of 16, the four `interior plan` seed batches once timed out; alone they pass, and the rerun result is what CI will show.
+
 ## 2026-11-07: why the Mac counts 4.6x the draw calls; door instances grouped by geometry (branch `claude/project-thread-ns4g2v-dc`)
 
 Anders' Mac (WebGPU, live a6364bd) shows 1298 draw calls at eye (11.6, 4.3, -1.2) → (14.2, 4.0, -3.3) (doors shut, no furniture, 15 groups shown); headless WebGL2 shows 279. Measured on his Mac (Playwright, the backend's `draw` wrapped for one live frame, read-only):
