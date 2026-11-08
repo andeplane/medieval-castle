@@ -502,21 +502,18 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   rock.name = 'cave-rock';
   // strata: gently wavy beds a few decimetres thick
   const bed = sin(p.y.mul(5.3).add(big.r.mul(6)).add(mid.g.mul(1.5))).mul(0.5).add(0.5);
-  let col = mix(vec3(0.25, 0.235, 0.21), vec3(0.36, 0.34, 0.305), big.g).mul(float(0.8).add(bed.mul(0.25))).mul(float(0.82).add(mid.r.mul(0.36)));
-  const iron = smoothstep(0.62, 0.8, big.b).mul(0.6);
-  col = mix(col, col.mul(vec3(1.25, 0.92, 0.66)), iron);
-  // calcite: pale runs down the upright walls, broken up by the grain
-  const run = smoothstep(0.7, 0.85, texture(macro, vec2(p.x.add(p.z).mul(0.6), p.y.mul(0.05))).a).mul(float(1).sub(an.y));
-  col = mix(col, vec3(0.55, 0.54, 0.5), run.mul(0.55));
-  col = col.mul(float(0.88).add(grain.mul(0.24)));
+  let col = mix(vec3(0.25, 0.235, 0.21), vec3(0.36, 0.34, 0.305), big.g).mul(float(0.84).add(bed.mul(0.18))).mul(float(0.76).add(mid.r.mul(0.48)));
+  const iron = smoothstep(0.66, 0.84, big.b).mul(0.4);
+  col = mix(col, col.mul(vec3(1.18, 0.95, 0.75)), iron);
+  col = col.mul(float(0.8).add(grain.mul(0.4)));
   rock.colorNode = col;
   // damp: wetter, shinier low down and on the floors
-  rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).sub(run.mul(0.25)).clamp(0.4, 1);
-  rock.normalNode = bumpMap(big.r.mul(0.6).add(mid.g.mul(0.3)).add(grain.mul(0.06)), float(1.2));
-  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x06090b, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.86 });
+  rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).clamp(0.4, 1);
+  rock.normalNode = bumpMap(big.r.mul(0.45).add(mid.g.mul(0.45)).add(grain.mul(0.18)), float(2.2));
+  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x0b1719, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.62 });
   pool.name = 'cave-pool';
   const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
   glow.name = 'cave-glow';
-  glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(1.4);
+  glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(0.75);
   return { rock, pool, glow };
 }

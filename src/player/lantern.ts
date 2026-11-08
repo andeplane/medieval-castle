@@ -4,7 +4,7 @@
 import type { LightEmitter, V3 } from '../light/types';
 import type { SpaceId } from '../castle/interior/types';
 
-export const CARRIED_LANTERN: LightEmitter = { kind: 'lantern', position: [0, -1000, 0], colour: [1, 0.94, 0.84], intensity: 1.5, flicker: 0.2 };
+export const CARRIED_LANTERN: LightEmitter = { kind: 'lantern', position: [0, -1000, 0], colour: [1, 0.94, 0.84], intensity: 0.45, flicker: 0.2 };
 
 /** Where the lantern hangs for an eye looking along `fwd` (any length; only its plan direction counts). */
 export function lanternAt(eye: V3, fwd: V3): V3 {

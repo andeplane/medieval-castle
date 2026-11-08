@@ -4,7 +4,7 @@
 // keeps its headroom: the noise moves walls and ceilings, never floors). Surface nets on a 0.4 m grid turn
 // the field into one triangle soup in the group's 'rock' bin (one draw call); normals from the field's
 // gradient, uvs in metres / tile on the dominant axis. Then what is not rock: rough steps cut down the
-// drop ('trim'), a collar of rock round each castle doorway, the pool's still water ('pool'), glowing
+// drop (rough 'rock'), a collar of rock round each castle doorway, the pool's still water ('pool'), glowing
 // fungi ('glow') and the finds (bones, a shrine, a smugglers' cache with its lantern).
 // A pure function of the plan and the seed; the soup is cached per plan, since several builders ask for it.
 import { ShapeUtils, Vector2 } from 'three/webgpu';
@@ -224,7 +224,7 @@ export function stepBlocks(p: CavePassage, seed: number) {
   return out;
 }
 function steps(B: Builder, p: CavePassage, seed: number) {
-  for (const s of stepBlocks(p, seed)) B.box('trim', s.c, s.size, s.dir, { bottom: false });
+  for (const s of stepBlocks(p, seed)) B.box('rock', s.c, s.size, s.dir, { bottom: false });
 }
 
 /** The pool's still water: a disc a little under the chamber floor, its rim under the basin's slope. */
