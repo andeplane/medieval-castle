@@ -1,9 +1,26 @@
 import { defineConfig } from 'vitest/config';
+import { BaseSequencer, type TestSpecification } from 'vitest/node';
+
+// The longest files (CI, 4 workers, under coverage: 35-120 s each, most others under 25 s) start first, so none
+// of them is left running alone at the end. Only the order changes; a stale name just sorts as before.
+const LONGEST = ['world', 'doorswing', 'interior', 'stairwalk', 'props-stream', 'doors'].map((n) => `/tests/${n}.test.ts`);
+class LongestFirst extends BaseSequencer {
+  async sort(files: TestSpecification[]) {
+    const rank = (f: TestSpecification) => { const i = LONGEST.findIndex((n) => f.moduleId.endsWith(n)); return i < 0 ? LONGEST.length : i; };
+    return (await super.sort(files)).map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map(({ f }) => f);
+  }
+}
+
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     // generation tests build real terrain and vegetation; give them room on a loaded machine
     testTimeout: 30000,
+    // worker threads on all four cores of the CI runner, longest files first (vitest's default is forks on
+    // three): about 5 % faster on the same runner (141-144 s against 149 s under coverage)
+    pool: 'threads',
+    maxWorkers: '100%',
+    sequence: { sequencer: LongestFirst },
     coverage: {
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).

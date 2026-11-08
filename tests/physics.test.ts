@@ -123,9 +123,12 @@ describe('physics world', () => {
     P.tick();
     expect(P.raycast([0, 1, -3], [0, 0, -1], 5)).toBeNull();
     expect(P.raycast([3, 1, -3], [0, 0, -1], 5)?.tag).toBe('door');
+    const wrapped = () => P.world.colliders.getAll().length; // rapier's JS wrappers, one per live collider
+    expect(wrapped()).toBe(P.world.colliders.len());
     k.remove(); k.remove(); k.setPose([0, 0, 0], [0, 0, 0, 1]);
     P.tick();
     expect(P.raycast([3, 1, -3], [0, 0, -1], 5)).toBeNull();
+    expect(wrapped()).toBe(P.world.colliders.len()); // the removed body's collider is unwrapped by the next step
     const plain = P.addKinematicBox([0.2, 0.2, 0.2]);
     plain.setPose([0, 3, 8], [0, 0, 0, 1]); P.tick();
     expect(P.raycast([0, 5, 8], [0, -1, 0], 5)?.tag).toBe('kinematic');

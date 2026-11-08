@@ -27,6 +27,20 @@ Same harness, main b097e26 → branch: hero 1209 → 618, courtyard 1121 → 566
 
 Not checked: the Mac (SwiftShader counts match his within ~3 % at the hero on main: 1209 vs 1180); live mode (the counts are `?view=` loads with the sun's static shadow map not re-rendered in that frame); `?furniture=1`. Seen, not changed: the cave group (`interior:cave:-1`, 7 draws a pass) is drawn from the hero view (caves3's area).
 
+## 2026-11-08: CI coverage run about 40 % faster (branch `claude/project-thread-ns4g2v-ci`)
+
+PR CI had grown to 4:12-5:29 (#71, #72), almost all of it `npm run coverage` (in #72: 316 s, of which `world.test.ts` 312 s; `npm ci` ~3 s, build 2-3 s). GitHub's runners differ a lot in speed (EPYC 9V74 fast, EPYC 7763 slow), so before/after was measured on the same runner in one job (main, then this branch). Coverage step: EPYC 9V74 main 239 / 239 s, branch 144 / 141 s; EPYC 7763 main 317 s, branch 194 / 189 s. Without coverage the branch runs in 83 s (9V74) / 113 s (7763). Whole job ~2:30 on a fast runner, ~3:15 on a slow one: still over the 2 min target.
+
+What changed (no test skipped, weakened or narrowed, no threshold lowered; whole-castle checks still check the whole castle):
+- `tests/helpers/rays.ts`: a flat BVH any-hit ray query that tests each candidate with three's own `Ray.intersectTriangle`, the same answer as three-mesh-bvh's `raycastFirst !== null` (v8 coverage slows the library's many small calls ~3×). Used by `world`, `sunLeak` and `groundInRooms`; `tests/rays.test.ts` checks it against brute force (all sides, edge/vertex/axis rays) and against three-mesh-bvh.
+- `tests/helpers/triGrid.ts`: an xz grid over triangle boxes, so per-door/per-point scans in `world.test.ts` (openings, hidden faces, door floors, reveals) look at nearby triangles instead of every triangle; the same filters run after. Castle solid and group triangles cached once per file; the cull test's world vertices precomputed. `doors.test.ts` "no light through a leaf" filters triangles per column.
+- `src/physics/world.ts`: steps rapier's pipeline directly, calling the full `world.step()` (which walks every body handle in JS each step) only after a body was removed. `physics.test.ts` checks the collider set stays consistent across a removal.
+- `src/castle/interior/doorGeom.ts` (`m4mul` unrolled) and `plan.ts` (`leafSwingFits` builds the leaf matrix once per angle): output checked bit-identical (hash of the generated plan and door geometry).
+- `vitest.config.ts`: threads on all 4 cores, longest files first (~5 %).
+
+Tried and dropped: istanbul (not faster, ignores `v8 ignore`, misses workers); `--no-isolate` (another ~11 %, all tests pass, but shares module state between files; left as an option).
+
+
 ## 2026-11-08: no zebra grain, darker prop stone, terrain drawn in culling tiles (branch `claude/project-thread-ns4g2v-furn3`)
 
 Anders, on his Mac (WebGPU, `?furniture=1`) after #70/#71: the hall's tables and benches showed harsh black-and-white grain; the hall's hooded chimneypiece read as white plaster with a grey-blue hood; frame triangles 4.10 M (hall), 3.76 M (chamber), 3.93 M (tower room) against the brief's 1–3 M.
