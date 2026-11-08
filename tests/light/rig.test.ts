@@ -90,6 +90,18 @@ describe('LightRig', () => {
     expect(f.lights[0].candela).toBe(0);
   });
 
+  it('passes an emitter\'s own falloff and reach to the engine light (the carried lantern), else the physical 2', () => {
+    const f = fakeFactory();
+    const rig = new LightRig(f, { shadows: 0, lights: 2, fadeTime: 0, motion: 0 });
+    rig.setEmitters([torch(0)]);
+    rig.add({ kind: 'lantern', position: [3, 1.2, 0], colour: [1, 1, 1], intensity: 0.2, flicker: 0, decay: 1, range: 9 }, true);
+    expect(toSource({ kind: 'lantern', position: [0, 0, 0], colour: [1, 1, 1], intensity: 0.2, flicker: 0, range: 9 }).range).toBe(9);
+    rig.update(0, 0.016, [1.5, 1.6, 0]);
+    const lantern = f.lights.find((l) => l.position[0] === 3)!, t = f.lights.find((l) => l.position[0] !== 3)!;
+    expect(lantern.decay).toBe(1); expect(lantern.range).toBe(9);
+    expect(t.decay).toBe(2);
+  });
+
   it('flickerOf matches what the lights do; meanLights lists every source steady', () => {
     const rig = new LightRig(fakeFactory());
     rig.setEmitters([torch(0, 3), candle(2)]);

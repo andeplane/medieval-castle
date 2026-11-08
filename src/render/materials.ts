@@ -202,7 +202,7 @@ export interface Materials {
   iron: THREE.MeshStandardNodeMaterial; void: THREE.MeshStandardNodeMaterial; glass: THREE.MeshStandardNodeMaterial;
   pave: THREE.MeshStandardNodeMaterial; terrain: THREE.MeshStandardNodeMaterial; macro: THREE.DataTexture;
   /** The natural caves (castle/interior/caveGeom.ts): bare rock, the pool's still water, glowing fungi. */
-  rock: THREE.MeshStandardNodeMaterial; pool: THREE.MeshStandardNodeMaterial; glow: THREE.MeshStandardNodeMaterial;
+  rock: THREE.MeshStandardNodeMaterial; pool: THREE.MeshStandardNodeMaterial; glow: THREE.MeshStandardNodeMaterial; halo: THREE.MeshBasicNodeMaterial;
 }
 
 export async function makeMaterials(): Promise<Materials> {
@@ -514,6 +514,13 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   pool.name = 'cave-pool';
   const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
   glow.name = 'cave-glow';
-  glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(0.75);
-  return { rock, pool, glow };
+  // the caps' crowns (uv v = 1) glow brightest, their rims, gills and stems (v ≈ 0) dimly
+  glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(mix(float(0.18), float(1.1), uv().y));
+  // a soft pool of light on the rock round each cluster: additive, fading from the quad's middle
+  const halo = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  halo.name = 'cave-halo';
+  const d = uv().mul(2).sub(1).length();
+  halo.colorNode = vec3(0.1, 0.55, 0.42);
+  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2).mul(0.32);
+  return { rock, pool, glow, halo };
 }

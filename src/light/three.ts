@@ -28,7 +28,7 @@ export function threeLightFactory(parent: THREE.Object3D, o: Partial<ThreeLightO
       l.name = castShadow ? 'fire-shadow-light' : 'fire-light';
       parent.add(l); lights.push(l);
       return {
-        set(p, c, cd, range) { l.position.set(p[0], p[1], p[2]); l.color.setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace); l.intensity = cd; l.distance = range; },
+        set(p, c, cd, range, decay = 2) { l.position.set(p[0], p[1], p[2]); l.color.setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace); l.intensity = cd; l.distance = range; l.decay = decay; },
       };
     },
   };

@@ -16,4 +16,10 @@ export interface Flame { kind: FlameKind; base: V3; height: number; up?: V3 }
  * to candela through the kind's profile. `flicker` 0..1 scales how much it wavers. `seed` keeps two
  * neighbouring torches out of step; it defaults to a hash of the position.
  */
-export interface LightEmitter { kind: FlameKind; position: V3; colour: RGB; intensity: number; flicker: number; seed?: number }
+export interface LightEmitter {
+  kind: FlameKind; position: V3; colour: RGB; intensity: number; flicker: number; seed?: number;
+  /** Optional falloff exponent (default 2, physical) and reach in metres (default from the kind and intensity).
+   * A carried lantern uses a softer falloff, so the wall beside the eye does not burn out while the
+   * passage ahead stays dark (player/lantern.ts). */
+  decay?: number; range?: number;
+}

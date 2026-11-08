@@ -9,7 +9,7 @@ import { WARM_INTERIOR } from './look';
 import { assign, emptyPool, type Candidate, type Pools, type Slot } from './budget';
 
 /** One engine light. `set` is called every frame for every slot (intensity 0 = off). */
-export interface LightHandle { set(position: V3, colour: RGB, candela: number, range: number): void }
+export interface LightHandle { set(position: V3, colour: RGB, candela: number, range: number, decay?: number): void }
 export interface LightFactory { create(castShadow: boolean): LightHandle }
 
 export interface RigOptions {
@@ -33,7 +33,7 @@ export function toSource(e: LightEmitter, adapt = DEFAULT_RIG.adapt): Source {
   const p = PROFILES[e.kind], bb = kelvinToLinear(seenKelvin(p.kelvin, adapt));
   const colour: RGB = [bb[0] * e.colour[0], bb[1] * e.colour[1], bb[2] * e.colour[2]];
   const m = Math.max(...colour);
-  return { emitter: e, seed: e.seed ?? seedOf(e.position), candela: p.candela * e.intensity, range: p.range * Math.min(2, Math.sqrt(Math.max(0.25, e.intensity))), colour: [colour[0] / m, colour[1] / m, colour[2] / m], mobile: false };
+  return { emitter: e, seed: e.seed ?? seedOf(e.position), candela: p.candela * e.intensity, range: e.range ?? p.range * Math.min(2, Math.sqrt(Math.max(0.25, e.intensity))), colour: [colour[0] / m, colour[1] / m, colour[2] / m], mobile: false };
 }
 
 export interface RigStats { sources: number; lit: number; shadowLit: number; candela: number }
@@ -79,7 +79,7 @@ export class LightRig {
     const drive = (slots: Slot[], hs: LightHandle[]) => slots.forEach((slot, i) => {
       if (slot.source < 0 || slot.weight <= 0) { hs[i].set([0, -1000, 0], [0, 0, 0], 0, 1); return; }
       const s = this.sources[slot.source], f = this.flickerOf(slot.source, t), p = s.emitter.position;
-      hs[i].set([p[0] + f.offset[0], p[1] + f.offset[1], p[2] + f.offset[2]], s.colour, s.candela * f.k * slot.weight, s.range);
+      hs[i].set([p[0] + f.offset[0], p[1] + f.offset[1], p[2] + f.offset[2]], s.colour, s.candela * f.k * slot.weight, s.range, s.emitter.decay);
     });
     drive(this.pools.shadow, this.shadowHandles);
     drive(this.pools.plain, this.plainHandles);

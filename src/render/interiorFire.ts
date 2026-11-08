@@ -32,7 +32,8 @@ export function wallTorches(plan: InteriorPlan & { tunnels?: TunnelSpec[] }, gro
   const out: FireSources = { emitters: [], flames: [], group: [], holders: [] };
   for (const r of plan.rooms) {
     if (out.emitters.length >= max) break;
-    if (!TORCH_ROOMS.has(r.kind) && r.zone !== 'tunnel') continue;
+    // and any room with a way into the caves (the great tower's cellar), so the opening is lit and found
+    if (!TORCH_ROOMS.has(r.kind) && r.zone !== 'tunnel' && !intoCaves(plan, r)) continue;
     const g = groupOf(r.id);
     const spot = g === undefined ? null : torchSpot(plan, r);
     if (!spot) continue;
@@ -69,6 +70,8 @@ type P2 = [number, number];
  * breach into the caves) has its torch beside that door, so the way down is lit and easy to find (Anders,
  * 2026-11-08: "i never found the basements").
  */
+const intoCaves = (plan: InteriorPlan, r: RoomSpec) => r.zone !== 'cave' && plan.doors.some((d) => d.spaces.includes(r.id) && d.spaces.some((s) => plan.rooms.find((x) => x.id === s)?.zone === 'cave'));
+
 export function torchSpot(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P2; b: P2 } | null {
   const down = besideWayDown(plan, r);
   if (down) return down;
@@ -89,7 +92,9 @@ export function torchSpot(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P
 
 /** A torch spot on the wall beside a door down out of the room, 0.65 m clear of its opening; null if none fits. */
 export function besideWayDown(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P2; b: P2 } | null {
-  for (const d of plan.doors) {
+  // a way into the caves first: it is the one to find (the great tower's cellar also has a tunnel down)
+  const cave = (d: InteriorPlan['doors'][number]) => d.spaces.some((s) => plan.rooms.find((x) => x.id === s)?.zone === 'cave') ? 0 : 1;
+  for (const d of [...plan.doors].sort((x, y) => cave(x) - cave(y))) {
     const k = d.spaces.indexOf(r.id);
     if (k < 0) continue;
     const o = plan.rooms.find((x) => x.id === d.spaces[1 - k]);

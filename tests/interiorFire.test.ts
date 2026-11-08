@@ -78,4 +78,10 @@ describe('interior fire sources', () => {
     const narrow = { ...hi, poly: sq(4, 0, 6.2, 6) };
     expect(besideWayDown({ rooms: [narrow, lo], doors: [d], stairs: [] }, narrow)).toBeNull();
   });
+  test('lights the way into the caves from the great tower cellar: a torch beside the opening, not by its tunnel', () => {
+    const P = planInterior(), r = P.rooms.find((x) => x.id === 'great-c')!, d = P.doors.find((x) => x.id === 'great-c>cave-climb')!;
+    const s = torchSpot(P, r)!;
+    expect(Math.hypot(s.m[0] - d.centre[0], s.m[1] - d.centre[2])).toBeLessThan(d.width / 2 + 0.65 + d.wall / 2 + 0.4);
+    expect(wallTorches(P, () => 'g').emitters.some((e) => Math.hypot(e.position[0] - s.m[0], e.position[2] - s.m[1]) < 0.5)).toBe(true);
+  });
 });

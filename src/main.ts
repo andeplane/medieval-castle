@@ -12,6 +12,7 @@ import { buildCastle } from './castle/castle';
 import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
 import { layoutStonesOffThread, browserStoneWorker } from './castle/stones/offThread';
+import { caveRockOffThread, browserCaveWorker } from './castle/interior/caveOffThread';
 import { precompile, renderOnce, asyncPipelines, type DeferredPipelines, type PipelineBackendLike } from './render/precompile';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
@@ -133,7 +134,7 @@ async function main() {
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
     revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
-  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow };
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow, halo: M.halo };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
   // built by the shell into each room's group, their flames and lights fed to the light rig below
@@ -145,6 +146,8 @@ async function main() {
     const cf = caveFires(iplan.caves, groupKey(iplan.rooms.find((r) => r.zone === CAVE_ZONE)!));
     torches.emitters.push(...cf.emitters); torches.flames.push(...cf.flames); torches.group.push(...cf.group);
   }
+  // the caves' rock is meshed in a worker (castle/interior/caveOffThread.ts) and waits in caveRock's cache
+  if (iplan?.caves) await caveRockOffThread(iplan.caves, iplan.seed, browserCaveWorker());
   const interior = iplan ? buildInterior(mats, builder, { heightAt, plan: iplan, torches: torches?.holders }) : null;
   // every stone of the castle (D.1) is laid out in a worker while the land, trees and floors are made
   // (castle/stones/offThread.ts); the faces are final once the interior has carved its doorways

@@ -8,7 +8,9 @@ import { MeshBVH } from 'three-mesh-bvh';
 import { planInterior, validatePlan, type PlanX } from '../src/castle/interior/plan';
 import { buildInterior, type InteriorResult } from '../src/castle/interior/index';
 import { caveSpan, caveWalk, passageFrame, passageFloor, ellipseRadius, poolDepth, isCave, CAVE_ZONE, type CavePlan } from '../src/castle/interior/caves';
-import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, CAVE_CELL } from '../src/castle/interior/caveGeom';
+import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
+import { caveRockOffThread, packCaveRock, type CaveWorker } from '../src/castle/interior/caveOffThread';
+import { Builder } from '../src/castle/builder';
 import { navGraph, findPath } from '../src/castle/interior/nav';
 import { roomGraph, drawnSpaces } from '../src/world/visibility';
 import { islandOutline, moatOuter } from '../src/castle/layout';
@@ -20,8 +22,9 @@ import { mats } from './world';
 
 type V3 = [number, number, number];
 /** A vertex of an open edge sits within a cell of where its quads were left out. */
-const closeBehind = (pos: number[], i: number) => {
-  const b = behindPortal(planInterior().caves!);
+let portalB: ReturnType<typeof behindPortal> | null = null;
+const closeBehind = (pos: ArrayLike<number>, i: number) => {
+  const b = (portalB ??= behindPortal(planInterior().caves!));
   for (const dx of [-0.4, 0, 0.4]) for (const dz of [-0.4, 0, 0.4]) for (const dy of [-0.4, 0, 0.4]) if (b(pos[3 * i] + dx, pos[3 * i + 1] + dy, pos[3 * i + 2] + dz)) return true;
   return false;
 };
@@ -179,7 +182,7 @@ describe('cave rock', () => {
     expect(open.flat().filter((i) => !(behind(R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]) || closeBehind(R.pos, i)))).toEqual([]);
     const g = res.groups.find((x) => x.key === 'cave:-1')!;
     expect(g.rooms.sort()).toEqual(P.rooms.filter(isCave).map((r) => r.id).sort());
-    expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
+    expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'halo', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
   }, 120_000);
 
   it('surface nets: a sphere is closed and the right size', () => {
@@ -254,5 +257,74 @@ describe('the carried lantern', () => {
     expect(lanternLit(['cave-hall'], caves)).toBe(true);
     expect(lanternLit(['N-c1'], caves)).toBe(false);
     expect(CARRIED_LANTERN.kind).toBe('lantern');
+    expect(CARRIED_LANTERN.decay).toBe(1); // 1/d: the wall beside the eye does not burn out while the way ahead stays lit
+    expect(CARRIED_LANTERN.range).toBeGreaterThanOrEqual(8);
+  });
+});
+
+describe('cave stone: ledges, fallen blocks, stalactites and stalagmites, fungi', () => {
+  // the walks through a chamber: from each passage mouth on it to its centre (what keypaths.test.ts walks)
+  const walkSegs = (k: CavePlan['chambers'][number]) => C.passages.flatMap((p) => p.ends.flatMap((e, i) => (e === k.id ? [[i === 0 ? [p.from[0], p.from[2]] : [p.to[0], p.to[2]], k.c] as [V2, V2]] : [])));
+  const segDist = (q: V2, [a, b]: [V2, V2]) => {
+    const d = [b[0] - a[0], b[1] - a[1]], L2 = d[0] * d[0] + d[1] * d[1];
+    const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / L2));
+    return Math.hypot(q[0] - a[0] - d[0] * t, q[1] - a[1] - d[1] * t);
+  };
+  const chamberOf = (q: V2) => C.chambers.find((k) => Math.hypot(q[0] - k.c[0], q[1] - k.c[1]) < ellipseRadius(k, norm2([q[0] - k.c[0], q[1] - k.c[1]])))!;
+  const norm2 = (v: V2): V2 => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l]; };
+
+  it('drops blocks along the chamber walls, on the floor and clear of every walk, the same for the same seed', () => {
+    const B = fallenBlocks(C, P.seed);
+    expect(B.length).toBeGreaterThanOrEqual(8);
+    expect(fallenBlocks(C, P.seed)).toEqual(B);
+    for (const b of B) {
+      const q: V2 = [b.c[0], b.c[2]], k = chamberOf(q);
+      expect(k).toBeTruthy();
+      expect(b.c[1] - b.size[1] / 2).toBeLessThan(k.y); // sunk in the floor
+      for (const s of walkSegs(k)) expect(segDist(q, s)).toBeGreaterThan(b.size[0] / 2 + 0.5);
+    }
+  });
+
+  it('hangs stalactites no lower than the clearance over the floor, and stands stalagmites clear of the walks', () => {
+    const S = speleothems(caveRock(C, P.seed), C, P.seed);
+    const down = S.filter((s) => s.dir === -1), up = S.filter((s) => s.dir === 1);
+    expect(down.length).toBeGreaterThan(20); expect(up.length).toBeGreaterThan(10);
+    for (const s of down) {
+      const k = chamberOf([s.base[0], s.base[2]]);
+      expect(s.base[1] - s.len).toBeGreaterThanOrEqual(k.y + TIP_CLEAR - 0.13); // the tip; 0.12 m of the cone is in the rock
+    }
+    for (const s of up) {
+      const q: V2 = [s.base[0], s.base[2]], k = chamberOf(q);
+      for (const g of walkSegs(k)) expect(segDist(q, g)).toBeGreaterThan(1.1);
+    }
+  });
+
+  it('builds them into the rock, and a soft halo behind every cluster of fungi', () => {
+    const B = new Builder();
+    buildCaves(B, C, P.seed, []);
+    const R = caveRock(C, P.seed), spots = fungiSpots(R, C, P.seed);
+    expect(spots.length).toBeGreaterThan(20);
+    expect(B.bins.halo.pos.length / 9).toBe(2 * spots.length);
+    expect(B.bins.rock.pos.length / 9).toBeGreaterThan(R.tris.length / 3 + 20 * fallenBlocks(C, P.seed).length);
+    expect(B.bins.rock.pos.length / 9).toBeLessThan(90_000); // a budget: ~40k of surface, blocks and cones
+    for (let i = 0; i < B.bins.glow.uv.length; i += 2) expect(B.bins.glow.uv[i + 1]).toBeGreaterThanOrEqual(0);
+  });
+
+  it('meshes the rock in a worker and primes the cache, or inline without one', async () => {
+    const R = caveRock(C, P.seed), warn: string[] = [];
+    let disposed = 0;
+    const fake = (fail: boolean): CaveWorker => ({ run: (plan, seed) => (fail ? Promise.reject(new Error('x')) : Promise.resolve(packCaveRock(caveRock(plan, seed)))), dispose: () => { disposed++; } });
+    const Q = { ...C, chambers: C.chambers.map((k) => ({ ...k })) };
+    Q.chambers[0].noise += 1e-9; // another plan: a cache miss
+    const packed = packCaveRock(R);
+    primeCaveRock(Q, P.seed, packed);
+    expect(caveRock(Q, P.seed)).toBe(packed);
+    await caveRockOffThread(C, P.seed, () => fake(false), (m) => warn.push(m));
+    await caveRockOffThread(C, P.seed, () => fake(true), (m) => warn.push(m));
+    await caveRockOffThread(C, P.seed, () => { throw new Error('no workers'); }, (m) => warn.push(m));
+    await caveRockOffThread(C, P.seed, null);
+    expect(disposed).toBe(2);
+    expect(warn).toEqual(['cave worker failed, meshing inline', 'cave worker unavailable, meshing inline']);
+    expect(Array.from(caveRock(C, P.seed).tris)).toEqual(Array.from(R.tris));
   });
 });

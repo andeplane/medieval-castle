@@ -304,7 +304,7 @@ describe('interior shell', () => {
 
 describe('buildInterior', () => {
   it('makes one mesh per material per group, colliders, and stays inside the budget', () => {
-    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
+    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow', 'halo'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
     const ext = buildCastle().builder;
     const excl0 = ext.stoneExcl.length;
     const res = buildInterior(mats, ext, { plan: P, heightAt: () => 2.6 });
@@ -332,17 +332,24 @@ describe('buildInterior', () => {
 });
 
 describe('interior camera bookmarks', () => {
-  it('derives the interior views from the plan', () => {
+  it('derives the interior views from the plan', async () => {
     const v = interiorViews(P);
     const names = v.map((x) => x.name);
-    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar', 'cave-entrance', 'cave-squeeze', 'cave-drop', 'caves', 'cave-exit']) expect(names).toContain(n);
+    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar', 'cave-entrance', 'cave-squeeze', 'cave-drop', 'caves', 'cave-exit', 'cave-ossuary', 'cave-cache', 'cave-pool', 'cave-steps', 'cave-wall']) expect(names).toContain(n);
     for (const x of v) { expect(x.mode).toBe('fly'); expect(x.clamp).toBe(false); expect(x.pos.every(Number.isFinite)).toBe(true); }
     expect(interiorViews({ ...P, rooms: [], doors: [], sallyPort: null })).toEqual([]);
     // the caves' views stand where a player stands: in their rooms
     const C = P.caves!, cav = C.chambers.find((k) => k.id === 'cave-cavern')!, cv = v.find((x) => x.name === 'caves')!;
     expect(cv.pos[1]).toBeCloseTo(cav.y + 1.65, 6);
+    // every view in the caves stands in the air of the rock, and the close-up 0.5–0.8 m from its wall
+    const { caveField } = await import('../src/castle/interior/caveGeom');
+    const F = caveField(C, P.seed);
+    for (const x of v.filter((y) => ['cave-squeeze', 'cave-drop', 'caves', 'cave-ossuary', 'cave-cache', 'cave-pool', 'cave-steps', 'cave-wall'].includes(y.name))) expect(F.f(...x.pos), x.name).toBeLessThan(-0.05);
+    const w = v.find((x) => x.name === 'cave-wall')!, d = [w.target[0] - w.pos[0], w.target[2] - w.pos[2]], l = Math.hypot(d[0], d[1]);
+    let t = 0; while (F.f(w.pos[0] + (d[0] / l) * t, w.pos[1], w.pos[2] + (d[1] / l) * t) < 0) t += 0.02;
+    expect(t).toBeGreaterThan(0.5); expect(t).toBeLessThan(0.8);
     const caveOnly = interiorViews({ ...P, rooms: P.rooms.filter((r) => r.zone === 'cave'), doors: [] }).map((x) => x.name).filter((n) => n.startsWith('cave'));
-    expect(caveOnly).toEqual(['cave-squeeze', 'cave-drop', 'caves']); // no doorways: no views from the cellars
+    expect(caveOnly).toEqual(['cave-squeeze', 'cave-drop', 'caves', 'cave-ossuary', 'cave-cache', 'cave-pool', 'cave-steps', 'cave-wall']); // no doorways: no views from the cellars
   });
 });
 
