@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-11-08: no tunnel stall while "Lighting the halls…" (branch `claude/project-thread-ns4g2v-freeze`)
+
+Anders, on his Mac (Chrome 157, WebGPU, live 5ed733a): the loading screen still freezes for a few seconds at "Lighting the halls…", although the page's long tasks there are at most 0.6 s.
+
+What the loading animation is: the tunnel is WebGL2 on an OffscreenCanvas, drawn by its own worker (`loading/tunnel.ts`), so a busy page thread cannot stop it. But in Chrome both the tunnel's WebGL and the game's WebGPU run on the GPU process's main thread, so anything that blocks that thread stops the tunnel.
+
+Measured on his Mac (Playwright, read-only; a rAF recorder in the page and one in the tunnel worker, `GPUDevice` calls wrapped to count and time them):
+- The tunnel worker's frames stop for 289, 226, 155 and 129 ms (another load: 231, 166, 236, 285, 203 ms; a third: 61, 172, 145, 190, 269, 222 ms), all inside the AO pre-pass and scene-pass compiles. Nowhere else in the load does the tunnel miss more than a frame or two.
+- During "Lighting the halls…" three makes 233 render pipelines: 94 with `createRenderPipelineAsync` (compileAsync's own) and 139 with the synchronous `createRenderPipeline`. The synchronous ones come from the renders that the compile triggers (the water's reflection of the whole scene under each pass, the AO pre-pass, the warm-ups): three's render path passes `promises = null`. Each returns at once in JS (0.0–0.1 ms, so no long task), but Chrome compiles it on the GPU process's main thread, where the tunnel waits. The stalls line up with the bursts of synchronous pipelines (≈ one every 7–10 ms, 5.38–6.83 s in one load).
+- Not the cause: the page's long tasks (≤ 0.6 s, they stop only the caption's percentage, the tunnel keeps drawing through them), buffer uploads (≈ 80 MB of `createBuffer` at the start of the step, no stall there), or `createRenderPipelineAsync` (no stall in the windows where only async pipelines are made).
+
+Fix (`render/precompile.ts asyncPipelines`, wired in main.ts): for the whole precompile, the backend's `createRenderPipeline` is wrapped so a render's pipelines are made the way compileAsync's are (createRenderPipelineAsync); while one is compiling three skips that draw (`Pipelines.isReady`, nothing is shown during loading), and each piece (pass compile, warm-up) waits for its pipelines (`settle`) before the next. After the precompile the wrapper is undone, so the game's own renders are unchanged.
+
+Checked on his Mac before merge by emulating the fix on the live build (an init script catches three's WebGPU backend and applies the same wrapper from the "Lighting the halls…" mark to "first frames"; it does not wait between pieces as the branch does): 0 synchronous / 233 async pipelines during the step (live: 139 / 94); tunnel worst gaps 89, 46, 44, 33 ms (live in the same harness: 289, 226, 155, 129 ms); no frame over 100 ms; "Lighting the halls…" to first frames 1.95 s (live 2.46 s, one run each); 0 pipelines of either kind after "first frames" (live 0 too, so #60's goal holds).
+
+Headless WebGPU (SwiftShader, `--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader`, built `dist` via `vite preview`, origin/main → branch): pipelines during the step 139 sync + 94 async → 0 sync + 233 async (`precompile: … render pipelines made async 139`); 0 after first frames in both. Headless tunnel frame gaps are not meaningful (SwiftShader runs GPU work on the same 4 loaded CPU cores; both builds gap by seconds).
+
+Tests (`precompile.test.ts`): `asyncPipelines` turns a render's null `promises` into its own array, leaves compileAsync's alone, settles pipelines made while waiting, and puts the backend's method back; `precompile` settles after every piece and undoes the deferral at the end and on failure.
+
+Not checked: the branch build itself on his Mac (the deploy happens on merge; the emulation applies the same wrapper to the live bundle); a 60 Hz or Intel Mac; Safari/Firefox WebGPU; the caption's percentage, which lives on the page thread and still pauses during the step's longest page task (0.6 s). Seen in passing, not changed: after ready the live game issues about 1,000 `writeBuffer` calls per frame (7,000–15,000 per 100 ms) (uniforms per object).
+
 ## 2026-11-07: why the Mac counts 4.6x the draw calls; door instances grouped by geometry (branch `claude/project-thread-ns4g2v-dc`)
 
 Anders' Mac (WebGPU, live a6364bd) shows 1298 draw calls at eye (11.6, 4.3, -1.2) → (14.2, 4.0, -3.3) (doors shut, no furniture, 15 groups shown); headless WebGL2 shows 279. Measured on his Mac (Playwright, the backend's `draw` wrapped for one live frame, read-only):

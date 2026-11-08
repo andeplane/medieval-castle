@@ -14,6 +14,16 @@
 // most expensive part of loading after #60). The first of each builds every pipeline it needs (the same
 // objects are shown throughout the compile); the rest build nothing new. So while the passes compile,
 // each nested render (scene, camera, target) runs once (`renderOnce`).
+//
+// Pipelines off the GPU process's main thread (2026-11-08). Measured on Anders' Mac (Chrome 157, WebGPU,
+// live 5ed733a): compileAsync makes its own pipelines with createRenderPipelineAsync (94), but the nested
+// renders it triggers (the water's reflection under each pass, the warm-up renders) went through three's
+// synchronous createRenderPipeline (≈ 160). Those return at once in JS (long tasks stay short) but Chrome
+// compiles them on the GPU process's main thread, which also draws the loading tunnel (a WebGL2 worker
+// canvas): the tunnel's frames stopped for 145–285 ms at a time, 1.0–1.1 s of 1.5 s during the AO
+// pre-pass and scene-pass compiles. So while precompiling, every pipeline is made asynchronously
+// (`asyncPipelines`): a render whose pipeline is still compiling skips that draw (three's
+// Pipelines.isReady), and each piece waits for its pipelines before the next one.
 // Collaborators are injected so the order can be tested without a GPU.
 export interface PrecompileSteps {
   /** async compiles, in order (e.g. the AO pre-pass, then the main scene pass) */
@@ -24,16 +34,59 @@ export interface PrecompileSteps {
   breathe(): Promise<void>;
   /** while the passes compile: make repeated nested renders no-ops; returns the undo (renderOnce) */
   quiet?: () => () => void;
+  /** for the whole precompile: make pipelines that renders create asynchronous (asyncPipelines) */
+  defer?: () => DeferredPipelines;
 }
 
 export async function precompile(s: PrecompileSteps) {
   let first = true;
   const gap = async () => { if (!first) await s.breathe(); first = false; };
-  const undo = s.quiet?.();
+  const deferred = s.defer?.();
   try {
-    for (const p of s.passes) { await gap(); await p(); }
-  } finally { undo?.(); }
-  for (const w of s.warm) { await gap(); w(); }
+    const undo = s.quiet?.();
+    try {
+      for (const p of s.passes) { await gap(); await p(); await deferred?.settle(); }
+    } finally { undo?.(); }
+    for (const w of s.warm) { await gap(); w(); await deferred?.settle(); }
+  } finally { deferred?.undo(); }
+}
+
+/** What asyncPipelines needs of a backend: three's createRenderPipeline(renderObject, promises). */
+export interface PipelineBackendLike { createRenderPipeline(renderObject: unknown, promises: Promise<unknown>[] | null): unknown }
+
+export interface DeferredPipelines {
+  /** resolves once every pipeline made so far (and any made while waiting) is ready */
+  settle(): Promise<void>;
+  /** put the backend's own createRenderPipeline back */
+  undo(): void;
+  /** pipelines made asynchronously that would have been synchronous */
+  readonly count: number;
+}
+
+/**
+ * Wrap `b.createRenderPipeline` so a render's pipelines are made like compileAsync's: three passes
+ * `promises = null` from a render (synchronous: device.createRenderPipeline, compiled on the GPU process's
+ * main thread) and an array from compileAsync (createRenderPipelineAsync); the wrapper passes its own array
+ * instead of null. Until a pipeline is ready three skips the draws that need it.
+ */
+export function asyncPipelines(b: PipelineBackendLike): DeferredPipelines {
+  const own = Object.prototype.hasOwnProperty.call(b, 'createRenderPipeline');
+  const orig = b.createRenderPipeline;
+  let pending: Promise<unknown>[] = [];
+  let count = 0;
+  b.createRenderPipeline = function (renderObject: unknown, promises: Promise<unknown>[] | null) {
+    if (promises !== null) return orig.call(b, renderObject, promises);
+    const mine: Promise<unknown>[] = [];
+    const r = orig.call(b, renderObject, mine);
+    count += mine.length;
+    pending.push(...mine);
+    return r;
+  };
+  return {
+    get count() { return count; },
+    async settle() { while (pending.length) { const p = pending; pending = []; await Promise.all(p); } },
+    undo() { if (own) b.createRenderPipeline = orig; else delete (b as { createRenderPipeline?: unknown }).createRenderPipeline; },
+  };
 }
 
 /** What renderOnce needs of a renderer: render(scene, camera), the target it draws into now and its context node. */
