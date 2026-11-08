@@ -1,5 +1,67 @@
 # Progress
 
+## 2026-11-08: the caves read as broken stone; the lantern no longer burns out the near wall (branch `claude/project-thread-ns4g2v-caves2`)
+
+Follow-up to #69, from my own captures there: the lantern washed the near walls flat orange, the cavern read as smooth rock, the fungi were pale flakes, the great tower cellar was black at the way out, the rock was meshed on the main thread, and there were no captures of the finds.
+
+**Lantern glare: why lowering the intensity did not help.** With `?shot` the exposure is fixed (+3.2 stops underground, `render/exposure.ts SHOT_STOPS`), so it was not auto-exposure brightening the frame back. It was the falloff. The lantern hangs about 0.55 m from the wall in the squeeze and about 4 m from what lies ahead. With a flame-sized near field (`soft` 0.15 m, candela / (d² + soft²)) the near wall gets ~80× the light ahead. At 1.5, 1.0 and 0.45 candle units the near wall was always past the tone curve's shoulder: ≈ 3–10 after exposure, where 1 is already white. So each step down only darkened the way ahead and left the near wall clipped. Fix (`player/lantern.ts` only): since #71 the lantern is the interior shader's carried light. `lanternFire` gives it a metre of near field (`LANTERN_SOFT`, the glow of the whole glass at arm's length) and a 9 m reach. The near-to-ahead ratio is now ≈ 13 (tested against `light/roomLight.ts fireAt`). Intensity is 0.45, the tint is a little cooler, and it is held lower and wider (0.55 m down, 0.3 m right) so the light rakes across the rock. Nothing in `src/light` or the exposure changed. The smugglers' lantern (a room fire) is down from 1.6 to 0.6: in its small chamber it washed the cache out.
+
+**Broken stone** (`castle/interior/caveGeom.ts`):
+- The field gets a ridged octave (1 − 2|n|), so it has sharp crests of rock between smooth hollows.
+- Chamber walls stand in ledges: they lean in up each ~1.2 m bed, warped by the noise, and step back over the next 0.2 m. The profile is continuous, so the surface nets stay on it.
+- Shading normals carry 15 % of each facet's own normal.
+- Fallen blocks are rough icosahedra half sunk in the floor along the walls of the cavern, hall, well and ossuary.
+- Stalactites hang from the roof's downward faces. Their tips are never lower than 2.4 m over the floor, so every walk keeps its headroom.
+- Stalagmites stand near the walls.
+- Blocks and stalagmites are kept clear of every walk: from each passage mouth to the chamber centre, plus the pool and the finds.
+- All of it is in the rock bin (no new draw call) and is solid, because the rock bin is collision.
+- The rock material lost the cloudy hollows and gained a fine bump octave for arm's length.
+- Bug found by looking: about 150 rock triangles at sharp creases were wound by their vertex normals, which there point across the fold. They were culled and showed as white slivers of nothing in the cavern. The surface nets wind every quad the same way, so the rock now keeps that winding. New test: from every cave view, a 64 × 36 grid of rays meets a front face.
+
+**Fungi**: clusters of 6–14 tiny caps on stalks. The crowns glow brightest; the rims, gills and stems are dim (uv-driven emissive). Each cluster sits in a soft halo: one additive quad flat on the rock in a new `halo` bin, one draw call, no shadow, no collision.
+
+**The way out**: a room with a doorway into the caves gets a wall torch even if its kind has none (the great tower cellar is a `tower` room). `besideWayDown` now prefers a way into the caves, so it is not drawn to the cellar's tunnel instead. The torch hangs beside the cave opening.
+
+**Worker**: `castle/interior/caveOffThread.ts` + `cave.worker.ts`, as the stones do. Before the interior build, `main.ts` awaits the rock from a worker, which primes `caveRock`'s cache. It falls back to inline meshing without workers or on a worker error. The tunnel keeps answering while it runs. It is awaited before the interior build, so it is not overlapped with other loading.
+
+**Bookmarks**, placed from the plan (passage mouths, chamber centres, the features, the pool, and the rock's own field for the close-up):
+- `cave-ossuary`, `cave-cache`: from the mouth a quarter of the way in, looking at the find.
+- `cave-pool`: 1.6 radii out towards the cavern's middle.
+- `cave-steps`: the drop from its foot.
+- `cave-wall`: 0.6 m from the cavern wall farthest from its passage mouths.
+
+Tests check that every cave view stands in the air of the rock and that the close-up is 0.5–0.8 m from its wall.
+
+**Numbers** (headless WebGL2, one frame counted at the backend's `draw`, no furniture):
+
+| View | Draw calls | Triangles | Before (#69) |
+|---|---|---|---|
+| `caves` | 30 | 0.12 M | 24 / 0.10 M |
+| `cave-squeeze` | 39 | 0.15 M | |
+| `cave-steps` | 51 | 0.16 M | |
+| `cave-cache` | 26 | 0.10 M | |
+| `cave-exit` | 183 | 2.8 M | |
+| `hero` | 474 | 3.76 M | 463 / 3.74 M |
+| `gate` | 414 | 4.18 M | |
+| `courtyard` | 502 | 4.19 M | |
+
+`npm run coverage` passes: 1138 tests, every threshold, with `caveOffThread.ts` added to the interior group. `npm run build` passes.
+
+**Captures** (`/mnt/project-files/castle-plan/caves2/`): `caves`, `cave-wall` (the 0.6 m close-up), `cave-squeeze`, `cave-drop`, `cave-steps`, `cave-ossuary`, `cave-cache`, `cave-pool`, `cave-exit`, `cave-entrance`, `hero`, `gate`, `courtyard`.
+
+**Seen in the captures and not fixed**:
+- Lit by the lantern, the near rock is a warm, even light brown. It is no longer clipped, but it is soft, and the facets read more than the grain.
+- In the narrow drop the fungi halos read as oval patches on the rock. In the cavern they read as glows.
+- The pool is a dark still disc with no reflection.
+- The ossuary's altar and bones use the castle's dressed-stone trim.
+
+**Not checked**:
+- WebGPU and the Mac (all captures are headless WebGL2).
+- Live auto-exposure while walking (captures use the fixed shot exposure).
+- The lantern's look in motion.
+- Frame rate.
+- How long the worker takes on the Mac.
+
 ## 2026-11-08: firelight washed out near hearths; rooms lit only once you come close; black courtyard door reveals (branch `claude/project-thread-ns4g2v-glow`)
 
 Three defects from Anders' Mac (live, WebGPU), all in the interior light.
