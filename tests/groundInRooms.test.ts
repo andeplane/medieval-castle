@@ -10,7 +10,7 @@ import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
 import { rayIndex, soupTris } from './helpers/rays';
 import * as T3 from 'three';
-import { buildTerrain, heightAt, ISLAND } from '../src/world/terrain';
+import { nearGrid, heightAt, ISLAND } from '../src/world/terrain';
 import { waterGeometry } from '../src/world/water';
 import { buildCastle } from '../src/castle/castle';
 import { buildInterior } from '../src/castle/interior/index';
@@ -41,11 +41,11 @@ describe('outdoor surfaces stay out of the rooms', () => {
     const { builder } = buildCastle();
     const { plan, groundHoles } = buildInterior(mats(), builder, { heightAt });
     const castle = builder.build(mats());
-    const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: groundHoles.terrain });
+    const terrain = new THREE.Mesh(nearGrid(undefined, { holes: groundHoles.terrain })); // buildTerrain's terrain-near
     const water = new THREE.Mesh(waterGeometry(9000, ISLAND, groundHoles.water), new THREE.MeshBasicMaterial());
     water.rotation.x = -Math.PI / 2;
     const surfaces: [string, ReturnType<typeof bvhOf>][] = [
-      ['terrain', bvhOf(terrain.getObjectByName('terrain-near') as THREE.Mesh)],
+      ['terrain', bvhOf(terrain)],
       ['water', bvhOf(water)],
       ['paving', bvhOf(castle.children.find((c) => (c as THREE.Mesh).isMesh && c.name === 'castle-pave') as THREE.Mesh)],
     ];

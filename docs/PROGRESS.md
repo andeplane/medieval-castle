@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-11-08: CI in about 2 minutes: two coverage shards and a merge (branch `claude/project-thread-ns4g2v-ci2`)
+
+After #74 the job still took ~2:30 on a fast runner and 3:15-3:23 on a slow one (EPYC 7763), nearly all of it the coverage run on the runner's 4 cores. A whole-suite CPU profile under coverage put ~22 % in building the castle and interior again per file, ~13 % in GC, ~9 % in physics (wasm), the rest spread out.
+
+What changed (no test skipped, weakened or narrowed, no threshold lowered; every whole-castle check still checks the whole castle):
+- `.github/workflows/ci.yml`: the tests run as two coverage shards side by side (`vitest run --coverage --shard=N/2 --reporter=blob`), the build in its own job beside them, and a third job merges the shards' reports (`vitest run --merge-reports --coverage`): every test file's result once, and the coverage thresholds checked on the merged coverage of the whole suite. `vitest.config.ts` turns the thresholds off only in a shard run (`--shard`). Checked locally: two shards of four files pass, their merge fails the thresholds with exit 1.
+- `vitest.config.ts`: a per-file time table (`SECONDS`, one 9V45 run) orders the files longest first and splits the shards (greedy, longest first; a stale entry only unbalances, every file is in exactly one shard: checked on a run of both shards, 43 + 42 of 85 files, none in both).
+- `tests/world.test.ts` (one file of 63-119 s, the longest by far) split in two: `tests/world-views.test.ts` takes the visibility checks (spaces drawn from every pose, the caves, the same spaces at every distance, culling bounds, walking through doorways, firelight per drawn room) verbatim; the pose, opening and shut-leaf helpers both files use moved verbatim to `tests/helpers/worldViews.ts`. The same 20 tests (names compared), every original line kept (line-multiset compared).
+- The node test files share their imported modules within a worker (`isolate: false`, a `node` project; the six happy-dom files keep their own `dom` project): ~18 % less time on one runner (84 s against 100-107 s). `tests/isolation.test.ts` checks that it is safe: every module-level `let`/`var`, Map, Set and array in `src` and the test helpers is listed with why it can be shared (memos of pure functions, one-time inits, constant tables), the constant tables are never written, and no node test mocks a module, stubs a global or fakes timers.
+- `world.test.ts` "meets the ground at every outdoor doorway" and `groundInRooms.test.ts` read `terrain-near`, the only terrain they check; they now build just that mesh with `nearGrid` (`src/world/terrain.ts`, the function buildTerrain itself now uses for it, same holes): the real ground at every doorway and moat bank, without the far terrain, stream and rocks. `terrain.test.ts` checks nearGrid gives buildTerrain's near mesh exactly (every attribute and the index, holes cut).
+- `src/render/interiorMath.ts roomAt` skips a room whose box is farther than the tolerance (+1 µm) before measuring its polygon: the same room for every point, fewer polygons per camera update (runtime too).
+
+Timings (workflow_dispatch on the branch; runners vary): whole run 2:01 (shards 89 s and 61 s of tests, merge job 11 s, build job 15 s in parallel). Before (#74's PR run): 3:23 in one job. Tried and dropped: a larger V8 young generation (`--max-semi-space-size` 32/64: within noise).
+
+Not done: building the castle once for all files (a shared fixture or a global setup). The world tests bake light into the interior meshes and toggle their visibility, so a fixture shared between files would need cloning or a mutation guard over THREE objects; with the shards it was not needed for the 2-minute target.
+
+Not checked: a full local `npm run coverage` after these changes (the container is overloaded; CI's merged run passes the thresholds: 87 files, 1145 tests).
+
 ## 2026-11-08: door batches one draw again; a WebGPU draw-call budget in vitest (branch `claude/project-thread-ns4g2v-drawcalls`)
 
 Anders, on his Mac (WebGPU, live b097e26): hero 1180, courtyard 1279, gate 728, hall 853 draw calls, against 426 / 468 / 358 / 327 after #65.
