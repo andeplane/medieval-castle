@@ -24,8 +24,8 @@ import * as THREE from 'three/webgpu';
 import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
-import { stairOpts, type PlanX } from '../src/castle/interior/plan';
-import { placeLeaves, seatsOf, leafPoint, leafDepth, m4swing, headRise, headTop, leafClassFor, stopPlane, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { stairOpts, leafSwingFits, type PlanX } from '../src/castle/interior/plan';
+import { placeLeaves, leafPoint, leafSwing, leafDepth, leafHead, headRise, leafClassFor, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
@@ -124,11 +124,39 @@ function endIsCorner(walls: WallRecord[], w: WallRecord, end: V2): boolean {
     return Math.abs(e[0] * f[0] + e[1] * f[1]) / (L * Math.hypot(f[0], f[1])) > Math.cos((50 * Math.PI) / 180);
   });
 }
-/** Is a point inside another leaf's sweep (the sector its board passes through from shut to fully open)? */
+/** Is a point inside another leaf's sweep (the sectors its board passes through from shut to fully open, either way)? */
 function inSweep(q: V3, L: LeafPlace): boolean {
-  const dx = q[0] - L.pivot[0], dz = q[2] - L.pivot[2];
-  const x = dx * L.eU[0] + dz * L.eU[1], z = dx * L.eV[0] + dz * L.eV[1], a = Math.atan2(z, x);
-  return q[1] > L.pivot[1] - 0.05 && q[1] < L.pivot[1] + L.height + 0.05 && Math.hypot(x, z) < L.width + 0.05 && a > -0.15 && a < L.maxAngle + 0.15;
+  if (q[1] <= L.pivot[1] - 0.05 || q[1] >= L.pivot[1] + L.height + 0.05) return false;
+  const sector = (o: V3, a0: number, a1: number) => {
+    const dx = q[0] - o[0], dz = q[2] - o[2];
+    const x = dx * L.eU[0] + dz * L.eU[1], z = dx * L.eV[0] + dz * L.eV[1], a = Math.atan2(z, x);
+    return Math.hypot(x, z) < L.width + 0.05 && a > a0 - 0.15 && a < a1 + 0.15;
+  };
+  return sector(L.pivot, 0, L.maxAngle) || (L.backAngle > 0 && sector(leafPoint(L, leafSwing(L, 0), [0, 0, L.backAxis]), -L.backAngle, 0));
+}
+/** A shut leaf's outline (world points) in the door's (u along `along`, y), without repeated points. */
+function leafUV(d: DoorSpec, ring: V3[]): V2[] {
+  const uv = ring.map((p): V2 => [(p[0] - d.centre[0]) * d.along[0] + (p[2] - d.centre[2]) * d.along[1], p[1]]);
+  return uv.filter((p, i) => i === 0 || Math.hypot(p[0] - uv[i - 1][0], p[1] - uv[i - 1][1]) > 1e-6);
+}
+/** Halfway from each point of `outer` (and each edge's middle) to the nearest point of the closed outline `inner`. */
+function midway(outer: V2[], inner: V2[]): V2[] {
+  const pts = outer.flatMap((p, i) => (i + 1 < outer.length ? [p, [(p[0] + outer[i + 1][0]) / 2, (p[1] + outer[i + 1][1]) / 2] as V2] : [p]));
+  return pts.map(([u, y]) => {
+    let best: V2 = inner[0], bd = Infinity;
+    for (let i = 0; i < inner.length; i++) {
+      const [ax, ay] = inner[i], [bx, by] = inner[(i + 1) % inner.length], dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((u - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1))), q: V2 = [ax + dx * t, ay + dy * t];
+      const dd = Math.hypot(q[0] - u, q[1] - y);
+      if (dd < bd) { bd = dd; best = q; }
+    }
+    return [(u + best[0]) / 2, (y + best[1]) / 2];
+  });
+}
+/** A door's outline at depth t from its mid-plane (doorCuts), grown by about g (jambs out, head up). */
+function cutAt(d: DoorSpec, t: number, g = 0, P?: PlanX): V2[] {
+  const cuts = doorCuts(d, P?.rise[d.id]), o = (cuts.find((c) => t >= c.t0 && t < c.t1) ?? cuts[cuts.length - 1]).o;
+  return o.map(([u, y], i) => [u + Math.sign(u) * g, i < 2 ? y : y + g]);
 }
 
 function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): string[] {
@@ -167,8 +195,8 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
     // 3. on an outdoor face the castle's hole is the reveal's outline: 1 cm outside it the face is still there
     const k = d.spaces.findIndex((s) => OUTDOOR.has(s));
     if (k >= 0) {
-      const sg = k === 0 ? -1 : 1, grow = seatsOf(d).includes(k as 0 | 1) ? LIP : 0;
-      for (const [u, y] of outlineGrown(P, d, grow + 0.01).slice(2)) {
+      const sg = k === 0 ? -1 : 1;
+      for (const [u, y] of cutAt(d, sg * d.wall / 2, 0.01, P).slice(2)) {
         if (!ray(u, y, sg * (d.wall / 2 + 0.15), sg * (d.wall / 2 - 0.15))) { bad.push(`${d.id}: its hole in the castle face is bigger than its outline at (${u.toFixed(2)}, ${(y - d.centre[1]).toFixed(2)})`); break; }
       }
     }
@@ -195,20 +223,20 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
     if (x!.s - hw < need(w.a) - 1e-6) bad.push(`${d.id}: ${(x!.s - hw).toFixed(2)} m from the end of its face (needs ${need(w.a)})`);
     if (x!.L - x!.s - hw < need(w.b) - 1e-6) bad.push(`${d.id}: ${(x!.L - x!.s - hw).toFixed(2)} m from the end of its face (needs ${need(w.b)})`);
   }
-  // 7. leaves, in every seat: the whole swing in the doorway or its room (or the open courtyard), under the
-  // ceiling, off the treads, clear of other leaves in any of their seats
-  const leaves = P.doors.flatMap((d) => seatsOf(d).map((k) => ({ d, pl: placeLeaves(d, k)[0] })));
+  // 7. leaves, every way they swing (forward, and back where they can): the whole swing in the doorway or the
+  // room it swings into (or the open courtyard), under the ceiling, off the treads, clear of every other leaf's sweep
+  const leaves = P.doors.flatMap((d) => placeLeaves(d).flatMap((pl) => (d.swingsBack ? [1, -1] as const : [1] as const).map((way) => ({ d, pl, way }))));
   const spirals = P.stairs.filter((s) => s.kind === 'spiral').map((s) => planStair(s, stairOpts(P, s)) as SpiralPlan);
-  for (const { d, pl } of leaves) {
-    const into = d.spaces[pl.seat], r = rooms.get(into);
+  for (const { d, pl, way } of leaves) {
+    const into = d.spaces[way > 0 ? pl.seat : 1 - pl.seat], r = rooms.get(into);
     if (!r && into !== 'courtyard') { bad.push(`${d.id}: swings out into ${into}`); continue; }
     if (r && pl.pivot[1] + pl.height > r.y1 - 0.02) bad.push(`${d.id}: leaf top above the ceiling of ${r.id}`);
     const faults = new Set<string>(), { zBack } = leafDepth(pl.kind);
-    const sg = pl.seat === 1 ? 1 : -1, own = M.find((m) => pointInPoly(m.poly, ...on(d, 0, -sg * 0.3)));
+    const sg = (pl.seat === 1 ? 1 : -1) * way, own = M.find((m) => pointInPoly(m.poly, ...on(d, 0, -sg * 0.3)));
     // the other leaves whose sweep this one could reach at all
     const others = leaves.filter((o) => o.d !== d && Math.hypot(o.pl.pivot[0] - pl.pivot[0], o.pl.pivot[2] - pl.pivot[2]) < o.pl.width + pl.width + 0.2);
     for (let i = 0; i <= 24; i++) for (let k = 0; k <= 8; k++) for (const y of [0, pl.height / 2, pl.height - 0.02]) for (const z of [zBack, 0]) {
-      const q = leafPoint(pl, m4swing((pl.maxAngle * i) / 24), [(pl.width * k) / 8, y, z]);
+      const q = leafPoint(pl, leafSwing(pl, way > 0 ? (pl.maxAngle * i) / 24 : (-pl.backAngle * i) / 24), [(pl.width * k) / 8, y, z]);
       const dx = q[0] - d.centre[0], dz = q[2] - d.centre[2];
       const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
       // in the doorway or its rebate (a curved or skewed room face lies up to 0.15 m beyond the wall face at the centre)
@@ -530,7 +558,10 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const n = id('court>N0-4'), st = id('court>stairtower'), e = id('court>E0-2'), w = id('court>W0-2');
     const lean = (n.centre[0] - st.centre[0]) * n.along[0] + (n.centre[2] - st.centre[2]) * n.along[1];
     n.centre[0] -= n.along[0] * (lean - 1.0); n.centre[2] -= n.along[1] * (lean - 1.0);
-    id('N0-2>N0-3').hinge = id('N0-2>N0-3').hinge === 'left' ? 'right' : 'left';
+    // a door whose leaf, hung on its other jamb, would swing into a room's side wall
+    const flip = (d: DoorSpec) => ({ ...d, hinge: d.hinge === 'left' ? 'right' as const : 'left' as const });
+    const cramped = Q.doors.find((d) => d.leaf && d.kind === 'plank' && !leafSwingFits(Q, flip(d)))!;
+    cramped.hinge = flip(cramped).hinge;
     const k = walls.findIndex((x) => crossing(x, st, 0, st.centre[1] + 1)), x = crossing(walls[k], st, 0, st.centre[1] + 1)!;
     const twin = walls.map((v, i) => (i === k ? { ...v, openings: [...v.openings, { pts: [[x.s - 0.3, st.centre[1] + 1], [x.s + 0.3, st.centre[1] + 1], [x.s + 0.3, st.centre[1] + 1.5], [x.s - 0.3, st.centre[1] + 1.5]] as V2[], depth: 0.5, fill: 'wood' as const, reveal: 'trim' as const }] } : v));
     const slab = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
@@ -541,10 +572,10 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(f.some((x) => x.startsWith('cut twice:') && x.endsWith('court>stairtower'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>E0-2: castle surface left in the doorway'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>W0-2: its hole in the castle face is bigger than its outline'))).toBe(true);
-    expect(f).toContain('N0-2>N0-3: leaf swings through the wall of N0-3');
+    expect(f.some((x) => x.startsWith(`${cramped.id}: leaf swings through the wall of`))).toBe(true);
     // a courtyard door's outward seat (it opens away from someone inside) with its sill sunk into the paving
     const R = structuredClone(P), sunk = R.doors.find((d) => d.id === 'court>E0-2')!;
-    expect(sunk.otherHinge).toBeDefined();
+    expect(sunk.swingsBack).toBe(true);
     sunk.centre[1] -= 0.3;
     expect(openingFaults(walls, { ...R, doors: [sunk] }, masses(), tris)).toContain('court>E0-2: leaf scrapes the ground of the courtyard');
   }, 300_000);
@@ -560,15 +591,19 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   /** The castle as drawn, less its window glass (you see through it). */
   const castleSolid = () => trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder);
   /** A door's shut leaf as a flat outline at its mid-thickness: triangles, the outline, its depth along the door's normal. */
-  const shutLeaf = (d: DoorSpec, seat: 0 | 1 = d.swingInto) => {
-    const pl = placeLeaves(d, seat)[0];
+  const shutLeaf = (d: DoorSpec) => {
+    const pl = placeLeaves(d)[0];
     if (!pl) return null;
-    const cls = leafClassFor(d, pl.kind), top = headTop(cls.head, cls.ow, cls.oh, -GROW), sill = cls.sill;
-    const { zBack, zFront } = leafDepth(pl.kind), z = (zBack + zFront) / 2, M = m4swing(0), N = 24;
+    const cls = leafClassFor(d, pl.kind), top = leafHead(cls), sill = cls.sill;
+    const { zBack, zFront } = leafDepth(pl.kind), z = (zBack + zFront) / 2, M = leafSwing(pl, 0), N = 24;
     const ring: V3[] = [leafPoint(pl, M, [0, 0, z]), leafPoint(pl, M, [pl.width, 0, z])];
     for (let i = 0; i <= N; i++) { const x = pl.width * (1 - i / N); ring.push(leafPoint(pl, M, [x, top(cls.sOff + x) - sill, z])); }
     const c = [0, 1, 2].map((k) => ring.reduce((s, p) => s + p[k], 0) / ring.length) as V3;
     const tris = ring.map((p, i) => mkTri(c, p, ring[(i + 1) % ring.length]));
+    // and its rim, as thick as its boards (a ray slipping past the edge at a slant meets it)
+    const at = (p: V3, dz: number): V3 => { const n = pl.eV; return [p[0] + n[0] * dz, p[1], p[2] + n[1] * dz]; };
+    const half = (zFront - zBack) / 2;
+    ring.forEach((p, i) => { const q = ring[(i + 1) % ring.length]; tris.push(mkTri(at(p, -half), at(q, -half), at(q, half)), mkTri(at(p, -half), at(q, half), at(p, half))); });
     const t = (ring[0][0] - d.centre[0]) * d.normal[0] + (ring[0][2] - d.centre[2]) * d.normal[1];
     return { tris, ring, t, sill };
   };
@@ -612,8 +647,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
       const r = rooms.get(d.spaces[k]), q = on(d, 0, (k === 0 ? -1 : 1) * (d.wall / 2 + 1.5));
       if (r && r.zone !== 'tunnel' && pointInPoly(r.poly, q[0], q[1])) poses.push({ label: `${r.id}, 1.5 m in front of ${d.id}`, eye: [q[0], floorAt(r, q, d.centre[1]) + 1.6, q[1]] });
     }
-    // and along every cave room's walking line, from one end to the other
-    for (const r of P.rooms) if (r.zone === CAVE_ZONE) for (const w of caveWalk(P.caves!, r.id)) poses.push({ label: `${r.id} on its walk at (${w[0].toFixed(1)}, ${w[2].toFixed(1)})`, eye: [w[0], w[1] + 1.6, w[2]] });
+    // (the caves' walking lines are posed in their own test below, by the room graph: no need to cast every opening from them)
     const gm = P.doors.find((d) => d.id === 'gate-main')!, gc = P.doors.find((d) => d.id === 'gate-court')!;
     for (let f = 0; f <= 1 + 1e-9; f += 0.05) {
       const x = gm.centre[0] + (gc.centre[0] - gm.centre[0]) * f, z = gm.centre[2] + (gc.centre[2] - gm.centre[2]) * f;
@@ -777,17 +811,20 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const castleB = bvhOf(castleSolid()), groupB = new Map(inner.groups.map((g) => [g, bvhOf(groupTris([g]))]));
     const faults: string[] = [], ray = new T3.Ray();
     let rays = 0;
-    for (const d of P.doors) for (const seat of seatsOf(d)) { // a two-way door's leaf shuts in either face
-      const leaf = shutLeaf(d, seat)!;
+    for (const d of P.doors) {
+      const leaf = shutLeaf(d);
+      if (!leaf) continue;
       const leafB = bvhOf(leaf.tris), y0 = d.centre[1];
+      // the gap ring: halfway between the leaf's edge and the rebate, at the leaf (a back-swinging leaf fills its
+      // rebate, its own outline: halfway from each rebate corner to the nearest point of the leaf's outline)
+      const gap = d.swingsBack ? midway(cutAt(d, leaf.t, 0, P).slice(2), leafUV(d, leaf.ring)) : outlineGrown(P, d, (GROW + LIP) / 2).slice(2);
       for (const k of [0, 1] as const) {
         const s = d.spaces[k], sg = k === 0 ? -1 : 1;
         const sets = [castleB, leafB, ...inner.groups.filter((g) => !g.rooms.length || g.rooms.includes(s)).map((g) => groupB.get(g)!)]; // groups with no room are always drawn
         let bad = 0, first = '';
         for (const across of [-0.6, 0, 0.6]) for (const back of [1, 2.5]) {
           const e = on(d, across, sg * (d.wall / 2 + back)), eye = new T3.Vector3(e[0], y0 + 1.5, e[1]);
-          // the gap ring: halfway between the leaf's edge and the rebate, at the leaf
-          for (const [u, y] of outlineGrown(P, d, (GROW + LIP) / 2).slice(2)) {
+          for (const [u, y] of gap) {
             if (y < y0 + 0.15) continue;
             const p = on(d, u, leaf.t), tgt = new T3.Vector3(p[0], y, p[1]), dist = tgt.distanceTo(eye);
             ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
@@ -795,7 +832,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
             if (!sets.some((b) => b.raycastFirst(ray, T3.DoubleSide, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
           }
         }
-        if (bad) faults.push(`${d.id}: open past its shut leaf (seat ${seat}) from ${s} (${bad} rays, e.g. ${first})`);
+        if (bad) faults.push(`${d.id}: open past its shut leaf from ${s} (${bad} rays, e.g. ${first})`);
       }
     }
     expect(rays).toBeGreaterThan(10_000);
@@ -807,16 +844,17 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   // rebate the clear outline grown by LIP. The shut leaf covers its hole and fits its rebate, every door.
   it('hangs every leaf over its own hole: it covers the clear outline and fits the rebate', () => {
     const faults: string[] = [];
-    for (const d of P.doors) for (const seat of seatsOf(d)) {
-      const leaf = shutLeaf(d, seat)!;
-      const uv = leaf.ring.map((p): V2 => [(p[0] - d.centre[0]) * d.along[0] + (p[2] - d.centre[2]) * d.along[1], p[1]]);
-      const uniq = uv.filter((p, i) => i === 0 || Math.hypot(p[0] - uv[i - 1][0], p[1] - uv[i - 1][1]) > 1e-6);
+    for (const d of P.doors) {
+      const leaf = shutLeaf(d);
+      if (!leaf) continue;
+      const uniq = leafUV(d, leaf.ring);
       const short = outlineGrown(P, d, -0.01).filter(([u, y]) => y > d.centre[1] + leaf.sill + 0.01 && !pointInPoly(uniq, u, y));
       if (short.length) faults.push(`${d.id}: leaf short of its hole at (${short[0][0].toFixed(2)}, ${(short[0][1] - d.centre[1]).toFixed(2)})`);
-      const reb = outlineGrown(P, d, LIP + 0.002), big = uniq.filter(([u, y]) => y > d.centre[1] + 0.05 && !pointInPoly(reb, u, y));
+      // the rebate at the leaf (a back-swinging leaf's is its own outline, FIT out: it has no stop)
+      const reb = d.swingsBack ? cutAt(d, leaf.t, 0.002, P) : outlineGrown(P, d, LIP + 0.002), big = uniq.filter(([u, y]) => y > d.centre[1] + 0.05 && !pointInPoly(reb, u, y));
       if (big.length) faults.push(`${d.id}: leaf bigger than its rebate at (${big[0][0].toFixed(2)}, ${(big[0][1] - d.centre[1]).toFixed(2)})`);
-      const sg = seat === 1 ? 1 : -1, tl = (leaf.t - sg * stopPlane(d)) * sg;
-      if (tl < 0 || tl > 0.15) faults.push(`${d.id}: leaf (seat ${seat}) ${tl.toFixed(3)} m off its stop`);
+      const sg = d.swingInto === 1 ? 1 : -1, tl = (leaf.t - sg * stopPlane(d)) * sg;
+      if (tl < 0 || tl > 0.15) faults.push(`${d.id}: leaf ${tl.toFixed(3)} m off where its stop is (or would be)`);
     }
     expect(faults).toEqual([]);
   }, 120_000);
