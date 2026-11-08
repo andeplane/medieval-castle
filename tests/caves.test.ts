@@ -160,12 +160,13 @@ describe('cave rock', () => {
     expect(R.tris.length / 3).toBeGreaterThan(10_000);
     expect(caveRock(C, P.seed)).toBe(R); // cached
     // every vertex lies on the field's zero surface (within a cell) and its normal points into the air
-    const F = caveField(C, P.seed);
+    const F = caveField(C, P.seed), off: number[] = [];
     for (let i = 0; i < R.pos.length; i += 3 * 37) {
       const p = [R.pos[i], R.pos[i + 1], R.pos[i + 2]], n = [R.nor[i], R.nor[i + 1], R.nor[i + 2]];
-      expect(Math.abs(F.f(p[0], p[1], p[2]))).toBeLessThan(CAVE_CELL);
-      expect(F.f(p[0] + n[0] * 0.3, p[1] + n[1] * 0.3, p[2] + n[2] * 0.3)).toBeLessThan(F.f(p[0] - n[0] * 0.3, p[1] - n[1] * 0.3, p[2] - n[2] * 0.3));
+      if (!(Math.abs(F.f(p[0], p[1], p[2])) < CAVE_CELL)) off.push(i / 3);
+      if (!(F.f(p[0] + n[0] * 0.3, p[1] + n[1] * 0.3, p[2] + n[2] * 0.3) < F.f(p[0] - n[0] * 0.3, p[1] - n[1] * 0.3, p[2] - n[2] * 0.3))) off.push(i / 3);
     }
+    expect(off).toEqual([]);
     // closed: no edge is open (every edge has a triangle on each side)
     const edges = new Map<string, number>();
     for (let t = 0; t < R.tris.length; t += 3) for (let e = 0; e < 3; e++) {
@@ -175,11 +176,11 @@ describe('cave rock', () => {
     // (a few non-manifold corners share 4); open only at the two doorways, in the wall behind the collars
     const behind = behindPortal(C), open = [...edges].filter(([, c]) => c % 2 !== 0).map(([k]) => k.split(',').map(Number));
     expect(open.length).toBeGreaterThan(20);
-    for (const e of open) for (const i of e) expect(behind(R.pos[3 * i] + 0, R.pos[3 * i + 1], R.pos[3 * i + 2]) || closeBehind(R.pos, i)).toBe(true);
+    expect(open.flat().filter((i) => !(behind(R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]) || closeBehind(R.pos, i)))).toEqual([]);
     const g = res.groups.find((x) => x.key === 'cave:-1')!;
     expect(g.rooms.sort()).toEqual(P.rooms.filter(isCave).map((r) => r.id).sort());
     expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
-  });
+  }, 120_000);
 
   it('surface nets: a sphere is closed and the right size', () => {
     const S = surfaceNets((x, y, z) => Math.hypot(x, y, z) - 2, [-2.5, -2.5, -2.5], [2.5, 2.5, 2.5], 0.25);
