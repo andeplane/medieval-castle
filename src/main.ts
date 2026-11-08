@@ -12,7 +12,7 @@ import { buildCastle } from './castle/castle';
 import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
 import { layoutStonesOffThread, browserStoneWorker } from './castle/stones/offThread';
-import { precompile, renderOnce } from './render/precompile';
+import { precompile, renderOnce, asyncPipelines, type DeferredPipelines, type PipelineBackendLike } from './render/precompile';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
 import { rimMask, rimTurf, rimTurfMesh } from './castle/turf';
@@ -520,14 +520,17 @@ async function main() {
   const frameState = () => { stones.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
   const pre = prePass;
   const nestedRenders = { rendered: 0, skipped: 0 };
+  let deferred = null as DeferredPipelines | null;
   await precompile({
     passes: [...(pre ? [() => { performance.mark('compile: AO pre-pass'); return pre.compileAsync(renderer); }] : []), () => { performance.mark('compile: scene pass'); return scenePass.compileAsync(renderer); }],
     warm: [() => { performance.mark('compile: warm-up 1'); water.visible = false; frameState(); pipeline.render(); water.visible = true; }, () => { performance.mark('compile: warm-up 2'); frameState(); pipeline.render(); exposure.measure(); }],
     breathe,
     // the AO pre-pass and the water's reflection render the whole scene once per compile item otherwise
     quiet: () => renderOnce(renderer, nestedRenders),
+    // the pipelines those renders make, compiled off the GPU process's main thread (the tunnel keeps drawing)
+    defer: () => (deferred = asyncPipelines(renderer.backend as unknown as PipelineBackendLike)),
   });
-  console.info(`precompile: nested renders ${nestedRenders.rendered}, skipped ${nestedRenders.skipped}`);
+  console.info(`precompile: nested renders ${nestedRenders.rendered}, skipped ${nestedRenders.skipped}; render pipelines made async ${deferred?.count ?? 0}`);
   scene.remove(warm);
   warm.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
   sprites.set(flames);

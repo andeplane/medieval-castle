@@ -112,7 +112,7 @@ class InteriorEnvNode extends LightingNode {
  * Interior clones of the stone, timber, iron and glass materials. Same surface look; lit by the
  * shadowed sun plus the interior irradiance instead of the outdoor hemisphere and sky IBL.
  * `sun: null` gives the underground set: no direct sun at all (cellars and tunnels get daylight only
- * through their openings, via the irradiance, and firelight via setDynamicLights).
+ * through their openings, via the irradiance, and firelight from the fire table, fireIrradiance).
  */
 export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardNodeMaterial>, sun: THREE.Light | null, light: InteriorLight): InteriorMaterialSet {
   const base = sun ? [sun] : [];
