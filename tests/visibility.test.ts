@@ -50,21 +50,26 @@ describe('the room graph', () => {
     expect(g2.get('a')).toEqual([{ to: 'st', open: false, leaves: ['st>a'], window: false }, { to: 'outside', open: true, leaves: [], window: true }]);
     expect(g2.get('outside')).toEqual([]);
   });
-  test('draws two steps from the camera, then on through open doorways, then through the windows', () => {
+  test('draws two steps from the camera, then on from the camera through open doorways, then through the windows', () => {
     // A: courtyard, B, outside, cellar at 1; C, tunnel at 2; nothing open past them (C>D has a leaf)
     expect(ids(drawnSpaces(graph0, ['A']))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
-    // C: B, D at 1; A, E at 2; then on through the open ways only: the gate to outside and the grille to the
-    // tunnel, the cellar stair, the arch to F; not the courtyard door (shut)
-    expect(ids(drawnSpaces(graph0, ['C']))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'outside', 'tunnel']);
-    // a leaf standing open opens its doorway: from A through C>D (and the arches past it) to F
-    expect(ids(drawnSpaces(graph0, ['A'], 2, (id) => id === 'C>D'))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside', 'tunnel']);
-    expect(ids(drawnSpaces(graph0, ['A'], 1))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
-    expect(ids(drawnSpaces(graph0, ['farbank']))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    // C: B, D at 1; A, E at 2; the open ways lead on from where the camera is only: not from A (behind the
+    // shut A>B) through its gate to outside, nor from E (behind the shut C>D) through the arch to F
+    expect(ids(drawnSpaces(graph0, ['C']))).toEqual(['A', 'B', 'C', 'D', 'E']);
+    // a leaf standing open opens its doorway: from B through the arch to C, C>D and the arches past it to F
+    expect(ids(drawnSpaces(graph0, ['B'], 2, (id) => id === 'C>D'))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside']);
+    expect(ids(drawnSpaces(graph0, ['B']))).toEqual(['A', 'B', 'C', 'D', 'cellar', 'courtyard', 'outside']);
+    // from A it takes A>B open too: C>D alone is two shut doors away
+    expect(ids(drawnSpaces(graph0, ['A'], 2, (id) => id === 'C>D'))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    expect(ids(drawnSpaces(graph0, ['A'], 2, (id) => id === 'C>D' || id === 'A>B'))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    expect(ids(drawnSpaces(graph0, ['A'], 1))).toEqual(['A', 'B', 'cellar', 'courtyard', 'outside', 'tunnel']); // C is open past B, but B's door is shut
+    expect(ids(drawnSpaces(graph0, ['farbank']))).toEqual(['A', 'B', 'cellar', 'courtyard', 'outside', 'tunnel']);
     expect(ids(drawnSpaces(graph0, ['ghost']))).toEqual([]);
     // windows lead out only: from A, E's window does not bring E in from outside
     expect(ids(drawnSpaces(graph, ['A']))).toEqual(['A', 'B', 'C', 'cellar', 'courtyard', 'outside', 'tunnel']);
-    // from E its window reaches outside at one step, the gate into A at two; C's window then the courtyard
-    expect(ids(drawnSpaces(graph, ['E']))).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'cellar', 'courtyard', 'outside', 'tunnel']);
+    // from E its window reaches outside at one step, the gate into A at two; C's window then the courtyard;
+    // not A's open stair to the cellar (A is behind the window and the gate)
+    expect(ids(drawnSpaces(graph, ['E']))).toEqual(['A', 'C', 'D', 'E', 'F', 'courtyard', 'outside', 'tunnel']);
   });
   test('the camera: its room, a doorway\'s two spaces, the courtyard, outside, above the roofs', () => {
     const o = { court: (x: number) => x < 0, roofs: 30 };
@@ -95,13 +100,15 @@ describe('the room graph', () => {
     expect(visibleSet(c2, [2, -3.4, 2], { ground: () => 2.6 })).toMatchObject({ deep: true, underground: true });
     expect(visibleSet(c2, [2, -3.4, 2], { ground: () => -10 })).toMatchObject({ deep: true, underground: false });
     expect(visibleSet(c2, [2, -3.4, 2])).toMatchObject({ deep: true, underground: false });
-    expect(visibleSet(c2, [7, -3.4, 2])).toMatchObject({ deep: false });
+    // q: s is two steps off, but behind the shut q>r and r>s its open way out is not seen: still deep
+    expect(visibleSet(c2, [7, -3.4, 2])).toMatchObject({ deep: true });
+    expect(visibleSet(c2, [17, -3.4, 2])).toMatchObject({ deep: false });
     const r = visibleSet(c2, [2, -3.4, 2]);
     expect(spaceShown(r, 'q')).toBe(true);
     expect(spaceShown(r, 's')).toBe(false);
     expect(spaceShown(r, null)).toBe(false);
-    expect(spaceShown(visibleSet(c2, [7, -3.4, 2]), null)).toBe(true);
-    expect(spaceShown(visibleSet(c2, [7, -3.4, 2]), 'farbank')).toBe(true);
+    expect(spaceShown(visibleSet(c2, [17, -3.4, 2]), null)).toBe(true);
+    expect(spaceShown(visibleSet(c2, [17, -3.4, 2]), 'farbank')).toBe(true);
   });
   test('windows from the interior light\'s apertures: the courtyard or outside in front of each', () => {
     const aps = [
@@ -147,7 +154,9 @@ describe('createVisibility', () => {
     off(); npcRoom = 'F'; vis.update();
     expect(npc.visible).toBe(true);                       // no longer managed
     vis.setDoorOpen('C>D', true); vis.update();
-    expect(vis.isRoomVisible('F')).toBe(true);           // through the open door and the arches past it
+    expect(vis.isRoomVisible('F')).toBe(false);          // C>D is behind the shut A>B
+    vis.setDoorOpen('A>B', true); vis.update();
+    expect(vis.isRoomVisible('F')).toBe(true);           // through both open doors and the arches past them
     vis.setDoorOpen('C>D', false); vis.update();
     expect(vis.isRoomVisible('F')).toBe(false);
   });
@@ -160,6 +169,8 @@ describe('createVisibility', () => {
     expect(vis.state).toMatchObject({ deep: true, underground: true });
     expect([named.water.visible, named.trees.visible]).toEqual([false, false]);
     camera.position = { x: 7, y: -3.4, z: 2 }; vis.update();
+    expect([named.water.visible, named.trees.visible]).toEqual([false, false]); // the way out is two shut doors off
+    vis.setDoorOpen('qr', true); vis.setDoorOpen('rs', true); vis.update();
     expect([named.water.visible, named.trees.visible]).toEqual([true, true]);
     // deep above the ground: only the vegetation goes
     const high = createVisibility({ position: { x: 2, y: -3.4, z: 2 } }, [], shut, { scene: { getObjectByName: (n: string) => named[n] }, ground: () => -10 });

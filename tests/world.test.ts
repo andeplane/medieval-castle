@@ -758,6 +758,17 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
       outdoor.push(...drawn.split(',').filter((s) => !reach.has(s)).map((s) => `${s} drawn from ${key} through a window`));
     }
     expect(outdoor).toEqual([]);
+    // the caves are drawn only where the graph reaches them from the camera: from outdoors, every door shut,
+    // no cave room (2026-11-08: the cave group was drawn from the hero view, 7 draws a pass, because the open
+    // flood started from the great cellar two shut steps off and ran on through the cave openings)
+    const caves = new Set(P.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id)), inCave: string[] = [];
+    for (const [key, { drawn, label }] of by) {
+      if (!key.split('+').every((s) => s === 'courtyard' || s === 'outside')) continue;
+      const c = drawn.split(',').filter((s) => caves.has(s));
+      if (c.length) inCave.push(`${c.join(', ')} drawn from ${label}`);
+    }
+    expect(caves.size).toBeGreaterThan(0);
+    expect(inCave).toEqual([]);
     // what the graph is for: from the gate passage every room off the courtyard is drawn, from far outside too
     const courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
     const g = P.doors.find((d) => d.id === 'gate-court')!, q = on(g, 0, -(g.wall / 2 + 2));

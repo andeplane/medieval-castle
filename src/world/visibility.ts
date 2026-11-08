@@ -62,8 +62,10 @@ export function roomGraph(plan: InteriorPlan, windows: WindowLink[] = []): RoomG
 }
 
 /**
- * Every space within `depth` steps of `from`; then on through open doorways (no leaf, or `isOpen(leaf)`)
- * as far as they lead; then one step through the windows of everything so far.
+ * Every space within `depth` steps of `from`; then every space `from` reaches through open doorways (no leaf,
+ * or `isOpen(leaf)`) however far they lead; then one step through the windows of everything so far.
+ * The open flood starts at the camera's own spaces only: a room two steps away behind a shut door is drawn,
+ * but what lies open beyond it is not (from outdoors that would pull in the whole cave system).
  */
 export function drawnSpaces(g: RoomGraph, from: SpaceId[], depth = 2, isOpen: (door: string) => boolean = () => false): Set<SpaceId> {
   const seen = new Set(from.map(spaceNode).filter((s) => g.has(s)));
@@ -74,8 +76,10 @@ export function drawnSpaces(g: RoomGraph, from: SpaceId[], depth = 2, isOpen: (d
     front = next;
   }
   const passable = (e: Link) => !e.window && (e.open || e.leaves.some(isOpen));
-  const stack = [...seen];
-  while (stack.length) for (const e of g.get(stack.pop()!)!) if (!seen.has(e.to) && passable(e)) { seen.add(e.to); stack.push(e.to); }
+  const start = from.map(spaceNode).filter((s) => g.has(s));
+  const flood = new Set(start), stack = [...start];
+  while (stack.length) for (const e of g.get(stack.pop()!)!) if (!flood.has(e.to) && passable(e)) { flood.add(e.to); stack.push(e.to); }
+  for (const s of flood) seen.add(s);
   for (const s of [...seen]) for (const e of g.get(s)!) if (e.window) seen.add(e.to);
   return seen;
 }
