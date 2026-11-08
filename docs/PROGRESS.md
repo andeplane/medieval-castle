@@ -1,5 +1,32 @@
 # Progress
 
+## 2026-11-08: fireplace rooms checked over the whole castle: not washed out; no rug on a carpet (branch `claude/project-thread-ns4g2v-hearthroom`)
+
+Anders (`?furniture=1`): a room with a fireplace looked washed out and flickering. #71 measured 1.5 m from the hall's (N1-2) and a study's (N2-0) hearth: scene-pass HDR mean ≈ 1.1, p99 6.6–9.8, exposure pinned at its 0.72 floor, 21–23 % of pixels over white. #71 (hearths 14 → 6 cd, caps per room, one stop lower indoors), #76 (hearth light in the fire) and #78 (fire loop unrolled) followed. This round checks every such room on main, not two.
+
+**Browser read-back (main f98c864, headless WebGL2, `?furniture=1`, 640×360; same read-back as #71: the scene pass's HDR target, every second pixel; settled exposure from the controller's own maths on that frame: 32×18 taps, centre weight, `targetStops`):**
+
+| pose | HDR mean | p99 | max | settled exposure | at floor | > 1 after exposure |
+|---|---|---|---|---|---|---|
+| hall N1-2, 1.5 m from the hooded hearth (#71: 1.06 / 9.8 / 0.72 / 21 %) | 0.120 | 1.36 | 15.7 | 1.53 | no | 1.6 % |
+| study N2-0, 1.5 m from the chimneypiece (#71: 1.13 / 6.6 / 0.72 / 23 %) | 0.078 | 0.75 | 9.4 | 2.26 | no | 1.6 % |
+| W5-0, 1.5 m from its hearth (the brightest hearth view in the castle model) | 0.274 | 0.51 | 5.3 | 0.44 | no (floor 0.36) | 0.01 % |
+| guard room N0-0 from its doorway | 0.061 | 0.27 | 5.2 | 2.08 | no | 0.1 % |
+BROWSER_EXTRA
+What is left over white is the flames themselves and the fire's glow in the firebox (max 5–16).
+
+**Whole castle without a browser** (`tests/light/hearthExposure.test.ts`): every room with a hearth or three or more fires, 80 rooms, 149 views (1.5 m in front of each of 69 hearths looking into the fire, and each room's doorway looking in). Each view is the room shell through the game camera (55°, 16:9, 64 × 36 rays); each surface gets its room's fires as the shader sums them (`roomFires` → `fireAt`) plus the readability floor, × an effective albedo of 0.11 / π, calibrated on the read-back above (hall hearth 0.120 browser / 0.125 model; N0-0 doorway 0.061 / 0.062; W5-0 0.274 / 0.234; study 0.078 / 0.114). Eye adaptation is the controller's maths. Result on main: no view pinned at the floor (the lowest settled exposure 0.49, W5-0's hearth; floor 0.36), at most 3.5 % of a view over white (great-5's doorway, a candle-lit wall near the door), against #71's 21–23 %. The test fails a view over 5 % white or within ¼ stop of the floor; a second case puts the hall back to its pre-#71 fires (14 cd, no caps) and eye floor (0.72) and fails it (pinned). Not modelled: daylight (it only lowers exposure), furniture occlusion, the flames.
+
+**Flicker** (same file): every hearth's wall either side (1.4 m up) and the floor 1.5 m in front, the room's fires each wavering by its own seed as the fire table does, 60 s at 60 fps: relative s.d. ≤ 7.5 %, the deepest gutter 0.59 of the steady light, the largest frame-to-frame step 4.5 %. The test holds s.d. ≤ 10 %, never below half, no frame step over 6 %. Not changed (`src/light/flicker.ts` is the lights agent's).
+
+**Z-fighting near hearths.** Inside every prop and against the room shell (#68's tests) there is none; the hearth slab has no bottom, the fire dogs and logs are inside the fireplace prop. Between props there was no test, and it found two, both in front of a hearth: a hearth rug laid on a carpet (`S1-1`, `S4-2`), two atlas sheets on the same floor plane. Fix (`props/dress.ts fits`): a flat textile is not laid on another; the first placed stays. Whole castle: rugs 64 → 63, skins 12 → 10, carpets 8 → 6 of 1,885 pieces. New test `props-zfight.test.ts` "no two props in a room have faces on one plane looking the same way" (every pair of touching props in every room, ~6 s); it fails on main with exactly those two.
+
+**Assumption for Anders:** a rug, skin or carpet is never laid over another one (two rooms lose a carpet, two a skin, one a rug).
+
+Captures (`castle-plan/fix-hearthroom/`): CAPTURES
+
+Not checked: Anders' Mac / WebGPU (headless WebGL2 only; its renderer crashed for lack of memory on nearly every pose on the shared machine, so the browser read-back covers the poses in the table, and the rest of the castle is the model); daylight in the model; the browser numbers are from main before #80 (fires listed up front; the per-room fires and caps are the same).
+
 ## 2026-11-08: with furniture, every room's fires are lit from the first frame, not when its furniture streams in (branch `claude/project-thread-ns4g2v-lights`)
 
 Anders: "light in next room off. then i walk a bit, then on".
