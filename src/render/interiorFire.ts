@@ -1,6 +1,7 @@
 // Interior fire sources for the shared light system (src/light) without furniture: a few plain wall
 // torches in the halls, gate rooms, undercrofts and tunnels so the dark rooms still have firelight
-// (with ?furniture=1 the streamed rooms bring their own fires, light/roomFires.ts). Pure; main.ts feeds the result to LightRig and
+// (with ?furniture=1 the streamed rooms bring their own fires, light/roomFires.ts). Pure; main.ts puts each torch in its room's row of the
+// fire table (light/roomLight.ts) and
 // makeFlameSprites(linkFlames(flames, emitters)).
 import type { InteriorPlan, RoomSpec, SpaceId } from '../castle/interior/types';
 import type { Flame, LightEmitter, V3 } from '../light/types';
@@ -11,7 +12,7 @@ import { inPoly } from './interiorMath';
 export interface FireSources {
   emitters: LightEmitter[];
   flames: Flame[];
-  /** Visibility group key of each emitter (so the rig only lights shown rooms). */
+  /** Visibility group key of each emitter (windows of rooms with fire glow at night). */
   group: string[];
   /** Each wall torch's holder (shaft and bracket), one per flame, for the shell to build; none for furniture. */
   holders: TorchHolder[];

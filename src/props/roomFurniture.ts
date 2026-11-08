@@ -6,6 +6,7 @@
 // Each room depends only on the plan and the seed (dress.ts seeds it from its id), so the result
 // does not depend on which other rooms were furnished before it, or in which worker.
 import type { InteriorPlan, SpaceId } from '../castle/interior/types';
+import type { WindowFace } from '../castle/interior/shell';
 import type { Flame, LightEmitter } from '../light/types';
 import { tagTriangles } from '../render/interiorMath';
 import { PROP_MATS, type PropMat } from './geom';
@@ -75,6 +76,8 @@ export interface FurnisherOptions {
   make?: (kind: string, seed: number) => Prop;
   /** Wall distance for the room tags, as bakeInteriorLight's (4.5 m). */
   maxWall?: number;
+  /** Where the windows open into the rooms (buildInterior().windows). */
+  windows?: readonly WindowFace[];
 }
 
 /** A function that furnishes rooms of `plan` by id. Keeps one prop variant pool across its rooms. */
@@ -93,7 +96,7 @@ export function createFurnisher(plan: InteriorPlan, o: FurnisherOptions): (room:
   return (id) => {
     const r = byId.get(id);
     if (!r) throw new Error(`no room ${id}`);
-    const d = dressRoom(r, plan, { seed: o.seed, make });
+    const d = dressRoom(r, plan, { seed: o.seed, make, windows: o.windows });
     const { mesh, emitters } = mergePlaced(d.placed);
     const bins: Partial<Record<PropMat, BinArrays>> = {};
     for (const k of PROP_MATS) {

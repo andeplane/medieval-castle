@@ -1,10 +1,9 @@
-// Fires that come and go by room (streamed furniture): each room's emitters join the light rig the
-// first time the room arrives and keep their rig ids after that, so a room that unloads and loads again
-// gets the same lights (put out with setScale 0, lit again with 1) and the rig's pools are never reset.
-// Its flames are linked to its own emitters (linkFlames); sync() hands the whole set to the flame sprites
-// once a frame when it changed.
-import type { LightRig } from './rig';
+// Fires that come and go by room (streamed furniture): a room's emitters go into its row of the fire
+// table (light/roomLight.ts) when the room arrives and come out when it leaves, so a room's light is
+// exactly its own fires whenever it is drawn. Its flames are linked to its own emitters (linkFlames);
+// sync() hands the whole set to the flame sprites once a frame when it changed.
 import { linkFlames, type FlameInstance } from './flames';
+import { roomFires, type FireTable, type RoomBox } from './roomLight';
 import type { Flame, LightEmitter } from './types';
 
 export interface RoomFires {
@@ -18,23 +17,23 @@ export interface RoomFires {
   sync(): void;
 }
 
-export function createRoomFires(rig: Pick<LightRig, 'add' | 'setScale'>, onFlames: (fs: FlameInstance[]) => void): RoomFires {
-  const ids = new Map<string, number[]>();
+/** `room(id)`: the room's row in the table and its box (for the cap); rooms it does not know light nothing. */
+export function createRoomFires(table: Pick<FireTable, 'set' | 'clear'>, room: (id: string) => { row: number; box: RoomBox } | undefined, onFlames: (fs: FlameInstance[]) => void): RoomFires {
   const lit = new Map<string, FlameInstance[]>();
   const all = () => [...lit.values()].flat();
   let changed = false;
   return {
-    set(room, emitters, flames) {
-      let mine = ids.get(room);
-      if (!mine) { mine = emitters.map((e) => rig.add(e)); ids.set(room, mine); }
-      else for (const id of mine) rig.setScale(id, 1);
-      lit.set(room, linkFlames(flames, emitters));
+    set(id, emitters, flames) {
+      const r = room(id);
+      if (r) table.set(r.row, roomFires(r.box, emitters));
+      lit.set(id, linkFlames(flames, emitters));
       changed = true;
     },
-    clear(room) {
-      if (!lit.has(room)) return;
-      for (const id of ids.get(room)!) rig.setScale(id, 0);
-      lit.delete(room);
+    clear(id) {
+      if (!lit.has(id)) return;
+      const r = room(id);
+      if (r) table.clear(r.row);
+      lit.delete(id);
       changed = true;
     },
     rooms: () => [...lit.keys()],

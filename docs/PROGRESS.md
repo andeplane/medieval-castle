@@ -1,5 +1,70 @@
 # Progress
 
+## 2026-11-08: firelight washed out near hearths; rooms lit only once you come close; black courtyard door reveals (branch `claude/project-thread-ns4g2v-glow`)
+
+Three defects from Anders' Mac (live, WebGPU), all in the interior light.
+
+**1. Hearths and studies washed out (`?furniture=1`).** Measured on his Mac (Playwright, the scene pass's HDR target read back, read-only; luminance over every second pixel):
+
+| pose | HDR mean | mean log2 | p99 | max | exposure | pixels > 1 after exposure |
+|---|---|---|---|---|---|---|
+| hall N1-2, 1.5 m from the hooded hearth, furnished | 1.06 | −1.28 | 9.8 | 11.2 | 0.72 (floor) | 21 % |
+| same pose, no furniture (one wall torch) | 0.065 | −4.29 | 0.41 | 1.49 | 1.63 | 0.3 % |
+| study N2-0, 1.5 m from the chimneypiece | 1.13 | −0.85 | 6.6 | 249 | 0.72 (floor) | 23 % |
+| study N2-0, room view | 0.30 | −3.31 | 3.6 | 112 | 0.81 | 4.6 % |
+
+Mean colour at the hall hearth (linear) 2.26 / 0.78 / 0.21: the fire colour (1600 K seen as ≈ 2700 K) over everything, clipped. Causes, in order of weight:
+- **The hearth light.** 14 cd per unit: the hooded hearth (3.5) was 49 cd with a 16.8 m range, a chimneypiece (2.2) 31 cd and 13.3 m, against the wall torch the look was tuned for (22.5 cd, 6.9 m). The emitter stands 0.35 m in front of the firebox, so the whole chimneypiece face was ≈ 0.4 m from a 31–49 cd point light (≈ 190–300 candela/m²).
+- **Fires add up, through walls.** A furnished room has 4–9 fires (hearth, candelabra, sconces, lamps). Point lights know no rooms and cast no shadows, so the neighbours' fires came through the walls too: at the study hearth the rig's 8 lights were the room's own hearth (28.8 cd at 1.7 m), N2-1's hearth through the wall (32.4 cd at 4.1 m), a third hearth 10.9 m off, and five candles and lamps. Over the castle a furnished room's fires gave 4–9 × the average light of a torch-lit room.
+- **Exposure could not come down.** Eye adaptation never went below 0.72 (0 stops): at the hall hearth it wanted −1.5 stops and stayed at the floor.
+- Not the tone mapping or grade: the post grade is the outdoor one (saturation 0.88, gentle S-curve); torch rooms under the same grade read grey and warm.
+
+**2. A room seen from afar was dark until you came close.** The rig lit the 8 fires nearest the camera, each only within 1.6 × its range (a wall torch: 11 m), and faded it in over 0.35 s. So a drawn room further off had no firelight, and its torch "switched on" as you walked up. The same doorway walk as the new test, run against the old rig: 33 torch-lit rooms drawn at some pose with none of their torches lit (e.g. gate-0, gate-1, tunnel-1…5 from 15 m off the sally-port grille).
+
+**3. Black reveals of courtyard doors** (eye (10.5, 3.8, −1.5) → (14.6, 3.6, −4.1)). The outer half of an outdoor doorway is interior stone in the `doorways:outdoor` group, on the underground material set (no sun), tagged to the room behind (`court>E0-2` → E0-2). It got that room's daylight through the shut door (nothing) and the 0.145 floor, under the courtyard's 0.72 exposure: black.
+
+Fix (`src/light/roomLight.ts`, `render/interiorShader.ts fireIrradiance`, `render/interiorLight.ts`):
+- **Firelight by room.** Each room's fires go into its row of a fire table (`FireTable`: position, range, colour × candela, soft radius; one flicker value per fire, from the same seeds as the flame sprites). The interior shader sums the fragment's own room's fires, every one, per pixel: candela / (d² + soft²), faded to 0 at the range, × cos, × flicker. It enters the lighting as image-based irradiance (diffuse, and a rough reflection for brass and iron). No point lights indoors any more, so nothing is picked by distance, nothing fades in, and no fire shines through a wall. Rows come and go with the room: wall torches at load, furniture fires when a room streams in (`roomFires.ts`, the rooms the room graph draws).
+- Door leaves have no room tag: they take the room they face from a room grid (`interiorMath.roomGridFor / fillRoomGrid`, 0.5 × 1 × 0.5 m cells, 0.3 m out along the normal).
+- **Caps per room** (`roomFires`): the brightest `MAX_FIRES` = 12 (the busiest room has 9), dimmed together so no point ≥ 0.3 m from a flame gets more than `FIRE_PEAK` = 150 (a wall torch's own hot spot is 147) and the room's surfaces no more than `FIRE_MEAN` = 4.5 on average (4π × candela / surface; the brightest torch-lit room, a tunnel, is 4.4; an undercroft 1–2.4). Torch-lit rooms are never dimmed.
+- **Profiles** (`flicker.ts`): hearth 14 → 6 cd per unit, range 9 → 6 m; candle 3.6 → 2.5 cd; a `soft` radius per kind (candle 0.12, lantern 0.15, torch 0.25, brazier 0.45, hearth 0.9 m), so nothing next to a fire gets more than candela / soft². Range multiplier capped at 1.5 (was 2). Furnished rooms now average 1.5 (max 4.1) against the torch-lit undercrofts' 1–2.4 (was 3–9 with the old profiles).
+- **Exposure** may close one stop below 0.72 indoors (`EXPOSURE.minInside` = −1), next to a fire. Outdoors it still never goes below 0.72.
+- **Outdoor reveals** (`interiorMath.outdoorRevealTest`, `OUTDOOR_TAG` = −2): interior stone from the shut leaf (or the mid plane, with no leaf) out to the courtyard face, and the stop facing out, is tagged to the sky. The shader gives it the courtyard's ambient (`InteriorLight.outdoor`: the hemisphere light plus the sky environment, sky colour up and ground colour down, scaled with the sun's height as the bake does).
+- `setDynamicLights` is gone from the interior materials (no users).
+
+Tests:
+- `tests/light/roomLight.test.ts`: the falloff the shader uses, room samples, one scale per room, the brightest 12 kept, the table packing and flicker in step with the flames. **Whole castle**: every room, furnished and torch-lit, fits the shader (≤ 12 fires) and after `roomFires` stays under both caps; rooms over a cap are exactly the ones dimmed; torch-lit rooms are untouched.
+- `tests/world.test.ts` "lights every drawn room with all its fires, the same from every pose": walking up to and through every doorway from 15 m out (`createVisibility` as main.ts), each drawn room has all its torches at the same candela and the same firelight on its floor at every pose. Against the old rig the same walk finds 33 rooms dark at some pose.
+- `tests/world.test.ts` "lights every outdoor doorway from the sky up to its leaf": over every outdoor door of the castle, the stone between the leaf and the courtyard is `OUTDOOR_TAG` and the stone behind the leaf is its room's. Fails without the fix (`court>N0-4: outer reveal tagged 4`, …).
+- `interiorMath`: room grid, outdoor reveal test (leaf and no leaf, both orientations), indoor exposure floor. `interiorLight`: fire textures sync (rows only when changed, flicker every frame), the bake fills the grid, the lighting node adds to irradiance / radiance / iblIrradiance.
+
+## 2026-11-08: medieval room sets, window shutters, 33 room roles (branch `claude/project-thread-ns4g2v-furn2`, behind `?furniture=1`)
+
+Anders: the new sets are medieval, not 1800s; leave the #59 pieces (lamps, portraits, sofas, carpets) as they are; then "every room furnished, each one different".
+
+**New pieces** (`props/medieval.ts`, 23 kinds, same contract as `kit.ts`; seeded variants, one bin per material):
+- Hall: `refectory-table` (three trestles, optional linen), `box-chair` (the high-table chair: panelled box seat, tall back, cresting, cushion), `dresser` (two open stages of pewter plates on edge, flagons, cupboard base). The hall gets the hooded hearth with armour either side, the box-chair behind a high table, two long tables with benches under chandeliers, the dresser.
+- Chapel: `stone-altar` (block, mensa, footpace, linen cloth falling over the front with a coloured band, two iron prickets with candles, a plain wooden cross), `prie-dieu` (kneeler with cushion, sloped desk). The chapel (`eturret3`, 2.1 × 3.7 m) holds the altar, a prie-dieu, two candle sconces and the window's shutters; a bench does not fit.
+- Kitchen: `spit-hearth` (the hooded hearth with spit dogs, a spit with a joint and crank inside the opening, and an iron crane carrying a cauldron on a chain), `work-table` (scrubbed deal top, bowls, a cleaver board). No range.
+- Windows: `shutter` (one leaf of a pair of plank shutters on ledges with strap hinges, standing open flat against the wall beside the embrasure). Placed from the one wall-openings model: `shell.ts embrasure()` now returns the window's face (`WindowFace`: room, centre, normal, width, sill/spring/head), `buildInterior` returns `windows`, and `main.ts` passes them through the furnish worker to `dressRoom`. Leaves go at both jambs (one if the window is under 0.7 m), sill to spring; a leaf is skipped where it would leave the room, cross a door's keep-out or overlap a low niche.
+- Room roles: `cask-rack`, `mash-tun`, `bread-oven`, `wash-tub`, `drying-rack`, `grindstone`, `well`, `shackles` (wall plates, chain links, cuffs), `privy`, `cradle`, `writing-desk`, `counting-table` (chequered cloth), `loom`, `perch` (hawk on a bow perch), `brazier` (live coals, a `brazier` light emitter).
+
+**Room roles** (`props/dress.ts roleTable`): fixed roles first (hall, chapel, gate, stairs, tunnels), then the two largest ground rooms in different wings are kitchens, the great tower has the treasury, its tops and the turret tops are watch rooms, two mews, the lord's and lady's chambers are the largest rooms on floors 2–4, the steward is on floor 1; the rest are dealt from pools by floor and size (under ground: well room, wine cellar, dungeon, cellar; ground: buttery, pantry, brewhouse, bakehouse, laundry, armoury, guard, store; first and second floors: study, library, steward, sewing, wardrobe, physician, solar, bedchamber; higher: bedchamber, solar, library, nursery, garderobe; small rooms: wardrobe, garderobe, study, store, physician). Each role has a focal piece and seeded extras; any room left under 6 pieces is topped up from plain pieces (chest, stool, sconce, bucket…). Walls with no window are "solid" and now take hearths and hangings even on the outer walls.
+
+Whole castle (206 rooms), main → branch: roles 12 → 33; bedchambers 75 → 26; pieces 1,743 → 2,158, median per room 9 → 10; rooms under 6 pieces 45 → 0 (stairs, tunnels and the two gate passages excepted); furniture triangles 949k → 1,193k (largest group 46.8k); 130 shutter leaves at 145 windows. Rooms per role: bedchamber 26, solar 23, study 20, library 16, wardrobe 14, sewing 13, physician 10, guard 9, garderobe 7, nursery 7, store 6, watch 5, cellar 4, steward 4, brewhouse 3, buttery 3, pantry 3, armoury 2, bakehouse 2, laundry 2, kitchen 2 (`S0-2`, `great-0`), wine cellar 2, mews 2, hall, lady, lord, treasury, chapel, dungeon, well room 1 each.
+
+`__game.state()` (headless WebGL2, 1024×576, `?furniture=1`), main → branch: hall 383 → 398 draw calls, furniture 101 → 113 pieces, 53.6k → 63.4k triangles; chamber 297 → 295, 88 → 94 pieces, 45.1k → 52.5k; tower room 337 → 346, 132 → 188 pieces, 62.6k → 105.1k (the tower room's group now holds the great tower's mews, treasury and watch room).
+
+**Remade pieces**: `skin` (Anders' capture): a hide outline in polar form (oval body, four square-ended legs, head, tail; ears on the deer), five rings lifted 24 → 3 mm for thickness and a soft edge, planar UVs into the fur so it is not stretched, short-fibre darker fur (`textures.ts furPx`), bear (with a 3D head) or deer. `shackles`: chains of interlocking links instead of a smooth rod. `box-chair`, `dresser`, `brazier`: no two faces on one plane (`props-zfight.test.ts` from #68).
+
+Tests: `props-kit.test.ts` (every new kind built and measured; altar prickets and cloth; spit hearth iron; shutter size and hinge side; the pelt's flat, unstretched UVs); `props-dress.test.ts` over the whole castle with the real window faces: each window face lies on its room's wall; shutters stand at the jambs of over 70% of windows, never over a hole, a door zone or a low niche; no wall piece over a window; signature pieces of hall, chapel and both kitchens; every role present, two kitchens, one each of hall/chapel/lord/lady/treasury, fewer than 35 bedchambers; no two rooms of one role with the same multiset of pieces; every floored room at least 6 pieces; each role's focal piece where it fits; solid-wall rule.
+
+Captures (`castle-plan/furnishing/captures/`): `medieval-hall`, `medieval-chapel`, `medieval-kitchen`, `medieval-window-shutters`, `medieval-walk-close-hearth` (walk mode, 1.4 m from the spit), `medieval-chamber`, `medieval-towerroom`; one per role in `roles/`; a close-up of every prop kind on the props page in `kit/`.
+
+Assumptions for Anders to veto: plank shutters standing open (not cloth hangings); the box-chair as the lord's seat in the hall (the throne stays in the kit); the stone altar with a linen cloth and a green band; two kitchens; the role list and the pieces chosen for each; windowless outer walls take hearths.
+
+Not checked: WebGPU (all captures headless WebGL2); the shutters' look from outside (they are inside the room); every room by eye (one capture per role); frame time with all roles furnished on a real GPU; `world.test.ts` "draws the spaces of every opening…" ran past its 300 s limit once under coverage on a loaded machine (passes alone and in the last full coverage run).
+
 ## 2026-11-08: natural caves under the north moat (branch `claude/project-thread-ns4g2v-caves`)
 
 Anders: "btw are there no basement and caves?", "i never found the basements. but nice. will look. i think we need caves that go under the moat etc. make it exciting and interesting".
@@ -128,6 +193,33 @@ Headless WebGPU (SwiftShader, `--enable-unsafe-webgpu --use-webgpu-adapter=swift
 Tests (`precompile.test.ts`): `asyncPipelines` turns a render's null `promises` into its own array, leaves compileAsync's alone, settles pipelines made while waiting, and puts the backend's method back; `precompile` settles after every piece and undoes the deferral at the end and on failure.
 
 Not checked: the branch build itself on his Mac (the deploy happens on merge; the emulation applies the same wrapper to the live bundle); a 60 Hz or Intel Mac; Safari/Firefox WebGPU; the caption's percentage, which lives on the page thread and still pauses during the step's longest page task (0.6 s). Seen in passing, not changed: after ready the live game issues about 1,000 `writeBuffer` calls per frame (7,000–15,000 per 100 ms) (uniforms per object).
+
+After (headless WebGL2, built bundles of origin/main and this branch, `?shot&furniture=1`, scene-pass HDR read back; "display" = HDR × the exposure live auto-exposure settles on there, a mean over all pixels; captures in `castle-plan/glow/`, `*-adapted.png` at that exposure):
+
+| pose | before: exposure, display mean, p99 | after: exposure, display mean, p99 |
+|---|---|---|
+| hall N1-2, 1.5 m from the hearth | 0.72 (floor), 0.68, 7.9 | 0.64, 0.17, 1.17 |
+| hall N1-2, room view | 0.89, 0.15, 1.55 | 1.25, 0.12, 0.84 |
+| study N2-0, room view | 1.28, 0.22, 2.49 | 1.60, 0.17, 1.51 |
+| study N2-0, 1.5 m from the chimneypiece | 0.72 (floor), 0.74, 5.5 | 0.66, 0.16, 0.73 |
+| study wall, 0.5 m (close-range) | 0.89, 0.09, 0.16 | 1.49, 0.09, 0.17 |
+| courtyard door reveal (eye (10.5, 3.8, −1.5)) | Mac: black reveal | 0.77, 0.10, 0.20: daylit stone, darker than the wall face |
+
+The headless before matches the Mac (hall hearth display mean 0.68 vs 0.76, at the exposure floor). After: warm pools round each fire, stone texture readable on every wall, the far corners dark, nothing at the hearths clipping over the room. Draw calls are unchanged (no lights or meshes added; the fire is a few uniforms and two small textures in the interior shader).
+
+After merging the caves (#69) and the medieval room sets (#70):
+- **Caves.** The smugglers' lantern on its crate is a fire of the cave room it stands in (`firesByRoom`: an emitter with no holder goes to the room that holds it). The lantern the player carries moves from room to room, so it is no row of the table but the shader's one carried light (`InteriorLight.carried`, `setCarried`, same falloff), on every interior surface in its range while the camera is in a cave, as the rig's point light was. Test: held at the middle of every cave room (12), it lights the floor and the walls 1 m off well above the 0.145 floor.
+- **New furniture fires** (spit-hearths, bread ovens, …): over the whole castle 198 furnished rooms have fires, at most 8 in one room (N1-2; the shader sums 12), 3 rooms dimmed by the caps, mean firelight 1.2 on average (max 4.5, the cap). The whole-castle test runs the new room sets.
+
+Not checked:
+- The carried lantern in a capture (tests only), and that it does not light the castle cellar through the rock (it lights every interior surface in its range, like the rig's point light did).
+- The fix on Anders' Mac (WebGPU) and the live auto-exposure in a real browser: needs the deploy. Headless WebGL2 only, with the exposure computed from the same `targetStops`.
+- Fire on brass and iron is now a rough reflection only (no sharp point-light glints).
+- Fire stays in its room: it does not spill through an open doorway into the next room (each room sums only its own fires). Door leaves take the room the room grid gives them, so a leaf's two faces are lit by the rooms they face; seen only in tests, not in a capture of an open door.
+- Sun on outdoor reveals: they take the courtyard's sky and ground ambient, not direct sun or its shadow.
+- `lights.html` and the prop preview still use the old `LightRig` (they light props, not rooms).
+- Captures of torch-lit rooms after the change were not finished (the container's Chrome kept getting killed for memory); the torch-lit rooms' numbers are unchanged by construction (`roomFires` never dims them: whole-castle test), but their light now has the soft radius and no 1.6 × range cut-off.
+- In the full `npm run coverage` on this container, under a load average of 16, the four `interior plan` seed batches once timed out; alone they pass, and the rerun result is what CI will show.
 
 ## 2026-11-07: why the Mac counts 4.6x the draw calls; door instances grouped by geometry (branch `claude/project-thread-ns4g2v-dc`)
 

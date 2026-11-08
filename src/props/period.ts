@@ -611,24 +611,43 @@ export const runner: PropKind = {
   },
 };
 
-/** Animal skin by the fire: a flat pelt with four legs and a tail, and a raised bear's head one time in
- * two (otherwise a deer hide). */
+/** Animal skin by the fire: a bear or deer hide laid flat, its outline the classic rug's (four splayed legs
+ * with paws, a head, a short tail), a little thickness that rolls down to soft edges, fur from the paint
+ * atlas mapped flat in metres (no stretching into the legs); a raised bear's head one time in two. */
 export const skin: PropKind = {
   name: 'skin', placement: 'floor', blocksNav: false,
   build(m, r) {
-    const bear = r() < 0.5, L = bear ? range(r, 1.8, 2.2) : range(r, 1.3, 1.6), W = L * 0.55;
-    const tint = bear ? jitterTint(r, [0.42, 0.3, 0.22], 0.1) : jitterTint(r, [1.25, 0.95, 0.68], 0.08);
-    // half-width along the body: legs stick out at the shoulders and hips, a neck and head at the front
-    const half = (t: number) => {
-      const leg = (c: number) => Math.exp(-(((t - c) / 0.05) ** 2));
-      return W * (0.2 + 0.12 * Math.sin(Math.min(1, t / 0.85) * Math.PI) + 0.32 * (leg(0.22) + leg(0.7))) * (t > 0.85 ? Math.max(0.25, 1 - (t - 0.85) * 3.5) : 1) * (t < 0.05 ? 0.4 + t * 12 : 1);
+    const bear = r() < 0.5, L = bear ? range(r, 1.8, 2.2) : range(r, 1.3, 1.6), W = L * 0.62;
+    const tint = bear ? jitterTint(r, [0.55, 0.45, 0.38], 0.1) : jitterTint(r, [0.74, 0.56, 0.4], 0.08);
+    // outline in polar form from the middle (head toward +z): an oval body, four legs, a head and a tail
+    // super-Gaussian lobes: square-ended legs (paws), not the points of a star
+    const lobe = (th: number, c: number, w: number, p = 2) => { const d = Math.atan2(Math.sin(th - c), Math.cos(th - c)); return Math.exp(-(Math.abs(d / w) ** p)); };
+    const legs = [0.9, -0.9, 2.25, -2.25].map((c) => c + range(r, -0.06, 0.06));
+    const R = (th: number) => {
+      const body = 1 / Math.hypot(Math.sin(th) / (W * 0.34), Math.cos(th) / (L * 0.33));
+      return body + legs.reduce((s, c, i) => s + lobe(th, c, 0.19, 4) * L * (i < 2 ? 0.2 : 0.19), 0) + lobe(th, 0, 0.22, 3) * L * (bear ? 0.1 : 0.14)
+        + (bear ? 0 : (lobe(th, 0.3, 0.06) + lobe(th, -0.3, 0.06)) * L * 0.1) + lobe(th, Math.PI, 0.08) * L * (bear ? 0.05 : 0.07);
     };
-    m.tinted(tint, () => m.atlasSheet((s, t) => [(s - 0.5) * 2 * half(t), 0.008 + 0.01 * Math.sin(s * Math.PI) * Math.sin(t * Math.PI) + 0.004 * Math.sin(s * 9 + t * 13), (t - 0.5) * L], 6, 16, ATLAS.fur));
-    if (bear) m.tinted(tint, () => m.with(translate(0, 0.06, L / 2 - 0.05), () => {
-      m.tube('cloth', [[0, 0.04, -0.08], [0, 0.11, 0.05], [0, 0.1, 0.2], [0, 0.07, 0.3]], [0.1, 0.13, 0.09, 0.05], 10);
-      for (const sx of [-1, 1]) m.with(translate(sx * 0.08, 0.19, 0.0), () => m.lathe('cloth', [[0.001, 0], [0.035, 0.01], [0.03, 0.035], [0.001, 0.045]], 6));
-      m.tinted([0.15, 0.12, 0.1], () => m.with(translate(0, 0.07, 0.34), () => m.lathe('ceramic', [[0.001, -0.02], [0.025, -0.01], [0.022, 0.015], [0.001, 0.02]], 6)));
+    const N = 72, rings = [0, 0.4, 0.75, 0.93, 1], lift = [0.024, 0.023, 0.019, 0.012, 0.003];
+    const pts = rings.map((f, k) => Array.from({ length: N }, (_, i) => { const th = (i / N) * Math.PI * 2, rr = R(th) * f; return [Math.sin(th) * rr, lift[k], Math.cos(th) * rr] as V3; }));
+    const X = W * 0.9, Z = L * 0.6, uv = (p: V3): [number, number] => [ATLAS.fur[0] + (ATLAS.fur[2] - ATLAS.fur[0]) * (p[0] / (2 * X) + 0.5), ATLAS.fur[1] + (ATLAS.fur[3] - ATLAS.fur[1]) * (p[2] / (2 * Z) + 0.5)];
+    m.tinted(tint, () => {
+      for (let k = 0; k < rings.length - 1; k++) for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N, a = pts[k][i], b = pts[k][j], c = pts[k + 1][j], d = pts[k + 1][i];
+        const nn = (p: V3, q: V3, s: V3): V3 => { const u: V3 = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], v: V3 = [s[0] - p[0], s[1] - p[1], s[2] - p[2]]; const c3: V3 = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; const l = Math.hypot(...c3) || 1; return c3[1] < 0 ? [-c3[0] / l, -c3[1] / l, -c3[2] / l] : [c3[0] / l, c3[1] / l, c3[2] / l]; };
+        if (k > 0) { const n1 = nn(a, c, b); m.tri('paint', [a, b, c], [n1, n1, n1], [uv(a), uv(b), uv(c)]); }
+        const n2 = nn(a, d, c); m.tri('paint', [a, c, d], [n2, n2, n2], [uv(a), uv(c), uv(d)]);
+      }
+    });
+    const before = m.bins.paint.uv.length;
+    if (bear) m.tinted(tint, () => m.with(translate(0, 0.06, R(0) - 0.12), () => {
+      m.tube('paint', [[0, 0.04, -0.12], [0, 0.11, 0.0], [0, 0.1, 0.16], [0, 0.07, 0.27]], [0.1, 0.13, 0.09, 0.05], 10);
+      for (const sx of [-1, 1]) m.with(translate(sx * 0.08, 0.17, -0.04), () => m.lathe('paint', [[0.001, 0], [0.035, 0.01], [0.03, 0.035], [0.001, 0.045]], 6));
+      m.tinted([0.15, 0.12, 0.1], () => m.with(translate(0, 0.07, 0.31), () => m.lathe('ceramic', [[0.001, -0.02], [0.025, -0.01], [0.022, 0.015], [0.001, 0.02]], 6)));
     }));
+    // the head's metre UVs folded into the fur's corner of the atlas
+    const uvs = m.bins.paint.uv, fr = (x: number) => x - Math.floor(x);
+    for (let i = before; i < uvs.length; i += 2) { uvs[i] = ATLAS.fur[0] + (ATLAS.fur[2] - ATLAS.fur[0]) * fr(uvs[i] * 2); uvs[i + 1] = ATLAS.fur[1] + (ATLAS.fur[3] - ATLAS.fur[1]) * 0.5 * fr(uvs[i + 1] * 2); }
     return { colliders: [hull(m)], emitters: [] };
   },
 };

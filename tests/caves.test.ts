@@ -18,7 +18,8 @@ import { islandOutline, moatOuter } from '../src/castle/layout';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { heightAt } from '../src/world/terrain';
 import { buildCastle } from '../src/castle/castle';
-import { CARRIED_LANTERN, lanternAt, lanternLit } from '../src/player/lantern';
+import { CARRIED_LANTERN, lanternAt, lanternLit, lanternFire } from '../src/player/lantern';
+import { fireAt } from '../src/light/roomLight';
 import { mats } from './world';
 
 type V3 = [number, number, number];
@@ -276,8 +277,11 @@ describe('the carried lantern', () => {
     expect(lanternLit(['cave-hall'], caves)).toBe(true);
     expect(lanternLit(['N-c1'], caves)).toBe(false);
     expect(CARRIED_LANTERN.kind).toBe('lantern');
-    expect(CARRIED_LANTERN.decay).toBe(1); // 1/d: the wall beside the eye does not burn out while the way ahead stays lit
-    expect(CARRIED_LANTERN.range).toBeGreaterThanOrEqual(8);
+    // its near field: the wall at a hand's breadth gets at most ~13× the light 4 m ahead (a flame-sized soft: ~80×)
+    const f = lanternFire([0, 0, 0]), near = fireAt([f], [0.55, 0, 0]), far = fireAt([f], [4, 0, 0]);
+    expect(near / far).toBeLessThan(15);
+    expect(fireAt([{ ...f, soft: 0.15 }], [0.55, 0, 0]) / fireAt([{ ...f, soft: 0.15 }], [4, 0, 0])).toBeGreaterThan(50);
+    expect(f.range).toBeGreaterThanOrEqual(8); expect(f.seed).toBe(lanternFire([5, 1, 2]).seed);
   });
 });
 
