@@ -81,3 +81,32 @@ describe('no z-fighting against the room shell', () => {
     expect(bad).toEqual([]);
   });
 });
+
+// Two placed props with faces on one plane flicker the same way (2026-11-08: a hearth rug laid on a
+// carpet in S1-1 and S4-2, both sheets on the floor plane, flickering in front of the fire). Over every
+// room of the castle: no two props that touch have faces on one plane looking the same way.
+describe('no z-fighting between placed props', () => {
+  let P: InteriorPlan, D: Dressing;
+  beforeAll(() => { P = planInterior(); D = dressPlan(P); }, 60_000);
+
+  it('no two props in a room have faces on one plane looking the same way', () => {
+    const bad: string[] = [];
+    let pairs = 0;
+    for (const rd of D.rooms) {
+      const T = rd.placed.map((p) => trisOf(mergePlaced([p]).mesh));
+      const box = T.map((ts) => {
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (const t of ts) for (const v of [t.a, t.b, t.c]) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], v[k]); hi[k] = Math.max(hi[k], v[k]); }
+        return { lo, hi };
+      });
+      for (let i = 0; i < T.length; i++) for (let j = i + 1; j < T.length; j++) {
+        if ([0, 1, 2].some((k) => box[i].lo[k] > box[j].hi[k] + 2e-3 || box[j].lo[k] > box[i].hi[k] + 2e-3)) continue;
+        pairs++;
+        const f = coplanarFights(T[i], T[j]).filter((x) => x.same);
+        if (f.length) bad.push(`${rd.room} ${rd.placed[i].prop.kind.name} / ${rd.placed[j].prop.kind.name}: ${f.length} faces at ${f[0].at.map((v) => v.toFixed(2)).join(', ')}`);
+      }
+    }
+    expect(pairs).toBeGreaterThan(500); // the rule sees props that touch (a candle on a table, a chair at a desk)
+    expect(bad).toEqual([]);
+  }, 240_000);
+});

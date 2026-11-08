@@ -396,9 +396,11 @@ export class RoomDresser {
     const f = footRect(p);
     if (!insidePoly(this.poly, f)) return false;
     if (this.keepOut.some((k) => convexOverlap(f, k))) return false;
-    return flat(p.prop) || !this.blockers.some((b) => convexOverlap(f, b, -0.01));
+    // a textile on another lies on the same floor plane: the two would z-fight (a hearth rug on a carpet)
+    if (flat(p.prop)) return !this.placed.some((q) => flat(q.prop) && convexOverlap(f, footRect(q), -0.01));
+    return !this.blockers.some((b) => convexOverlap(f, b, -0.01));
   }
-  /** Flat floor textiles (carpets, rugs, skins, runners) lie under furniture and over each other. */
+  /** Flat floor textiles (carpets, rugs, skins, runners) lie under furniture, never on each other. */
   add(p: Placed, pad = 0.02) { this.placed.push(p); if (p.prop.kind.blocksNav || (p.prop.kind.placement === 'floor' && !flat(p.prop))) this.blockers.push(footRect(p, pad)); return p; }
   fitsFloor(p: Placed): boolean {
     return this.fits(p) && (p.at[1] - this.r.y0) + p.prop.bounds.max[1] < this.r.y1 - this.r.y0 - 0.05;
