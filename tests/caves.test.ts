@@ -8,7 +8,7 @@ import { MeshBVH } from 'three-mesh-bvh';
 import { planInterior, validatePlan, type PlanX } from '../src/castle/interior/plan';
 import { buildInterior, type InteriorResult } from '../src/castle/interior/index';
 import { caveSpan, caveWalk, fireSpot, passageFrame, passageFloor, ellipseRadius, poolDepth, isCave, CAVE_ZONE, type CavePlan } from '../src/castle/interior/caves';
-import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, rockOpenness, bakeFungiLight, caveShading, FUNGI_REACH, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
+import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, rockOpenness, bakePartOpenness, bakeFungiLight, caveShading, FUNGI_REACH, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
 import { caveRockOffThread, packCaveRock, type CaveWorker } from '../src/castle/interior/caveOffThread';
 import { Builder } from '../src/castle/builder';
 import { interiorViews } from '../src/camera/interiorViews';
@@ -329,6 +329,27 @@ describe('cave rock', () => {
     let best = 0;
     for (let i = 0; i < R.open.length; i++) if (R.nor[3 * i + 1] > 0.9 && Math.hypot(R.pos[3 * i] - k.c[0], R.pos[3 * i + 2] - k.c[1]) < 2) best = Math.max(best, R.open[i]);
     expect(best).toBeGreaterThan(0.9);
+  });
+
+  it('bakes the openness of the rock that is not the soup from the same field (no lighter blocks against a recess)', () => {
+    const floor = (_x: number, y: number) => -y;
+    const bin = { pos: [0, 0, 0, 0, 0, 0, 0, -3, 0], nor: [0, 1, 0, 0, 1, 0, 0, 1, 0], uv: [0.3, 0.2, 0.8, 0.4, 0.8, 0] };
+    bakePartOpenness(bin, 1, floor);
+    expect(bin.uv[0]).toBe(0.3);                  // the soup's own is left
+    expect(bin.uv[2]).toBeGreaterThan(0.95);      // on open ground
+    expect(bin.uv[4]).toBeLessThan(0.05);         // 3 m down in the rock
+    expect([bin.uv[3], bin.uv[5]]).toEqual([0.4, 0]); // the fungi light is left
+    // the whole cave: every block, cone, collar and step vertex is the field's, so none is the old fixed 0.8
+    const B = new Builder(), R = caveRock(C, P.seed);
+    buildCaves(B, C, P.seed, []);
+    const bin2 = B.bins.rock, from = R.tris.length, f = caveField(C, P.seed).f;
+    const n = bin2.pos.length / 3 - from;
+    expect(n).toBeGreaterThan(1000);
+    const want = rockOpenness(f, bin2.pos.slice(3 * from), bin2.nor.slice(3 * from));
+    let off = 0;
+    for (let i = 0; i < n; i++) if (Math.abs(bin2.uv[2 * (from + i)] - want[i]) > 1e-6) off++;
+    expect(off).toBe(0);
+    expect(want.filter((o) => o < 0.6).length).toBeGreaterThan(n * 0.05);
   });
 
   it('bakes the fungi light from nearby clusters only, on faces turned their way', () => {

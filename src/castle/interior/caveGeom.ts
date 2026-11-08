@@ -232,7 +232,7 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
     const facet = (v: V3) => norm3([face[0] * FACETED + v[0] * (1 - FACETED), face[1] * FACETED + v[1] * (1 - FACETED), face[2] * FACETED + v[2] * (1 - FACETED)]);
     rock.triN(tri.map((i) => p[i]), tri.map((i) => facet(n[i])), tri.map((i) => [R.open[ids[i]], 0] as [number, number]));
   }
-  const rockTris = R.tris.length / 3;
+  const rockTris = R.tris.length / 3, part0 = rock.pos.length / 3;
   for (const pt of portals) collar(rock, pt, P);
   for (const p of P.passages) if (p.steps) steps(B, p, seed);
   for (const k of P.chambers) if (k.pool) pool(B.bins.pool, k);
@@ -240,8 +240,19 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
   for (const sp of speleothems(R, P, seed)) cone(rock, sp);
   const spots = fungi(B.bins.glow, R, P, seed);
   for (const f of P.features) feature(B, f, seed);
+  bakePartOpenness(rock, part0, caveField(P, seed).f);
   bakeFungiLight(rock, spots);
   return { rock: rockTris };
+}
+
+/**
+ * The rock that is not the soup (collars, steps, blocks, cones) takes its openness from the same field as
+ * the soup round it: with one fixed value a block against a recess wall showed as a lighter, hard-edged
+ * patch wherever it came out of the rock.
+ */
+export function bakePartOpenness(bin: { pos: number[]; nor: number[]; uv: number[] }, from: number, f: (x: number, y: number, z: number) => number) {
+  const open = rockOpenness(f, bin.pos.slice(3 * from), bin.nor.slice(3 * from));
+  open.forEach((o, i) => { bin.uv[2 * (from + i)] = o; });
 }
 
 /** How far the fungi's own light reaches over the rock round a cluster (m, gaussian radius). */
@@ -282,7 +293,7 @@ function collar(bin: Bin, pt: CavePortal, P: CavePlan) {
   const tris = ShapeUtils.triangulateShape(outer.map((q) => new Vector2(q[0], q[1])), [hole.map((q) => new Vector2(q[0], q[1]))]);
   for (const [i, j, k] of tris) bin.tri(W(all[i][0], all[i][1]), W(all[j][0], all[j][1]), W(all[k][0], all[k][1]), n, PART, PART, PART);
 }
-/** The uv of rock not from the soup (collars, steps, blocks, cones): fairly open, no fungi light until bakeFungiLight. */
+/** The uv of rock not from the soup (collars, steps, blocks, cones) until bakePartOpenness and bakeFungiLight. */
 const PART: [number, number] = [0.8, 0];
 
 /** Rough steps down a passage: one block per tread, its top on the riser line, its ends in the rock. */
