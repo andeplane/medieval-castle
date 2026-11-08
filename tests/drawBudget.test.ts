@@ -198,6 +198,13 @@ describe('draw calls per frame on WebGPU, from the scene graph', () => {
     expect(countDraws(s, c).triangles).toBe(3 * 6 + 12 + 12); // instanceCount left at Infinity: one
     ib.instanceCount = 4;
     expect(countDraws(s, c).triangles).toBe(3 * 6 + 12 + 4 * 12);
+    // a geometry with no vertices yet draws nothing; a group with no material index takes material 0, and
+    // one past the materials draws nothing
+    const empty = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial()); empty.frustumCulled = false;
+    const g2 = new THREE.BoxGeometry(); g2.clearGroups(); g2.addGroup(0, 6); g2.addGroup(6, 6, 5);
+    const sparse = new THREE.Mesh(g2, [new THREE.MeshBasicMaterial()]); sparse.frustumCulled = false;
+    const s2 = new THREE.Scene(); s2.add(empty, sparse); s2.updateMatrixWorld();
+    expect(countDraws(s2, c)).toMatchObject({ draws: 2, triangles: 2 });
     // and the same aside from the AO pre-pass's far plane (render/aoCamera.ts): the view's camera, nearer
     const pre = new THREE.PerspectiveCamera();
     aoCamera(c, pre);
