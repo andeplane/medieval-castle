@@ -66,6 +66,23 @@ const inPoly = (poly: [number, number][], x: number, z: number) => {
   return c;
 };
 
+/**
+ * Fires by the room they light: an emitter with a holder (a wall torch) by its holder's room, any other
+ * (the caves' lantern on its crate) by the room it stands in, the first whose floor plan and height hold
+ * it; an emitter in no room lights nothing.
+ */
+export function firesByRoom(rooms: (RoomBox & { id: string })[], emitters: LightEmitter[], holders: ({ room: string } | undefined)[] = []): Map<string, LightEmitter[]> {
+  const out = new Map<string, LightEmitter[]>();
+  emitters.forEach((e, i) => {
+    const [x, y, z] = e.position;
+    const id = holders[i]?.room ?? rooms.find((r) => y >= r.y0 && y <= r.y1 && inPoly(r.poly, x, z))?.id;
+    if (id === undefined) return;
+    if (!out.has(id)) out.set(id, []);
+    out.get(id)!.push(e);
+  });
+  return out;
+}
+
 /** Points through a room's volume (a `step` grid inside its outline, floor to ceiling) at least NEAR from every fire. */
 export function roomSamples(r: RoomBox, fires: Fire[], step = 0.4): V3[] {
   const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]), out: V3[] = [];

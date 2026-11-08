@@ -17,7 +17,7 @@ import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix, isolate } from 'three/tsl';
 import { interiorIrradiance, paneGlow, fireIrradiance } from './interiorShader';
-import { FIRE_W, MAX_FIRES, type FireTable } from '../light/roomLight';
+import { FIRE_W, MAX_FIRES, type Fire, type FireTable } from '../light/roomLight';
 import { tagBoxes } from '../world/visibility';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
@@ -61,6 +61,10 @@ export interface InteriorLight {
   outdoor: { sky: THREE.UniformNode<'vec3', THREE.Vector3>; ground: THREE.UniformNode<'vec3', THREE.Vector3> };
   /** which room a point is in, for surfaces with no room tag (door leaves); filled by the bake */
   grid: { texture: THREE.Data3DTexture; origin: THREE.UniformNode<'vec3', THREE.Vector3>; cell: THREE.UniformNode<'vec3', THREE.Vector3>; size: THREE.UniformNode<'vec3', THREE.Vector3>; model: RoomGrid };
+  /** a light carried from room to room (the player's cave lantern, player/lantern.ts): it belongs to no
+   * room's row, so it lights every interior surface in its range, as a point light would; colour × candela
+   * × flicker (0 when out), soft², range (setCarried) */
+  carried: { pos: THREE.UniformNode<'vec3', THREE.Vector3>; light: THREE.UniformNode<'vec4', THREE.Vector4>; range: THREE.UniformNode<'float', number> };
 }
 
 /** The outdoor ambient at full daylight (world/sky.ts): the hemisphere light (0xcfd0cb over 0x5d6446 at
@@ -83,6 +87,7 @@ export function createInteriorLight(maxRooms = 1024, rooms: InteriorPlan['rooms'
     table, maxRooms, floor: uniform(new THREE.Vector3(0.145, 0.145, 0.155)), gain: uniform(12), glow: uniform(1), fires, flick,
     outdoor: { sky: v(OUTDOOR_SKY), ground: v(OUTDOOR_GROUND) },
     grid: { texture: tex, origin: v(model.origin), cell: v(model.cell), size: v(model.size), model },
+    carried: { pos: v([0, -1000, 0]), light: uniform(new THREE.Vector4(0, 0, 0, 1)), range: uniform(1) },
   };
 }
 
@@ -90,6 +95,15 @@ export function createInteriorLight(maxRooms = 1024, rooms: InteriorPlan['rooms'
 export function syncFires(light: InteriorLight, t: FireTable, seen: { version: number }) {
   if (seen.version !== t.version) { (light.fires.image.data as Float32Array).set(t.data); light.fires.needsUpdate = true; seen.version = t.version; }
   (light.flick.image.data as Float32Array).set(t.flick); light.flick.needsUpdate = true;
+}
+
+/** Set the carried light (light/roomLight.ts toFire of its emitter) at this frame's flicker `k`; null puts it out. */
+export function setCarried(light: InteriorLight, f: Fire | null, k = 1) {
+  const c = light.carried;
+  if (!f) { c.light.value.set(0, 0, 0, 1); return; }
+  c.pos.value.set(f.position[0], f.position[1], f.position[2]);
+  c.light.value.set(f.colour[0] * f.candela * k, f.colour[1] * f.candela * k, f.colour[2] * f.candela * k, f.soft * f.soft);
+  c.range.value = f.range;
 }
 
 /** Daylight (irradiance only, as before) plus firelight: diffuse irradiance, and for metals (brass, iron)

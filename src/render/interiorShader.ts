@@ -133,6 +133,11 @@ export function fireIrradiance(light: InteriorLight) {
         E.addAssign(b.xyz.mul(k.mul(w).mul(w).mul(cos).div(d2.add(b.w))));
       });
     });
+    // the carried light (InteriorLight.carried): every surface in its range, whatever room
+    const c = light.carried, Lc = c.pos.sub(P).toVar();
+    const dc2 = Lc.dot(Lc), dc = sqrt(dc2).max(1e-4);
+    const wc = clamp(float(1).sub(dc.div(c.range).pow(4)), 0, 1);
+    E.addAssign(c.light.xyz.mul(wc.mul(wc).mul(N.dot(Lc.div(dc)).max(0)).div(dc2.add(c.light.w))));
     return E;
   })();
 }

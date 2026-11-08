@@ -64,8 +64,15 @@ export function floorAlong(path: V3[], p: P2): number {
 }
 
 type P2 = [number, number];
-/** The best wall for a torch: its midpoint m, inward normal n and ends a, b; null if no edge is long enough. */
+/**
+ * The best wall for a torch: its midpoint m, inward normal n and ends a, b; null if no edge is long enough.
+ * A room with a way down (a door into a room whose floor is a metre or more lower: the cellar stair, the
+ * breach into the caves) has its torch beside that door, so the way down is lit and easy to find (Anders,
+ * 2026-11-08: "i never found the basements").
+ */
 export function torchSpot(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P2; b: P2 } | null {
+  const down = besideWayDown(plan, r);
+  if (down) return down;
   const doors = plan.doors.filter((d) => d.spaces.includes(r.id)).map((d) => [d.centre[0], d.centre[2]]);
   let best: { m: P2; n: P2; a: P2; b: P2 } | null = null, bd = -1;
   for (let i = 0; i < r.poly.length; i++) {
@@ -79,4 +86,33 @@ export function torchSpot(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P
     if (clear > bd) { bd = clear; best = { m, n, a, b }; }
   }
   return best;
+}
+
+/** A torch spot on the wall beside a door down out of the room, 0.65 m clear of its opening; null if none fits. */
+export function besideWayDown(plan: InteriorPlan, r: RoomSpec): { m: P2; n: P2; a: P2; b: P2 } | null {
+  for (const d of plan.doors) {
+    const k = d.spaces.indexOf(r.id);
+    if (k < 0) continue;
+    const o = plan.rooms.find((x) => x.id === d.spaces[1 - k]);
+    if (!o || o.y0 > r.y0 - 1) continue;
+    const c: P2 = [d.centre[0], d.centre[2]];
+    for (let i = 0; i < r.poly.length; i++) {
+      const a = r.poly[i], b = r.poly[(i + 1) % r.poly.length], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (L < 1e-6) continue;
+      const e: P2 = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
+      if (Math.abs(e[0] * d.along[0] + e[1] * d.along[1]) < 0.95) continue; // the wall the door is in runs along it
+      const t = (c[0] - a[0]) * e[0] + (c[1] - a[1]) * e[1], off = Math.abs((c[0] - a[0]) * e[1] - (c[1] - a[1]) * e[0]);
+      if (off > d.wall / 2 + 0.3 || t < 0 || t > L) continue;
+      let n: P2 = [-e[1], e[0]];
+      const m0: P2 = [a[0] + e[0] * t, a[1] + e[1] * t];
+      if (!inPoly(r.poly, m0[0] + n[0] * 0.3, m0[1] + n[1] * 0.3)) n = [-n[0], -n[1]];
+      for (const side of [1, -1]) {
+        const tt = t + side * (d.width / 2 + 0.65);
+        if (tt < 0.5 || tt > L - 0.5) continue;
+        const m: P2 = [a[0] + e[0] * tt, a[1] + e[1] * tt];
+        return { m, n, a: [m[0] - e[0] * 0.3, m[1] - e[1] * 0.3], b: [m[0] + e[0] * 0.3, m[1] + e[1] * 0.3] };
+      }
+    }
+  }
+  return null;
 }

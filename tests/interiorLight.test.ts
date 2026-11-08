@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
-  MAX_AP, bakeInteriorLight, syncFires, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
+  MAX_AP, bakeInteriorLight, syncFires, setCarried, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
   type InteriorKey, type SunOccluder,
 } from '../src/render/interiorLight';
 import { buildRoomTest } from '../src/debug/roomtest';
@@ -80,6 +80,19 @@ describe('interior materials', () => {
     expect(light.fires.version).toBe(v1); // rows unchanged: no upload
     expect(light.flick.version).toBeGreaterThan(f0 + 1);
     expect((light.flick.image.data as Float32Array)[MAX_FIRES]).toBeCloseTo(T.flick[MAX_FIRES]);
+  });
+  test('the carried light: where it is, colour × candela × flicker, soft², range; out is black', () => {
+    const light = createInteriorLight(2), f = toFire({ kind: 'lantern', position: [1, 2, 3], colour: [1, 1, 1], intensity: 0.45, flicker: 0.2 });
+    expect(light.carried.light.value.toArray().slice(0, 3)).toEqual([0, 0, 0]); // out until set
+    setCarried(light, f, 0.5);
+    expect(light.carried.pos.value.toArray()).toEqual([1, 2, 3]);
+    expect(light.carried.light.value.x).toBeCloseTo(f.colour[0] * f.candela * 0.5);
+    expect(light.carried.light.value.w).toBeCloseTo(f.soft ** 2);
+    expect(light.carried.range.value).toBe(f.range);
+    setCarried(light, f);
+    expect(light.carried.light.value.z).toBeCloseTo(f.colour[2] * f.candela);
+    setCarried(light, null);
+    expect(light.carried.light.value.toArray().slice(0, 3)).toEqual([0, 0, 0]);
   });
   test('the bake fills the room grid of the plan it was sized for', () => {
     const room = { id: 'H', zone: 'T', floor: 0, kind: 'hall' as const, poly: [[0, 0], [6, 0], [6, 4], [0, 4]] as [number, number][], y0: 0, y1: 4 };

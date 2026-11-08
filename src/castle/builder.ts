@@ -11,7 +11,10 @@ export type MatKey = 'old' | 'new' | 'trim' | 'slate' | 'lead' | 'wood' | 'iron'
 export const TILE: Record<MatKey, number> = { old: 4, new: 4, trim: 2, slate: 2, lead: 4, wood: 2, iron: 1, void: 1, glass: 1 };
 /** Bins beyond the wall materials: `pave` is the courtyard paving (castle/paving.ts), exterior only, so the
  *  interior and its material maps never need it. */
-export type BinKey = MatKey | 'pave';
+export type BinKey = MatKey | 'pave' | CaveKey;
+/** Bins of the natural caves (castle/interior/caveGeom.ts): bare rock, the pool's water and glowing fungi.
+ *  Interior only; their uvs are metres / 4 on the dominant axis. */
+export type CaveKey = 'rock' | 'pool' | 'glow';
 
 type V3 = [number, number, number];
 const v3sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -68,7 +71,7 @@ export class Builder {
   curved: CurvedRecord[] = [];
   /** The plan's doors: stones keep off their holes in every wall face (the interior carves the holes themselves). */
   doorHoles: DoorHole[] = [];
-  bins: Record<BinKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin(), pave: new Bin() };
+  bins: Record<BinKey, Bin> = { old: new Bin(), new: new Bin(), trim: new Bin(), slate: new Bin(), lead: new Bin(), wood: new Bin(), iron: new Bin(), void: new Bin(), glass: new Bin(), pave: new Bin(), rock: new Bin(), pool: new Bin(), glow: new Bin() };
 
   // Stone records (src/castle/stones): every rubble/ashlar wall face, and every solid that stands proud
   // of faces (so stones are not laid under jambs, sills, buttresses, string courses, plinths…).

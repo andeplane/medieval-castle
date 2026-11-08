@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { floorAlong, torchSpot, wallTorches } from '../src/render/interiorFire';
+import { floorAlong, torchSpot, wallTorches, besideWayDown } from '../src/render/interiorFire';
+import { planInterior } from '../src/castle/interior/plan';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
 
@@ -53,5 +54,28 @@ describe('interior fire sources', () => {
     expect(wallTorches(tun, () => 'tunnel:-1').holders.map((x) => x.base[1])).toEqual([1.55, -1.5 + 1.55, -3 + 1.55]);
     expect(floorAlong(path, [-4, 0])).toBe(0);
     expect(floorAlong(path, [40, 0])).toBe(-3);
+  });
+
+  test('a room with a way down has its torch beside that door: the cellar stair, the breach into the caves', () => {
+    const P = planInterior();
+    const t = wallTorches(P, (id) => id);
+    for (const [r, d] of [['N0-3', 'N0-3>N-cellarstair'], ['N-c1', 'N-c1>cave-breach']]) {
+      const h = t.holders.find((x) => x.room === r)!, dd = P.doors.find((x) => x.id === d)!;
+      const gap = Math.hypot(h.wall[0] - dd.centre[0], h.wall[2] - dd.centre[2]);
+      expect(gap).toBeLessThan(dd.wall / 2 + dd.width / 2 + 1);
+      expect(gap).toBeGreaterThan(dd.width / 2 + 0.5);
+    }
+    // a lower room behind a door: beside it on its wall; no room on the far side, a wall too short, or the
+    // same floor: no such spot
+    const hi = { ...room('U', 'undercroft', 'N', sq(0, 0, 10, 6)), y0: 2 }, lo = room('C', 'undercroft', 'N', sq(0, 7, 10, 12));
+    const d = { ...door('U', 5, 6.5), spaces: ['U', 'C'], wall: 1, along: [1, 0] } as DoorSpec;
+    const s = besideWayDown({ rooms: [hi, lo], doors: [d], stairs: [] }, hi)!;
+    expect(s.m[1]).toBeCloseTo(6, 6);
+    expect(Math.abs(s.m[0] - 5)).toBeCloseTo(1.15, 6);
+    expect(s.n[0]).toBeCloseTo(0, 9); expect(s.n[1]).toBe(-1);
+    expect(besideWayDown({ rooms: [hi], doors: [d], stairs: [] }, hi)).toBeNull();
+    expect(besideWayDown({ rooms: [{ ...hi, y0: 0 }, lo], doors: [d], stairs: [] }, { ...hi, y0: 0 })).toBeNull();
+    const narrow = { ...hi, poly: sq(4, 0, 6.2, 6) };
+    expect(besideWayDown({ rooms: [narrow, lo], doors: [d], stairs: [] }, narrow)).toBeNull();
   });
 });

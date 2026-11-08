@@ -2,6 +2,7 @@
 import type { View } from './controls';
 import type { PlanX } from '../castle/interior/plan';
 import type { V2 } from '../core/math2d';
+import { passageFrame } from '../castle/interior/caves';
 
 const EYE = 1.65;
 
@@ -42,5 +43,31 @@ export function interiorViews(P: PlanX): View[] {
     }
   }
   if (room('N-c1')) out.push(along('N-c1', 'cellar', 'Cellar', 0.6));
+  if (P.caves && room(P.caves.entrance)) out.push(...caveViews(P));
   return out.filter((v): v is View => !!v);
+}
+
+/** The caves (castle/interior/caves.ts): the way in, the squeeze, the drop, the great cavern, the way out. */
+function caveViews(P: PlanX): View[] {
+  const C = P.caves!, out: View[] = [];
+  const v = (name: string, label: string, pos: [number, number, number], target: [number, number, number]): View => ({ name, label, mode: 'fly', pos, target, clamp: false });
+  /** Standing in a room `back` m in front of a door, looking at it. */
+  const atDoor = (cave: string, from: string, name: string, label: string, back = 3) => {
+    const d = P.doors.find((x) => x.spaces.includes(cave) && x.spaces.includes(from)), r = P.rooms.find((x) => x.id === from);
+    if (!d || !r) return;
+    const s = d.spaces[0] === from ? -1 : 1;
+    out.push(v(name, label, [d.centre[0] + d.normal[0] * s * (d.wall / 2 + back), r.y0 + EYE, d.centre[2] + d.normal[1] * s * (d.wall / 2 + back)], [d.centre[0], d.centre[1] + 1.1, d.centre[2]]));
+  };
+  atDoor(C.entrance, 'N-c1', 'cave-entrance', 'Cave: the breach in the cellar wall');
+  const sq = C.passages.find((p) => p.id === 'cave-squeeze');
+  if (sq) { const f = passageFrame(sq), a = f.a; out.push(v('cave-squeeze', 'Cave: the squeeze', [a[0] + f.u[0] * 0.6, sq.from[1] + EYE, a[1] + f.u[1] * 0.6], [sq.to[0], sq.to[1] + 1.4, sq.to[2]])); }
+  const drop = C.passages.find((p) => p.steps);
+  if (drop) { const f = passageFrame(drop); out.push(v('cave-drop', 'Cave: the drop', [f.a[0] - f.u[0] * 1.2, drop.from[1] + EYE, f.a[1] - f.u[1] * 1.2], [drop.to[0], drop.to[1] + 0.6, drop.to[2]])); }
+  const cav = C.chambers.find((k) => k.id === 'cave-cavern');
+  if (cav && drop) {
+    const f = passageFrame(drop), at: [number, number] = [drop.to[0] + f.u[0] * 1.2, drop.to[2] + f.u[1] * 1.2], tg = cav.pool?.c ?? cav.c;
+    out.push(v('caves', 'Cave: the great cavern', [at[0], cav.y + EYE, at[1]], [tg[0], cav.y + 0.9, tg[1]]));
+  }
+  atDoor(C.exit, 'great-c', 'cave-exit', 'Cave: the way out, in the great tower cellar', 2.6);
+  return out;
 }

@@ -23,6 +23,7 @@ import type { RoomSpec, DoorSpec, StairSpec, InteriorPlan, RoomKind, SpaceId, V3
 import { spiralStartFor, validateStair, planStair, spiralNosingY, spiralStonesAt, type StairOpts, type SpiralPlan } from './stairs';
 import { masses, fits, boxOf, STAIR_SLIT, type Face, type DoorHole, type SpiralBehind } from '../openings';
 import { placeLeaves, leafPoint, leafSwing, leafMatrix, leafDepth, LIP, BACK_ANGLE, doorCuts, doorOutlines, backReach, type LeafPlace } from './doorGeom';
+import { planCaves, CAVE_ZONE, type CavePlan, type CaveAnchor } from './caves';
 import { type Half, clip, clipAll, area, orient, leftN, circlePoly, convexOverlap, centroidOf, local, add, sub, scale, dot, norm, archOutline, headRise, type Head } from './geom';
 
 // ---------------------------------------------------------------- dimensions
@@ -51,7 +52,7 @@ export const COURT_DOOR_W = 1.6, COURT_DOOR_LIP = 0.1;
 export const GATE = { width: 3.8, spring: 4.0, rise: 1.6, wall: 2.6, sill: GROUND - 0.1 };
 
 export type ZoneId = string;
-export const ZONE_PHASE: Record<ZoneId, Phase> = { N: 'old', W: 'old', E: 'new', S: 'new', great: 'old', sw: 'old', ne: 'new', se: 'new', gate: 'new', eturret: 'new', stairtower: 'new', tunnel: 'old' };
+export const ZONE_PHASE: Record<ZoneId, Phase> = { N: 'old', W: 'old', E: 'new', S: 'new', great: 'old', sw: 'old', ne: 'new', se: 'new', gate: 'new', eturret: 'new', stairtower: 'new', tunnel: 'old', cave: 'old' };
 
 export interface RoundInfo { c: V2; r: number }
 export interface VaultInfo { axis: V2; spring: number; ribs: boolean; murder?: boolean }
@@ -69,6 +70,8 @@ export interface PlanX extends InteriorPlan {
   /** The moat tunnel's line: distances along it to the island edge and the moat's far edge. */
   unplaced: string[];                     // doors the planner wanted but could not fit (should be empty)
   sallyPort: { islandEdge: number; moatEdge: number; start: V2; dir: V2; len: number; floor: number; room: SpaceId } | null;
+  /** The natural caves under the north moat (caves.ts): their rooms and openings are in rooms/doors too. */
+  caves?: CavePlan | null;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -673,7 +676,28 @@ export function planInterior(seed = WORLD_SEED): PlanX {
     sallyPort = { islandEdge: tIsl, moatEdge: tMoat, start, dir: wOut, len, floor: portalY, room: mt };
   }
 
-  const plan: PlanX = { rooms, doors, stairs, seed, round, vault, tunnels, rise, phase, floorMat, sallyPort, unplaced };
+  // ------------------------------------------------ caves under the north moat (caves.ts)
+  // entered through a breach in the N cellar's outer wall (N-c1, at the foot of the cellar stair), left
+  // through a crack in the great tower's foundations (great-c): a loop back into the cellars
+  let caves: CavePlan | null = null;
+  {
+    const face = (id: SpaceId, out: V2, wall: number): CaveAnchor => {
+      const p = orient(byId.get(id)!.poly);
+      let bi = 0, bd = -2;
+      for (let i = 0; i < p.length; i++) { const d = dot(scale(leftN(p[i], p[(i + 1) % p.length]), -1), out); if (d > bd) { bd = d; bi = i; } }
+      const a = p[bi], b = p[(bi + 1) % p.length], n = scale(leftN(a, b), -1);
+      return { room: id, at: add(scale(add(a, b), 0.5), scale(n, wall)), out: n, y: CELLAR_Y };
+    };
+    const ent = face(nc1, [0, -1], T_OUT.old), ext = face('great-c', [0, -1], TOWER_WALL.great + 0.35);
+    const c = planCaves(rngOf('interior-caves', seed), ent, ext);
+    for (const r of c.rooms) addRoom(r, 'old', 'flag');
+    doors.push(...c.doors);
+    connect(`${nc1}>${c.plan.entrance}`, nc1, c.plan.entrance, { w: 1.1, h: 2.0, head: 'round', leaf: false, pref: sub(ent.at, scale(ent.out, T_OUT.old)), margin: 0.2 });
+    connect(`great-c>${c.plan.exit}`, 'great-c', c.plan.exit, { w: 0.95, h: 2.0, head: 'round', leaf: false, pref: sub(ext.at, scale(ext.out, TOWER_WALL.great)), margin: 0.2 });
+    caves = c.plan;
+  }
+
+  const plan: PlanX = { rooms, doors, stairs, seed, round, vault, tunnels, rise, phase, floorMat, sallyPort, unplaced, caves };
   fitDoorHeads(plan);
   fitHinges(plan);
   return plan;
@@ -1009,7 +1033,7 @@ export function validatePlan(P: PlanX): PlanReport {
   // nothing reachable leaves the island except the moat tunnel
   const isl = islandOutline();
   for (const r of P.rooms) {
-    if (r.zone === 'tunnel') continue;
+    if (r.zone === 'tunnel' || r.zone === CAVE_ZONE) continue; // underground: the caves run under the moat
     for (const p of r.poly) if (!pointInPoly(isl, p[0], p[1])) errors.push(`room ${r.id} outside the island`);
   }
   const grilles = P.doors.filter((d) => d.kind === 'grille');
@@ -1019,7 +1043,7 @@ export function validatePlan(P: PlanX): PlanReport {
   for (const r of P.rooms) {
     if (area(r.poly) < 1) errors.push(`room ${r.id} degenerate`);
     if (r.y1 - r.y0 < 2.0) errors.push(`room ${r.id} too low (${(r.y1 - r.y0).toFixed(2)})`);
-    if (r.zone !== 'tunnel') for (const p of r.poly) if (!foot.some((f) => pointInPoly(f, p[0], p[1]))) { errors.push(`room ${r.id} leaves the footprint`); break; }
+    if (r.zone !== 'tunnel' && r.zone !== CAVE_ZONE) for (const p of r.poly) if (!foot.some((f) => pointInPoly(f, p[0], p[1]))) { errors.push(`room ${r.id} leaves the footprint`); break; }
   }
   const box = P.rooms.map((r) => { const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]); return [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)]; });
   for (let i = 0; i < P.rooms.length; i++) for (let j = i + 1; j < P.rooms.length; j++) {

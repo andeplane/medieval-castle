@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { FireTable, toFire, fireAt, roomSamples, roomSurface, fireStats, roomFires, FIRE_PEAK, FIRE_MEAN, MAX_FIRES, FIRE_W, FIRE_TEXELS, NEAR } from '../../src/light/roomLight';
+import { FireTable, toFire, fireAt, firesByRoom, roomSamples, roomSurface, fireStats, roomFires, FIRE_PEAK, FIRE_MEAN, MAX_FIRES, FIRE_W, FIRE_TEXELS, NEAR } from '../../src/light/roomLight';
 import { PROFILES, flicker, flickerAmount, seedOf } from '../../src/light/flicker';
 import { linkFlames, flameBrightness } from '../../src/light/flames';
 import type { LightEmitter, V3 } from '../../src/light/types';
 import { planInterior } from '../../src/castle/interior/plan';
 import { createFurnisher } from '../../src/props/roomFurniture';
 import { wallTorches } from '../../src/render/interiorFire';
+import { caveFires } from '../../src/castle/interior/caveGeom';
+import { CAVE_ZONE } from '../../src/castle/interior/caves';
+import { CARRIED_LANTERN, lanternAt } from '../../src/player/lantern';
 
 const em = (kind: LightEmitter['kind'], p: V3, intensity = 1, extra: Partial<LightEmitter> = {}): LightEmitter => ({ kind, position: p, colour: [1, 1, 1], intensity, flicker: 0.2, ...extra });
 const hall = { poly: [[0, 0], [8, 0], [8, 6], [0, 6]] as [number, number][], y0: 0, y1: 4 };
@@ -65,6 +68,22 @@ describe('fires as the shader sees them', () => {
   });
 });
 
+describe('fires by room', () => {
+  it('puts a torch in its holder\'s room and anything else in the room that holds it', () => {
+    const rooms = [
+      { id: 'up', poly: [[0, 0], [4, 0], [4, 4], [0, 4]] as [number, number][], y0: 3, y1: 6 },
+      { id: 'down', poly: [[0, 0], [4, 0], [4, 4], [0, 4]] as [number, number][], y0: 0, y1: 3 },
+    ];
+    const e = (x: number, y: number, z: number): LightEmitter => ({ kind: 'lantern', position: [x, y, z], colour: [1, 1, 1], intensity: 1, flicker: 0 });
+    const torch = e(9, 9, 9), crate = e(2, 1, 2), above = e(2, 4, 2), nowhere = e(10, 1, 10);
+    const m = firesByRoom(rooms, [torch, crate, above, nowhere], [{ room: 'down' }]);
+    expect([...m.keys()]).toEqual(['down', 'up']);
+    expect(m.get('down')).toEqual([torch, crate]);
+    expect(m.get('up')).toEqual([above]);
+    expect(firesByRoom(rooms, [crate]).get('down')).toEqual([crate]);
+  });
+});
+
 describe('fire table', () => {
   it('packs a room row, clears it and flickers in step with the flames', () => {
     const T = new FireTable(4), e = em('torch', [1, 2, 3], 3), f = toFire(e);
@@ -118,10 +137,41 @@ describe('firelight over the whole castle', () => {
       if (fs[0].candela < toFire(es.reduce((a, b) => (toFire(b).candela > toFire(a).candela ? b : a))).candela) capped++;
       if (s.peak > FIRE_PEAK + 1e-6 || s.mean > FIRE_MEAN + 1e-6) faults.push(`${what} ${id}: peak ${s.peak.toFixed(0)} mean ${s.mean.toFixed(2)}`);
     }
+    // the caves' lantern on its crate (main.ts adds it to the torches): in its cave room, under the caps
+    const cf = caveFires(plan.caves!, 'g'), caves = firesByRoom(plan.rooms, cf.emitters);
+    expect([...caves.values()].flat()).toEqual(cf.emitters);
+    for (const [id, es] of caves) {
+      expect(box(id).zone).toBe(CAVE_ZONE);
+      sets.push(['cave', id, es]);
+      const s = fireStats(box(id), roomFires(box(id), es));
+      if (s.peak > FIRE_PEAK + 1e-6 || s.mean > FIRE_MEAN + 1e-6) faults.push(`cave ${id}: peak ${s.peak.toFixed(0)} mean ${s.mean.toFixed(2)}`);
+    }
+    expect(caves.size).toBeGreaterThan(0);
     expect(lit).toBeGreaterThan(150);
     expect(faults).toEqual([]);
     expect(capped).toBe(hot);
     // a torch-lit room is never dimmed: the approved look stays as it was
     for (const [id, es] of byRoom) expect(roomFires(box(id), es).map((f) => f.candela)).toEqual(es.map((e) => toFire(e).candela).sort((a, b) => b - a));
   }, 60_000);
+});
+
+// The caves have no torches: the player's lantern (player/lantern.ts) is the only light in most of them.
+// It is the interior shader's carried light (InteriorLight.carried, the same falloff as fireAt): in every
+// cave room, standing at its middle, the floor at your feet and the walls 1 m off are lit by it.
+describe('the carried lantern in the caves', () => {
+  const plan = planInterior();
+  it('lights the floor and the walls round you in every cave room', () => {
+    const caves = plan.rooms.filter((r) => r.zone === CAVE_ZONE);
+    expect(caves.length).toBeGreaterThan(5);
+    const faults: string[] = [];
+    for (const r of caves) {
+      const c = r.poly.reduce((a, p) => [a[0] + p[0] / r.poly.length, a[1] + p[1] / r.poly.length], [0, 0]);
+      const eye: V3 = [c[0], r.y0 + 1.6, c[1]], f = toFire({ ...CARRIED_LANTERN, position: lanternAt(eye, [0, 0, -1]) });
+      const floor = fireAt([f], [c[0], r.y0, c[1]], [0, 1, 0]);
+      const walls = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).map(([dx, dz]) => fireAt([f], [c[0] + dx, r.y0 + 1.2, c[1] + dz], [-dx, 0, -dz]));
+      // the readability floor is 0.145: the lantern must be well above it where you look
+      if (floor < 0.5 || Math.min(...walls) < 0.5) faults.push(`${r.id}: floor ${floor.toFixed(2)}, walls ${walls.map((w) => w.toFixed(2)).join(' ')}`);
+    }
+    expect(faults).toEqual([]);
+  });
 });
