@@ -87,9 +87,16 @@ export function bowl(m: PropMesh, r: Rng, R: number) {
   m.tinted(jitterTint(r, pick(r, [[0.6, 0.45, 0.32], [0.7, 0.66, 0.6]] as RGB[])), () =>
     m.lathe('ceramic', [[0, 0], [R * 0.5, 0], [R, R * 0.45], [R * 0.93, R * 0.47], [R * 0.45, R * 0.06], [0, R * 0.06]], 12));
 }
+/** A bound book lying flat, spine on -x: two boards and a spine standing out, the page block set back
+ * 3 mm between them. No face of the pages lies on a face of the cover (they z-fought when the page
+ * block's fore-edge sat flush with a closed cover box). */
 export function book(m: PropMesh, r: Rng, w: number, h: number, t: number) {
-  m.tinted(jitterTint(r, pick(r, [CLOTH.leather, CLOTH.madder, CLOTH.brown, CLOTH.black])), () => m.box('cloth', [0, t / 2, 0], [w, t, h], { bevel: 0.004 }));
-  m.tinted([0.95, 0.88, 0.72], () => m.box('wax', [0.006, t / 2, 0], [w - 0.012, t - 0.012, h - 0.016]));
+  const bt = Math.min(0.004, t * 0.12);
+  m.tinted(jitterTint(r, pick(r, [CLOTH.leather, CLOTH.madder, CLOTH.brown, CLOTH.black])), () => {
+    for (const y of [bt / 2, t - bt / 2]) m.box('cloth', [0, y, 0], [w, bt, h]);
+    m.box('cloth', [-w / 2 + bt / 2 - 0.002, t / 2, 0], [bt, t - 0.004, h - 0.004]); // spine, 2 mm proud, ends inside the boards
+  });
+  m.tinted([0.95, 0.88, 0.72], () => m.box('wax', [bt / 2 - 0.0015, t / 2, 0], [w - bt - 0.003, t - 2 * bt + 0.002, h - 0.006]));
 }
 
 export function candle(m: PropMesh, r: Rng, at: V3, h: number, R: number, emit: Emitter[], intensity: number) {

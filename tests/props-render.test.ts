@@ -20,6 +20,18 @@ describe('prop render adapter', () => {
     expect(mats.flame).toBeInstanceOf(THREE.MeshBasicNodeMaterial);
     expect((mats.wood as THREE.MeshStandardNodeMaterial).vertexColors).toBe(true);
   });
+  it('samples every prop texture with mipmaps, trilinear and anisotropic (fine weave and grain must not shimmer)', () => {
+    let n = 0;
+    for (const m of Object.values(mats) as THREE.MeshStandardNodeMaterial[]) for (const t of [m.map, m.normalMap, m.roughnessMap]) {
+      if (!t) continue;
+      n++;
+      expect(t.generateMipmaps).toBe(true);
+      expect(t.minFilter).toBe(THREE.LinearMipmapLinearFilter);
+      expect(t.magFilter).toBe(THREE.LinearFilter);
+      expect(t.anisotropy).toBeGreaterThanOrEqual(8);
+    }
+    expect(n).toBe(8 * 3); // wood, iron, cloth, straw, ceramic, brass, stone, paint: albedo, normal, roughness
+  });
   it('builds one mesh per non-empty material with colour attributes and a triangle count', () => {
     const p = makeProp('candlestick', 1);
     const g = meshFromProp(p.mesh, mats, 'candle');
