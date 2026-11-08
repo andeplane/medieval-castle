@@ -74,18 +74,18 @@ export const boxChair: PropKind = {
   build(m, r) {
     const W = range(r, 0.7, 0.8), D = range(r, 0.56, 0.62), seat = 0.48, H = range(r, 1.55, 1.75), wood = jitterTint(r, WOOD.dark, 0.06);
     m.tinted(wood, () => {
-      m.box('wood', [0, seat / 2, 0.02], [W, seat, D - 0.04], { bevel: 0.01, noBottom: true });                 // the box
-      m.box('wood', [0, H / 2, -D / 2 + 0.03], [W, H, 0.06], { bevel: 0.01, grain: 1, noBottom: true });       // back
+      m.box('wood', [0, seat / 2, 0.015], [W - 0.01, seat, D - 0.04], { bevel: 0.01, noBottom: true });          // the box
+      m.box('wood', [0, H / 2, -D / 2 + 0.035], [W - 0.02, H, 0.06], { bevel: 0.01, grain: 1, noBottom: true }); // back
       for (const sx of [-1, 1]) {
-        m.box('wood', [sx * (W / 2 - 0.03), 0.375, 0], [0.06, 0.75, D], { bevel: 0.008, noBottom: true }); // arm panel
+        m.box('wood', [sx * (W / 2 - 0.025), 0.375, 0], [0.06, 0.75, D], { bevel: 0.008, noBottom: true }); // arm panel, proud of the box
         m.with(translate(sx * (W / 2 - 0.03), H, -D / 2 + 0.03), () => m.lathe('wood', [[0.035, 0], [0.04, 0.03], [0.015, 0.07], [0.025, 0.09], [0.001, 0.15]], 8));
       }
-      m.box('wood', [0, H - 0.04, -D / 2 + 0.05], [W + 0.06, 0.1, 0.1], { bevel: 0.012 }); // cresting
+      m.box('wood', [0, H - 0.035, -D / 2 + 0.056], [W + 0.06, 0.1, 0.1], { bevel: 0.012 }); // cresting
     });
     // sunk panels on the back and the box front, a shade darker
     m.tinted([wood[0] * 0.7, wood[1] * 0.7, wood[2] * 0.7], () => {
-      for (let i = 0; i < 2; i++) for (const sx of [-1, 1]) m.box('wood', [sx * W * 0.2, seat + 0.2 + i * (H - seat - 0.35) / 2 + (H - seat - 0.35) / 4, -D / 2 + 0.062], [W * 0.32, (H - seat - 0.35) / 2 - 0.06, 0.008]);
-      for (const sx of [-1, 1]) m.box('wood', [sx * W * 0.2, seat / 2, D / 2 + 0.002], [W * 0.32, seat - 0.14, 0.008]);
+      for (let i = 0; i < 2; i++) for (const sx of [-1, 1]) m.box('wood', [sx * W * 0.2, seat + 0.2 + i * (H - seat - 0.35) / 2 + (H - seat - 0.35) / 4, -D / 2 + 0.067], [W * 0.32, (H - seat - 0.35) / 2 - 0.06, 0.008]);
+      for (const sx of [-1, 1]) m.box('wood', [sx * W * 0.2, seat / 2, D / 2 - 0.006], [W * 0.32, seat - 0.14, 0.008]);
     });
     m.tinted(jitterTint(r, pick(r, [CLOTH.madder, CLOTH.woad, CLOTH.green])), () => m.box('cloth', [0, seat + 0.04, 0.03], [W - 0.14, 0.08, D - 0.14], { bevel: 0.03 }));
     return none(m);
@@ -101,8 +101,8 @@ export const dresser: PropKind = {
     m.tinted(woodTint(r), () => {
       m.box('wood', [0, base / 2, 0], [W, base, D], { bevel: 0.01, noBottom: true });
       for (const sx of [-1, 1]) m.box('wood', [sx * (W / 4), base / 2, D / 2 + 0.01], [W / 2 - 0.08, base - 0.2, 0.02], { bevel: 0.006, grain: 1 });
-      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.03), (base + H) / 2, -D * 0.15], [0.05, H - base, D * 0.7], { bevel: 0.006, grain: 1 });
-      m.box('wood', [0, (base + H) / 2, -D / 2 + 0.03], [W - 0.06, H - base, 0.02], { grain: 1 });
+      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.03), (base + H - 0.03) / 2, -D * 0.15], [0.05, H - base - 0.03, D * 0.7], { bevel: 0.006, grain: 1 });
+      m.box('wood', [0, (base + H - 0.03) / 2, -D / 2 + 0.03], [W - 0.06, H - base - 0.03, 0.02], { grain: 1 });
       const s1 = base + (H - base) * 0.5;
       m.box('wood', [0, s1, -D * 0.12], [W - 0.06, 0.03, D * 0.66], { bevel: 0.004 });
       m.box('wood', [0, H - 0.03, -D * 0.15], [W + 0.04, 0.06, D * 0.75], { bevel: 0.01 });
@@ -515,7 +515,7 @@ export const brazier: PropKind = {
       m.with(translate(0, H * 0.75, 0), () => m.lathe('iron', [[0.001, 0], [R * 0.6, 0.03], [R, H * 0.25], [R * 1.05, H * 0.27]], 14));
     });
     m.tinted(EMBERS, () => m.with(translate(0, H * 0.75 + H * 0.2, 0), () => m.lathe('wax', [[0.001, 0.04], [R * 0.6, 0.02], [R * 0.95, 0]], 12)));
-    m.tinted([0.15, 0.12, 0.1], () => { for (let i = 0; i < 5; i++) { const a = r() * 6.28, d = range(r, 0, R * 0.6); m.with(translate(Math.cos(a) * d, H * 0.97, Math.sin(a) * d), () => m.box('stone', [0, 0, 0], [0.07, 0.04, 0.06], { bevel: 0.01 })); } });
+    m.tinted([0.15, 0.12, 0.1], () => { for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2 + range(r, -0.2, 0.2), d = R * (0.15 + 0.1 * i); m.with(compose(translate(Math.cos(a) * d, H * 0.97 + i * 0.005, Math.sin(a) * d), rotY(a)), () => m.box('stone', [0, 0, 0], [0.07 + i * 0.005, 0.04, 0.06], { bevel: 0.01 })); } });
     m.addFlame('brazier', [0, H * 0.98, 0], 0.32);
     return { colliders: [hull(m)], emitters: [{ kind: 'brazier', position: [0, H + 0.25, 0], colour: [1, 1, 1], intensity: 1.6, flicker: 0.3 }] };
   },
