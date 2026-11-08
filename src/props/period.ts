@@ -140,7 +140,7 @@ export const chimneypiece: PropKind = {
         for (const a of [-0.25, 0, 0.25]) m.tube('iron', [[Math.sin(a) * 0.03, 0.05 + a * 0.04, Math.cos(a) * 0.03], [Math.sin(a) * 0.06, 0.62, Math.cos(a) * 0.05]], 0.007, 4);
       });
     });
-    emit.push({ kind: 'hearth', position: [0, 0.6, zf + 0.35], colour: FLAME, intensity: 2.2, flicker: 0.2 });
+    emit.push({ kind: 'hearth', position: [0, 0.09 + 0.3, fz], colour: FLAME, intensity: 2.2, flicker: 0.2 }); // in the fire: lights the room, not the surround it burns behind
     const b = m.bounds();
     return { colliders: [boxCollider([b.min[0], 0, b.min[2]], [b.max[0], top, b.max[2]])], emitters: emit, mantel: { y: H + 0.005, z: zf - 0.19, w: W }, above: [0, H + 0.12, zb + 0.305] };
   },
@@ -173,7 +173,7 @@ export const hoodedHearth: PropKind = {
     });
     m.tinted(IRON, () => m.box('iron', [0, 0.085 + Ho * 0.35, zb + 0.05], [Wo * 0.55, Ho * 0.7, 0.025], { bevel: 0.008 })); // foot 5 mm into the hearth floor
     m.with(translate(0, 0.09, 0), () => fire(m, r, Wo * 0.75, zb + 0.4, true, IRON));
-    emit.push({ kind: 'hearth', position: [0, 0.75, zf + 0.4], colour: FLAME, intensity: 3.5, flicker: 0.22 });
+    emit.push({ kind: 'hearth', position: [0, 0.09 + 0.4, zb + 0.4], colour: FLAME, intensity: 3.5, flicker: 0.22 }); // in the fire, under the hood
     const b = m.bounds();
     return { colliders: [boxCollider([b.min[0], 0, b.min[2]], [b.max[0], b.max[1], b.max[2]])], emitters: emit };
   },

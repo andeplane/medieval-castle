@@ -7,7 +7,7 @@ import { DOM_TESTS } from './tests/dom-files.ts';
 // none is left running alone at the end, and CI's two shards (--shard=1/2, 2/2) get about the same work. A file
 // not listed counts 0.5 s; a stale entry only unbalances the shards, it never drops or repeats a file.
 const SECONDS: Record<string, number> = {
-  world: 36, 'world-views': 32, interior: 33, doorswing: 27, 'props-stream': 17.5, stairwalk: 15.3, island: 15.2,
+  world: 36, 'world-views': 43, interior: 33, doorswing: 27, 'props-stream': 17.5, stairwalk: 15.3, island: 15.2,
   'props-zfight': 13.7, 'props-dress': 13.6, sunLeak: 13.1, 'stones-offthread': 12.5, openings: 11.4, keypaths: 11.1,
   doors: 10.6, groundInRooms: 10.5, 'props-kit': 10.3, 'light/roomLight': 9.7, caves: 8.6, interiorLightShell: 7.6,
   texgen: 6.5, torches: 6.4, paving: 5.5, stairs: 3.9, terrain: 3.1, 'props-render': 2.8, doorLight: 2.7,
@@ -57,7 +57,7 @@ export default defineConfig({
       // Browser entry points (page boot, UI) are checked by captures instead.
       include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/light/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,layout,spec,openings,paving}.ts', 'src/castle/{bridge,revetment,turf,rubble}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/*.ts', 'src/camera/interiorViews.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts', 'src/render/texgen.ts',
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts',
-        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts', 'src/render/drawCount.ts'],
+        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts', 'src/world/visibility.ts', 'src/world/waterView.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts', 'src/render/drawCount.ts'],
       exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/castle/stones/layout.worker.ts', 'src/props/furnish.worker.ts', 'src/props/preview.ts', 'src/light/preview.ts', 'src/castle/interior/types.ts'],
       thresholds: SHARD ? undefined : {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
@@ -66,7 +66,7 @@ export default defineConfig({
         // interior light + visibility; the TSL shader (render/interiorShader.ts) is checked by ?test=room captures
         'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
         'src/render/drawCount.ts': { lines: 100, functions: 100, branches: 95, statements: 100 },
-        'src/world/visibility.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
+        'src/world/{visibility,waterView}.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
         'src/render/texgen.ts': { lines: 95, functions: 95, branches: 85, statements: 95 },
         // measured 99.8 / 100 / 89.6 / 98.0
         'src/castle/interior/{stairs,stairprobe}.ts': { lines: 99, functions: 100, branches: 88, statements: 97 },

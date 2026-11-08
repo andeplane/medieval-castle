@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
+import { vec3 } from 'three/tsl';
 import {
-  MAX_AP, bakeInteriorLight, syncFires, setCarried, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
+  MAX_AP, InteriorEnvNode, bakeInteriorLight, syncFires, setCarried, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
   type InteriorKey, type SunOccluder,
 } from '../src/render/interiorLight';
 import { buildRoomTest } from '../src/debug/roomtest';
@@ -44,13 +45,17 @@ describe('interior materials', () => {
     expect(IM.old.name).toBe('interior-old');
     expect(IM.glass.side).toBe(THREE.DoubleSide);
     expect(IM.glass.emissiveNode).toBeTruthy();
-    // daylight + firelight go into the lighting context: irradiance, and a rough reflection for metals
-    const env = (IM.wood as unknown as { setupEnvironment: () => THREE.LightingNode }).setupEnvironment();
+    // daylight goes into the lighting context's irradiance; each fire goes to the lighting model as a
+    // direct light (diffuse and a highlight, like a point light's), its direction turned into view space
+    expect((IM.wood as unknown as { setupEnvironment: () => THREE.LightingNode }).setupEnvironment()).toBeInstanceOf(InteriorEnvNode);
+    const added: string[] = [], direct: { lightColor: unknown; reflectedLight: unknown }[] = [];
+    const reflected = {}, colour = vec3(1, 2, 3);
+    const ctx = { irradiance: { addAssign: () => { added.push('irradiance'); } }, reflectedLight: reflected, lightingModel: { direct: (d: { lightColor: unknown; reflectedLight: unknown }) => { direct.push(d); } } };
+    const env = new InteriorEnvNode(vec3(0), (add) => { add(vec3(0, 1, 0), colour); add(vec3(1, 0, 0), colour); });
     expect(env.isLightingNode).toBe(true);
-    const added: string[] = [];
-    const slot = (k: string) => ({ addAssign: () => { added.push(k); } });
-    expect(env.setup({ context: { irradiance: slot('irradiance'), radiance: slot('radiance'), iblIrradiance: slot('iblIrradiance') } } as unknown as THREE.NodeBuilder)).toBe(null);
-    expect(added).toEqual(['irradiance', 'radiance', 'iblIrradiance']);
+    expect(env.setup({ context: ctx } as unknown as THREE.NodeBuilder)).toBe(null);
+    expect(added).toEqual(['irradiance']);
+    expect(direct.map((d) => [d.lightColor, d.reflectedLight])).toEqual([[colour, reflected], [colour, reflected]]);
     const ln = IM.old.lightsNode as unknown as { getLights(): THREE.Light[] };
     expect(ln.getLights()).toEqual([sunL]); // no point lights indoors
     // underground: no sun

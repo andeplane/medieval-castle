@@ -102,42 +102,39 @@ export function paneGlow(light: InteriorLight) {
 
 
 /**
- * Firelight at the fragment from its room's fires (light/roomLight.ts FireTable): candela / (d² + soft²),
- * faded out at each fire's range, × cos, × this frame's flicker. Every fire of the room, whatever the
- * camera's distance: a room is lit the same from anywhere it is drawn. Untagged surfaces (door leaves)
- * take the room they face from the room grid, 0.3 m out along their normal.
+ * The fragment's fires as lights (light/roomLight.ts FireTable): for each, `add(L, c)` with the unit
+ * direction to it (world) and its colour × candela / (d² + soft²), faded out at its range, × this frame's
+ * flicker; the lighting model turns them into diffuse and a specular highlight as for a point light. Every
+ * fire of the fragment's room, whatever the camera's distance: a room is lit the same from anywhere it is
+ * drawn. Untagged surfaces (door leaves) take the room they face from the room grid, 0.3 m out along their
+ * normal. Then the carried light (InteriorLight.carried), on every surface in its range, whatever room.
+ * Emits statements into the current stack (the lighting stack, InteriorEnvNode).
  */
-export function fireIrradiance(light: InteriorLight) {
+export function fireLights(light: InteriorLight, add: (L: Node<'vec3'>, c: Node<'vec3'>) => void) {
   const tex = (x: Node<'int'>, r: Node<'int'>) => textureLoad(light.fires, ivec2(x, r));
-  return Fn(() => {
-    const r = row().toVar();
-    const P = positionWorld, N = normalWorld.toVar();
-    If(r.equal(-1), () => {
-      const g = light.grid;
-      const q = P.add(N.mul(0.3)).sub(g.origin).div(g.cell).floor();
-      const c = ivec3(clamp(q, vec3(0), g.size.sub(1)));
-      r.assign(int(texture3DLoad(g.texture, c).x.add(0.5)).sub(1));
+  const r = row().toVar();
+  const P = positionWorld, N = normalWorld;
+  If(r.equal(-1), () => {
+    const g = light.grid;
+    const q = P.add(N.mul(0.3)).sub(g.origin).div(g.cell).floor();
+    const c = ivec3(clamp(q, vec3(0), g.size.sub(1)));
+    r.assign(int(texture3DLoad(g.texture, c).x.add(0.5)).sub(1));
+  });
+  const point = (at: Node<'vec3'>, range: Node<'float'>, colour: Node<'vec3'>, soft2: Node<'float'>) => {
+    const L = at.sub(P).toVar();
+    const d2 = L.dot(L), d = sqrt(d2).max(1e-4);
+    const w = clamp(float(1).sub(d.div(range).pow(4)), 0, 1);
+    add(L.div(d), colour.mul(w.mul(w).div(d2.add(soft2))));
+  };
+  If(r.greaterThanEqual(0), () => {
+    const count = int(tex(int(0), r).x);
+    Loop(MAX_FIRES, ({ i }: { i: Node<'int'> }) => {
+      If(i.greaterThanEqual(count), () => { Break(); });
+      const x = i.mul(FIRE_TEXELS).add(1);
+      const a = tex(x, r), b = tex(x.add(1), r);
+      point(a.xyz, a.w, b.xyz.mul(textureLoad(light.flick, ivec2(i, r)).x), b.w);
     });
-    const E = vec3(0).toVar();
-    If(r.greaterThanEqual(0), () => {
-      const count = int(tex(int(0), r).x);
-      Loop(MAX_FIRES, ({ i }: { i: Node<'int'> }) => {
-        If(i.greaterThanEqual(count), () => { Break(); });
-        const x = i.mul(FIRE_TEXELS).add(1);
-        const a = tex(x, r), b = tex(x.add(1), r);
-        const k = textureLoad(light.flick, ivec2(i, r)).x;
-        const L = a.xyz.sub(P).toVar();
-        const d2 = L.dot(L), d = sqrt(d2).max(1e-4);
-        const w = clamp(float(1).sub(d.div(a.w).pow(4)), 0, 1);
-        const cos = N.dot(L.div(d)).max(0);
-        E.addAssign(b.xyz.mul(k.mul(w).mul(w).mul(cos).div(d2.add(b.w))));
-      });
-    });
-    // the carried light (InteriorLight.carried): every surface in its range, whatever room
-    const c = light.carried, Lc = c.pos.sub(P).toVar();
-    const dc2 = Lc.dot(Lc), dc = sqrt(dc2).max(1e-4);
-    const wc = clamp(float(1).sub(dc.div(c.range).pow(4)), 0, 1);
-    E.addAssign(c.light.xyz.mul(wc.mul(wc).mul(N.dot(Lc.div(dc)).max(0)).div(dc2.add(c.light.w))));
-    return E;
-  })();
+  });
+  const c = light.carried;
+  point(c.pos, c.range, c.light.xyz, c.light.w);
 }

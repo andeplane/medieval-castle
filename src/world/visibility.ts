@@ -21,6 +21,7 @@
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import type { Aperture } from '../render/interiorMath';
 import { roomAt } from '../render/interiorMath';
+import { waterInView, type Opening } from './waterView';
 
 export const COURT = 'courtyard', OUTSIDE = 'outside';
 /** The plan's outdoor space ids, as graph nodes ('farbank', beyond the moat, is outside). */
@@ -104,8 +105,11 @@ export interface VisOpts {
   court?: (x: number, z: number) => boolean;
   /** Above this height, out of every room, the camera sees into the courtyard and out over the walls. */
   roofs?: number;
-  /** Terrain height, for `underground`. */
+  /** Terrain height, for `underground` and for whether the water can be seen. */
   ground?: (x: number, z: number) => number;
+  /** The camera's frustum (planes, and directions to its far corners): with it, the water is drawn only
+   * when it can be on screen (world/waterView.ts). */
+  frustum?: () => { planes: PlaneLike[]; corners: V3[] };
 }
 
 /** The camera's spaces: its room, both sides of a doorway, or the courtyard / outside it stands in. */
@@ -160,6 +164,44 @@ export function windowLinks(plan: InteriorPlan, apertures: Aperture[], court: (x
   }));
 }
 
+/** The openings onto the outside of the drawn spaces: windows (the interior light's apertures, the ones
+ * whose front is not the courtyard) and doorways between a drawn space and the outside. */
+/**
+ * The spaces a line of sight from `from` can reach now: through doorways that are open (no leaf, or its
+ * leaf open) and stairs, as far as they lead, and into the rooms whose windows look onto `from` (from the
+ * courtyard, through a window into the room behind it); not through a shut leaf. (A line out of one window,
+ * across the courtyard, in at another and out of that room's far side is not followed; the whole-castle
+ * test in tests/world.test.ts checks that no such view of the water is missed.)
+ */
+export function sightSpaces(g: RoomGraph, from: SpaceId[], isOpen: (door: string) => boolean = () => false): Set<SpaceId> {
+  const start = new Set(from.map(spaceNode).filter((s) => g.has(s)));
+  for (const [s, es] of g) if (es.some((e) => e.window && start.has(e.to))) start.add(s);
+  const seen = new Set(start), stack = [...seen];
+  while (stack.length) for (const e of g.get(stack.pop()!)!) if (!seen.has(e.to) && !e.window && (e.open || e.leaves.some(isOpen))) { seen.add(e.to); stack.push(e.to); }
+  return seen;
+}
+
+/** The openings onto the outside that a line of sight from `seen` (sightSpaces) can pass: the windows of
+ * its rooms (the interior light's apertures whose front is not the courtyard) and its doorways onto the
+ * outside that are open (no leaf, the gate, a grille, or its leaf open). */
+export function outsideOpenings(plan: InteriorPlan, apertures: Aperture[], court: (x: number, z: number) => boolean, seen: Set<SpaceId>, isOpen: (door: string) => boolean = () => false): Opening[] {
+  const out: Opening[] = [];
+  for (const a of apertures) {
+    const r = plan.rooms[a.room];
+    if (a.door !== undefined || a.kind === 'portal' || !r || !seen.has(r.id) || court(a.c[0] + a.n[0], a.c[2] + a.n[2])) continue;
+    out.push({ c: a.c, n: a.n, w: a.w, h: a.h, ahead: a.outer });
+  }
+  for (const d of plan.doors) {
+    const k = d.spaces.findIndex((s) => spaceNode(s) === OUTSIDE);
+    if (k < 0 || !d.spaces.some((s) => seen.has(spaceNode(s)))) continue;
+    if (d.leaf && d.kind !== 'gate' && d.kind !== 'grille' && !isOpen(d.id)) continue; // a shut leaf
+    const sg = k === 1 ? 1 : -1;
+    const h = d.height + d.width / 2; // up to the crown of any arch
+    out.push({ c: [d.centre[0], d.centre[1] + h / 2, d.centre[2]], n: [d.normal[0] * sg, 0, d.normal[1] * sg], w: d.width, h, ahead: d.wall / 2 });
+  }
+  return out;
+}
+
 export const HIDE_UNDERGROUND = ['water', 'terrain', 'vegetation', 'castle', 'stones', 'doors', 'trees', 'ground-cover', 'rocks', 'far-forest'];
 export const HIDE_DEEP = ['vegetation', 'trees', 'ground-cover', 'far-forest'];
 
@@ -174,11 +216,19 @@ interface CamLike { position: { x: number; y: number; z: number } }
 export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan: InteriorPlan, opts: VisOpts & { scene?: SceneLike; apertures?: Aperture[] } = {}) {
   const graph = roomGraph(plan, windowLinks(plan, opts.apertures ?? [], opts.court ?? (() => false)));
   const ctx: VisContext = { plan, graph, groups: groups.map((g) => ({ key: g.key, rooms: g.rooms })) };
+  const water = opts.scene?.getObjectByName('water');
   const outdoorObjs = [...new Set([...HIDE_UNDERGROUND, ...HIDE_DEEP])].map((n) => [n, opts.scene?.getObjectByName(n)] as const).filter((x): x is readonly [string, Obj] => !!x[1]);
   const base = new Map(outdoorObjs.map(([, obj]) => [obj, obj.visible]));
   let last: VisResult = { room: -1, inside: false, from: [], drawn: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), shown: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), deep: false, underground: false, visible: groups.map(() => true) };
   const dynamic = new Set<{ obj: { visible: boolean }; roomOf: () => SpaceId | null }>();
-  const opened = new Set<string>();
+  const opened = new Set<string>(), isOpen = (id: string) => opened.has(id);
+  // the openings a line of sight can pass change only with the camera's spaces and the doors: kept between frames
+  let opsKey = '', ops: Opening[] = [];
+  const openingsFrom = (from: SpaceId[]) => {
+    const key = `${from.join()}|${[...opened].join()}`;
+    if (key !== opsKey) { opsKey = key; ops = outsideOpenings(plan, opts.apertures ?? [], opts.court ?? (() => false), sightSpaces(graph, from, isOpen), isOpen); }
+    return ops;
+  };
   return {
     graph,
     /** A leaf swung open (any bit) opens its doorway in the graph; shut, it closes it again. */
@@ -199,11 +249,16 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
     },
     update() {
       const p = camera.position;
-      last = visibleSet(ctx, [p.x, p.y, p.z], opts, (id) => opened.has(id));
+      last = visibleSet(ctx, [p.x, p.y, p.z], opts, isOpen);
       groups.forEach((g, i) => { g.object.visible = last.visible[i]; });
       for (const [name, obj] of outdoorObjs) {
         const hide = last.underground ? HIDE_UNDERGROUND.includes(name) : last.deep && HIDE_DEEP.includes(name);
         obj.visible = (base.get(obj) ?? true) && !hide;
+      }
+      // the water (and its reflection, a second render of the scene) only when a line of sight can reach it
+      if (water?.visible && opts.frustum) {
+        const outdoors = last.from.includes(OUTSIDE);
+        water.visible = waterInView({ eye: [p.x, p.y, p.z], ...opts.frustum(), outdoors, openings: outdoors ? [] : openingsFrom(last.from) }, opts.ground ?? (() => -Infinity));
       }
       for (const e of dynamic) e.obj.visible = spaceShown(last, e.roomOf());
       return last;
