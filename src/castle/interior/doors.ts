@@ -289,9 +289,8 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     if (!m.has(bin)) m.set(bin, b.addGeometry(bin));
     return m.get(bin)!;
   };
-  // Instances go in grouped by geometry (instancesByGeometry): WebGPU has no multi-draw, so three issues one
-  // draw per run of consecutive visible instances that share a geometry; in leaf order nearly every leaf
-  // part was its own run (≈ 273 draws per pass at Anders' eye pose). Same instances, same matrices.
+  // Instances go in grouped by geometry (instancesByGeometry; #64, for the BatchedMeshes of then, where
+  // WebGPU drew one run per geometry). Each batch is now one merged mesh, one draw (doorBatch.ts).
   const items = pending.flatMap(({ leaf }, n) => wants[n].map((w) => ({ leaf, w, b: batches[slot(w)], g: geomOf(batches[slot(w)], w.bin), i: -1 })));
   for (const it of instancesByGeometry(items)) it.i = it.b.addInstance(it.g);
   let next = 0;
@@ -374,6 +373,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   };
   for (const u of units) pose(u.leaf);
   for (const p of ports) posePort(p);
+  for (const b of new Set(Object.values(batches))) b.flush?.(); // in the buffers before the first compile
 
   // --- blocking: would the leaf's boxes at this angle come within LEAF_CLEAR of a character's axis?
   const blocks = (l: Leaf, angle: number, who: Vec3Like[]) => {
