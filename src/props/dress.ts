@@ -396,9 +396,14 @@ export class RoomDresser {
     const f = footRect(p);
     if (!insidePoly(this.poly, f)) return false;
     if (this.keepOut.some((k) => convexOverlap(f, k))) return false;
-    return flat(p.prop) || !this.blockers.some((b) => convexOverlap(f, b, -0.01));
+    // a skin is not laid over or under another textile: its fur and the carpet's pile would cross in depth
+    if (flat(p.prop) && this.placed.some((q) => flat(q.prop) && (q.prop.kind.name === 'skin' || p.prop.kind.name === 'skin') && convexOverlap(f, footRect(q)))) return false;
+    // a skin is laid clear of what stands there already (the hearth): its legs never run under a hearthstone;
+    // and only the fireside seats are drawn up onto it afterwards, no desk, cupboard or cradle
+    if (!flat(p.prop) && !FIRESIDE.has(p.prop.kind.name) && this.placed.some((q) => q.prop.kind.name === 'skin' && convexOverlap(f, footRect(q), -0.01))) return false;
+    return (flat(p.prop) && p.prop.kind.name !== 'skin') || !this.blockers.some((b) => convexOverlap(f, b, -0.01));
   }
-  /** Flat floor textiles (carpets, rugs, skins, runners) lie under furniture and over each other. */
+  /** Flat floor textiles (carpets, rugs, skins, runners) lie under furniture; carpets, rugs and runners over each other. */
   add(p: Placed, pad = 0.02) { this.placed.push(p); if (p.prop.kind.blocksNav || (p.prop.kind.placement === 'floor' && !flat(p.prop))) this.blockers.push(footRect(p, pad)); return p; }
   fitsFloor(p: Placed): boolean {
     return this.fits(p) && (p.at[1] - this.r.y0) + p.prop.bounds.max[1] < this.r.y1 - this.r.y0 - 0.05;
@@ -541,6 +546,8 @@ const times = (r: Rng, a: number, b: number) => a + Math.floor(r() * (b - a + 1)
 /** Lies flat on the floor (a carpet, rug, runner or skin): walked over, under furniture, layered. */
 export const flat = (p: Prop) => p.kind.placement === 'floor' && p.bounds.max[1] < 0.06;
 /** Kinds whose textiles follow the room's tone (their variant seed ≡ tone mod 3). */
+/** Seats round a fire, which may stand on the edge of a skin before it. */
+export const FIRESIDE = new Set(['armchair', 'sofa', 'footstool']);
 export const TONED = new Set(['four-poster', 'armchair', 'sofa', 'footstool', 'round-table', 'carpet', 'pedestal-desk']);
 /** Roles with no floor to furnish: stairs, passages and the gate passages (all floor is a way through). */
 export const UNFLOORED: readonly Role[] = ['empty', 'passage', 'gate'];
