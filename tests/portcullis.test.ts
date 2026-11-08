@@ -404,6 +404,8 @@ describe('the gate in the door system', () => {
     expect(fb[0].made[0].hidden.size).toBe(hiddenBefore + 1);
     expect(sys.swingsInto('court>W0-2')).toBe(leaf.swingInto);
     expect(sys.swingsInto('gate-main')).toBeNull();
+    expect(sys.leafPose('court>W0-2')).toEqual(leaves.leafPose('court>W0-2'));
+    expect(sys.leafPose('gate-main')).toBeNull();
     expect(fb[1].made[0].hidden.size).toBe(0);
   });
 });
