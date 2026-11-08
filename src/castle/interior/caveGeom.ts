@@ -21,6 +21,10 @@ export const CAVE_CELL = 0.4;
 const ROCK_TILE = 4;
 /** How far a passage's tube runs on into a chamber, and back into the wall at a castle doorway. */
 const EXT_CHAMBER = 1.0, EXT_PORTAL = 0.6;
+/** How far a chamber wall's ledges stand out (m). */
+const LEDGE = 0.5;
+/** How much of a rock triangle's shading normal is its facet's (the rest is the field's smooth normal). */
+const FACETED = 0.15;
 
 type Bin = Builder['bins'][BinKey];
 interface Prim { lo: V3; hi: V3; f: (x: number, y: number, z: number, n: number) => number }
@@ -31,7 +35,10 @@ export function caveField(P: CavePlan, seed: number) {
   const prims: Prim[] = [];
   for (const k of P.chambers) prims.push(chamberPrim(k, n2));
   for (const p of P.passages) prims.push(passagePrim(p));
-  const noise = (x: number, y: number, z: number) => n3(x * 0.28, y * 0.34, z * 0.28) * 0.7 + n3(x * 0.95 + 17, y * 0.95, z * 0.95) * 0.3;
+  // broad swells, a finer octave and a ridged one (1 - 2|n|): sharp crests of rock between smooth hollows,
+  // so the walls read as broken stone rather than as a smooth tube
+  const noise = (x: number, y: number, z: number) => n3(x * 0.28, y * 0.34, z * 0.28) * 0.5 + n3(x * 0.95 + 17, y * 0.95, z * 0.95) * 0.22
+    + (1 - 2 * Math.abs(n3(x * 0.55 - 31, y * 0.7, z * 0.55))) * 0.28;
   const lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity];
   for (const p of prims) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], p.lo[a]); hi[a] = Math.max(hi[a], p.hi[a]); }
   const f = (x: number, y: number, z: number) => {
@@ -57,7 +64,10 @@ function chamberPrim(k: CaveChamber, n2: (x: number, y: number) => number): Prim
       const rho = Math.hypot(u / k.a, v / k.b);
       const floor = k.y + 0.05 * n2(x * 0.5, z * 0.5) - poolDepth(k, [x, z]);
       const ceil = k.y + domeAt(k, rho);
-      return Math.max((rho - 1) * m + k.noise * N, y - ceil + k.noise * 0.8 * N, floor - y);
+      // ledges: the wall leans in a little up each bed (~1.2 m, its level warped by the noise) and steps back
+      // over the next 0.2 m (continuous, so the surface nets stay on it), so the walls stand in shelves and overhangs like bedded rock
+      const bed = (y - k.y) / 1.2 + 0.3 * N, fr = bed - Math.floor(bed), ledge = ((fr < 0.82 ? fr / 0.82 : (1 - fr) / 0.18) - 0.5) * LEDGE * Math.min(1, m / 4) * Math.min(1, Math.max(0, (y - k.y - 0.3) / 0.6));
+      return Math.max((rho - 1) * m + k.noise * N + ledge, y - ceil + k.noise * 0.8 * N, floor - y);
     },
   };
 }
@@ -149,18 +159,25 @@ export function behindPortal(P: CavePlan) {
   });
 }
 
-const cache = new Map<string, ReturnType<typeof surfaceNets>>();
-/** The cave rock as an indexed soup (cached by plan). */
-export function caveRock(P: CavePlan, seed: number) {
-  const key = `${seed}:${JSON.stringify([P.chambers, P.passages])}`;
+/** The rock as an indexed soup: positions and normals (3 per vertex), triangles (3 vertex indices each). */
+export interface CaveSoup { pos: ArrayLike<number>; nor: ArrayLike<number>; tris: ArrayLike<number> }
+const cache = new Map<string, CaveSoup>();
+const keyOf = (P: CavePlan, seed: number) => `${seed}:${JSON.stringify([P.chambers, P.passages])}`;
+/** The cave rock as an indexed soup (cached by plan; caveOffThread.ts can make it in a worker and prime the cache). */
+export function caveRock(P: CavePlan, seed: number): CaveSoup {
+  const key = keyOf(P, seed);
   let r = cache.get(key);
   if (!r) {
     const F = caveField(P, seed);
     r = surfaceNets(F.f, F.lo, F.hi, CAVE_CELL, behindPortal(P));
-    if (cache.size > 4) cache.clear();
-    cache.set(key, r);
+    primeCaveRock(P, seed, r);
   }
   return r;
+}
+/** Hand the cache a soup made elsewhere (the worker) for this plan and seed. */
+export function primeCaveRock(P: CavePlan, seed: number, soup: CaveSoup) {
+  if (cache.size > 4) cache.clear();
+  cache.set(keyOf(P, seed), soup);
 }
 
 /** Each castle doorway into the caves: the door and the side (0 | 1) the cave is on. */
@@ -181,17 +198,25 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
   };
   for (let t = 0; t < R.tris.length; t += 3) {
     const ids = [R.tris[t], R.tris[t + 1], R.tris[t + 2]], p = ids.map(fix), n = ids.map(nrm);
-    // face the air: wind the triangle along its vertices' normals
-    const e1 = sub3(p[1], p[0]), e2 = sub3(p[2], p[0]), fn = cross3(e1, e2);
+    // face the air: surface nets wind every quad the same way round (into the rock), so reversing all of them
+    // is consistent over the whole closed surface. (Winding each triangle by its vertices' normals instead
+    // flipped ~150 triangles at sharp creases, where the field's gradient points across the fold: they were
+    // culled and showed as slivers of nothing.)
+    const e1 = sub3(p[2], p[0]), e2 = sub3(p[1], p[0]), fn = cross3(e1, e2);
     const ns: V3 = [n[0][0] + n[1][0] + n[2][0], n[0][1] + n[1][1] + n[2][1], n[0][2] + n[1][2] + n[2][2]];
-    const tri = dot3(fn, ns) < 0 ? [0, 2, 1] : [0, 1, 2];
-    rock.triN(tri.map((i) => p[i]), tri.map((i) => n[i]), tri.map((i) => uvOf(p[i], ns)));
+    const tri = [0, 2, 1];
+    // partly the facet's own normal: crisper broken faces, most of the field's so they do not read as low-poly
+    const face = norm3(fn);
+    const facet = (v: V3) => norm3([face[0] * FACETED + v[0] * (1 - FACETED), face[1] * FACETED + v[1] * (1 - FACETED), face[2] * FACETED + v[2] * (1 - FACETED)]);
+    rock.triN(tri.map((i) => p[i]), tri.map((i) => facet(n[i])), tri.map((i) => uvOf(p[i], ns)));
   }
   const rockTris = R.tris.length / 3;
   for (const pt of portals) collar(rock, pt, P);
   for (const p of P.passages) if (p.steps) steps(B, p, seed);
   for (const k of P.chambers) if (k.pool) pool(B.bins.pool, k);
-  fungi(B.bins.glow, R, P, seed);
+  for (const b of fallenBlocks(P, seed)) boulder(rock, b);
+  for (const sp of speleothems(R, P, seed)) cone(rock, sp);
+  fungi(B.bins.glow, B.bins.halo, R, P, seed);
   for (const f of P.features) feature(B, f, seed);
   return { rock: rockTris };
 }
@@ -255,7 +280,7 @@ function pool(bin: Bin, k: CaveChamber) {
 
 /** Glowing fungi on the lower walls of the deep rooms: clusters of small caps (cheap emissive, no lights). */
 const FUNGI_ROOMS = new Set(['cave-cavern', 'cave-well', 'cave-ledge', 'cave-squeeze', 'cave-drop', 'cave-rise']);
-export function fungiSpots(R: { pos: number[]; nor: number[] }, P: CavePlan, seed: number): { p: V3; n: V3 }[] {
+export function fungiSpots(R: { pos: ArrayLike<number>; nor: ArrayLike<number> }, P: CavePlan, seed: number): { p: V3; n: V3 }[] {
   const r = mulberry32(hashSeed('cave-fungi', seed)), out: { p: V3; n: V3 }[] = [];
   const near = (x: number, z: number, y: number) => {
     for (const k of P.chambers) if (FUNGI_ROOMS.has(k.id)) {
@@ -270,27 +295,139 @@ export function fungiSpots(R: { pos: number[]; nor: number[] }, P: CavePlan, see
   };
   for (let i = 0; i < R.pos.length / 3; i++) {
     const ny = R.nor[3 * i + 1];
-    if (Math.abs(ny) > 0.55 || r() > 0.06) continue;
+    if (Math.abs(ny) > 0.55 || r() > 0.035) continue;
     const p: V3 = [R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]];
     if (!near(p[0], p[2], p[1])) continue;
     out.push({ p, n: [R.nor[3 * i], ny, R.nor[3 * i + 2]] });
   }
   return out;
 }
-function fungi(bin: Bin, R: { pos: number[]; nor: number[] }, P: CavePlan, seed: number) {
+/**
+ * Each spot: a cluster of tiny stalked caps (uv v = 1 on the cap's crown, 0 at its rim and stem, so the glow
+ * shader brightens the crowns) and, flat on the rock behind it, one soft halo quad (the 'halo' bin, additive,
+ * its uv the quad's corners) so the cluster sits in its own faint pool of light rather than reading as flakes.
+ */
+function fungi(bin: Bin, halo: Bin, R: CaveSoup, P: CavePlan, seed: number) {
   const r = mulberry32(hashSeed('cave-fungi-caps', seed));
   for (const s of fungiSpots(R, P, seed)) {
-    const t1 = norm3(cross3(s.n, [0, 1, 0])), t2 = cross3(s.n, t1);
-    const caps = 3 + Math.floor(r() * 5);
+    const n = norm3(s.n), t1 = norm3(cross3(n, [0, 1, 0])), t2 = cross3(n, t1);
+    const at = (u: number, v: number, w: number): V3 => [s.p[0] + t1[0] * u + t2[0] * v + n[0] * w, s.p[1] + t1[1] * u + t2[1] * v + n[1] * w, s.p[2] + t1[2] * u + t2[2] * v + n[2] * w];
+    const hs = 0.35 + r() * 0.25, q = [at(-hs, -hs, 0.04), at(hs, -hs, 0.04), at(hs, hs, 0.04), at(-hs, hs, 0.04)];
+    halo.tri(q[0], q[1], q[2], n, [0, 0], [1, 0], [1, 1]); halo.tri(q[0], q[2], q[3], n, [0, 0], [1, 1], [0, 1]);
+    const caps = 6 + Math.floor(r() * 9);
     for (let c = 0; c < caps; c++) {
-      const u = (r() - 0.5) * 0.35, v = (r() - 0.5) * 0.3, rad = 0.018 + r() * 0.04;
-      const o: V3 = [s.p[0] + t1[0] * u + t2[0] * v + s.n[0] * 0.015, s.p[1] + t1[1] * u + t2[1] * v + s.n[1] * 0.015, s.p[2] + t1[2] * u + t2[2] * v + s.n[2] * 0.015];
-      // a cap: a small disc tilted up from the wall
-      const up = norm3([s.n[0] * 0.6, 1, s.n[2] * 0.6]), a1 = norm3(cross3(up, t2[1] > 0.99 ? t1 : [0, 0, 1])), a2 = cross3(up, a1);
-      const ring = Array.from({ length: 6 }, (_, i) => { const t = (i / 6) * Math.PI * 2; return [o[0] + (a1[0] * Math.cos(t) + a2[0] * Math.sin(t)) * rad, o[1] + (a1[1] * Math.cos(t) + a2[1] * Math.sin(t)) * rad, o[2] + (a1[2] * Math.cos(t) + a2[2] * Math.sin(t)) * rad] as V3; });
-      const top: V3 = [o[0] + up[0] * rad * 0.5, o[1] + up[1] * rad * 0.5, o[2] + up[2] * rad * 0.5];
-      for (let i = 0; i < 6; i++) bin.tri(top, ring[i], ring[(i + 1) % 6], up, [0.5, 0.5], [0, 0], [1, 0]);
+      const u = (r() - 0.5) * 0.24, v = (r() - 0.5) * 0.2, rad = 0.01 + r() * r() * 0.03, stem = rad * (1.2 + r() * 1.5);
+      const root = at(u, v, 0.005), up = norm3([n[0] * 0.7, 1, n[2] * 0.7]);
+      const top: V3 = [root[0] + up[0] * stem, root[1] + up[1] * stem, root[2] + up[2] * stem];
+      const a1 = norm3(cross3(up, t1)), a2 = cross3(up, a1);
+      const ring = (o: V3, rr: number) => Array.from({ length: 6 }, (_, i) => { const t = (i / 6) * Math.PI * 2; return [o[0] + (a1[0] * Math.cos(t) + a2[0] * Math.sin(t)) * rr, o[1] + (a1[1] * Math.cos(t) + a2[1] * Math.sin(t)) * rr, o[2] + (a1[2] * Math.cos(t) + a2[2] * Math.sin(t)) * rr] as V3; });
+      const sr = ring(root, rad * 0.25), st = ring(top, rad * 0.25), cr = ring(top, rad);
+      const crown: V3 = [top[0] + up[0] * rad * 0.6, top[1] + up[1] * rad * 0.6, top[2] + up[2] * rad * 0.6];
+      for (let i = 0; i < 6; i++) {
+        const j = (i + 1) % 6, out = norm3(sub3(cr[i], top));
+        bin.tri(sr[i], sr[j], st[j], out, [0, 0], [0, 0], [0, 0]); bin.tri(sr[i], st[j], st[i], out, [0, 0], [0, 0], [0, 0]); // stem
+        bin.tri(crown, cr[i], cr[j], up, [0.5, 1], [0, 0.2], [1, 0.2]); // cap
+        bin.tri(top, cr[j], cr[i], [-up[0], -up[1], -up[2]], [0.5, 0], [0, 0.1], [1, 0.1]); // gills
+      }
     }
+  }
+}
+
+// ---------------------------------------------------------------- broken stone
+
+/** Chambers that get fallen blocks and stalactites / stalagmites. */
+const STONE_ROOMS = new Set(['cave-cavern', 'cave-hall', 'cave-well', 'cave-ossuary']);
+/** Clear of a chamber's walks (from each of its passage mouths to its centre), its pool and its finds by `m` m. */
+function clearOfWalks(P: CavePlan, k: CaveChamber, q: V2, m: number) {
+  const segDist = (a: V2, b: V2) => {
+    const d: V2 = [b[0] - a[0], b[1] - a[1]], L2 = d[0] * d[0] + d[1] * d[1] || 1;
+    const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / L2));
+    return Math.hypot(q[0] - a[0] - d[0] * t, q[1] - a[1] - d[1] * t);
+  };
+  for (const p of P.passages) for (const e of [0, 1] as const) if (p.ends[e] === k.id) {
+    const end = e === 0 ? p.from : p.to;
+    if (segDist([end[0], end[2]], k.c) < m) return false;
+  }
+  if (k.pool && Math.hypot(q[0] - k.pool.c[0], q[1] - k.pool.c[1]) < k.pool.r + m) return false;
+  return !P.features.some((f) => Math.hypot(q[0] - f.at[0], q[1] - f.at[2]) < 1.6 + m);
+}
+/** Where a point lies in a chamber's plan: 0 at the centre, 1 on the ellipse. */
+function rhoOf(k: CaveChamber, q: V2) {
+  const dx = q[0] - k.c[0], dz = q[1] - k.c[1];
+  return Math.hypot((dx * k.axis[0] + dz * k.axis[1]) / k.a, (-dx * k.axis[1] + dz * k.axis[0]) / k.b);
+}
+
+export interface Boulder { c: V3; size: V3; yaw: number; seed: number }
+/** Blocks fallen from the roof along a chamber's walls, clear of its walks: rough lumps half sunk in the floor. */
+export function fallenBlocks(P: CavePlan, seed: number): Boulder[] {
+  const r = mulberry32(hashSeed('cave-blocks', seed)), out: Boulder[] = [];
+  for (const k of P.chambers) if (STONE_ROOMS.has(k.id)) {
+    const want = Math.round((k.a * k.b) / 9);
+    for (let i = 0, tries = 0; i < want && tries < 200; tries++) {
+      const t = r() * Math.PI * 2, rho = 0.5 + r() * 0.36, s = 0.35 + r() * r() * 1.0;
+      const q: V2 = [k.c[0] + (k.axis[0] * Math.cos(t) * k.a - k.axis[1] * Math.sin(t) * k.b) * rho, k.c[1] + (k.axis[1] * Math.cos(t) * k.a + k.axis[0] * Math.sin(t) * k.b) * rho];
+      if (!clearOfWalks(P, k, q, 1.0 + s)) continue;
+      if (out.some((o) => Math.hypot(o.c[0] - q[0], o.c[2] - q[1]) < (o.size[0] + s) * 0.9)) continue;
+      const sy = s * (0.5 + r() * 0.4);
+      out.push({ c: [q[0], k.y + sy * 0.25, q[1]], size: [s, sy, s * (0.6 + r() * 0.5)], yaw: r() * Math.PI, seed: Math.floor(r() * 1e9) });
+      i++;
+    }
+  }
+  return out;
+}
+// an icosahedron, the blocks' template
+const ICO_V: V3[] = (() => { const t = (1 + Math.sqrt(5)) / 2; return ([[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]] as V3[]).map((v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l] as V3; }); })();
+const ICO_F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+function boulder(bin: Bin, b: Boulder) {
+  const r = mulberry32(b.seed), cy = Math.cos(b.yaw), sy = Math.sin(b.yaw);
+  const v = ICO_V.map((p): V3 => {
+    const j = 0.75 + r() * 0.45, x = p[0] * b.size[0] * 0.5 * j, y = p[1] * b.size[1] * 0.5 * j, z = p[2] * b.size[2] * 0.5 * j;
+    return [b.c[0] + x * cy - z * sy, b.c[1] + y, b.c[2] + x * sy + z * cy];
+  });
+  for (const [i, j, k] of ICO_F) {
+    const m: V3 = [(v[i][0] + v[j][0] + v[k][0]) / 3 - b.c[0], (v[i][1] + v[j][1] + v[k][1]) / 3 - b.c[1], (v[i][2] + v[j][2] + v[k][2]) / 3 - b.c[2]];
+    bin.tri(v[i], v[j], v[k], norm3(m), [v[i][0] / ROCK_TILE, v[i][2] / ROCK_TILE], [v[j][0] / ROCK_TILE, v[j][2] / ROCK_TILE], [v[k][0] / ROCK_TILE, v[k][2] / ROCK_TILE]);
+  }
+}
+
+export interface Speleothem { base: V3; dir: 1 | -1; len: number; r: number; lean: V2 }
+/** The lowest a stalactite's tip comes over a chamber's floor (the walks keep their headroom everywhere). */
+export const TIP_CLEAR = 2.4;
+/**
+ * Stalactites from the chambers' roofs (on the rock's downward-facing vertices, their tips never lower than
+ * TIP_CLEAR over the floor) and stalagmites on the floor near the walls, clear of the walks.
+ */
+export function speleothems(R: { pos: ArrayLike<number>; nor: ArrayLike<number> }, P: CavePlan, seed: number): Speleothem[] {
+  const r = mulberry32(hashSeed('cave-speleothems', seed)), out: Speleothem[] = [];
+  const ks = P.chambers.filter((k) => STONE_ROOMS.has(k.id));
+  for (let i = 0; i < R.pos.length / 3; i++) {
+    if (R.nor[3 * i + 1] > -0.8 || r() > 0.09) continue;
+    const p: V3 = [R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]];
+    const k = ks.find((c) => rhoOf(c, [p[0], p[2]]) < 0.95 && p[1] > c.y + TIP_CLEAR + 0.3);
+    if (!k) continue;
+    const room = p[1] - (k.y + TIP_CLEAR), len = Math.min(room, 0.25 + r() * r() * 1.4);
+    if (len < 0.2) continue;
+    out.push({ base: [p[0], p[1] + 0.12, p[2]], dir: -1, len: len + 0.12, r: 0.04 + len * (0.08 + r() * 0.06), lean: [(r() - 0.5) * 0.08, (r() - 0.5) * 0.08] });
+  }
+  for (const k of ks) {
+    const want = Math.round((k.a * k.b) / 5);
+    for (let i = 0, tries = 0; i < want && tries < 200; tries++) {
+      const t = r() * Math.PI * 2, rho = 0.62 + r() * 0.3;
+      const q: V2 = [k.c[0] + (k.axis[0] * Math.cos(t) * k.a - k.axis[1] * Math.sin(t) * k.b) * rho, k.c[1] + (k.axis[1] * Math.cos(t) * k.a + k.axis[0] * Math.sin(t) * k.b) * rho];
+      if (!clearOfWalks(P, k, q, 1.2)) continue;
+      const len = 0.2 + r() * r() * 0.9;
+      out.push({ base: [q[0], k.y - 0.1, q[1]], dir: 1, len: len + 0.1, r: 0.05 + len * (0.1 + r() * 0.08), lean: [(r() - 0.5) * 0.06, (r() - 0.5) * 0.06] });
+      i++;
+    }
+  }
+  return out;
+}
+function cone(bin: Bin, s: Speleothem) {
+  const tip: V3 = [s.base[0] + s.lean[0] * s.len, s.base[1] + s.dir * s.len, s.base[2] + s.lean[1] * s.len], n = 7;
+  const ring = Array.from({ length: n }, (_, i) => { const t = (i / n) * Math.PI * 2 + s.base[0]; return [s.base[0] + Math.cos(t) * s.r, s.base[1], s.base[2] + Math.sin(t) * s.r] as V3; });
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n], m: V3 = [(a[0] + b[0]) / 2 - s.base[0], 0, (a[2] + b[2]) / 2 - s.base[2]];
+    bin.tri(a, b, tip, norm3([m[0], s.dir * s.r * 0.3 / s.len, m[2]]), [i / n, 0], [(i + 1) / n, 0], [(i + 0.5) / n, s.len / ROCK_TILE]);
   }
 }
 
@@ -355,7 +492,7 @@ export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[
   for (const f of P.features) if (f.kind === 'lantern') {
     const b = cacheLayout(f.at, f.dir).lantern, base: V3 = [b[0], b[1] + 0.06, b[2]];
     out.flames.push({ kind: 'lantern', base, height: 0.09 });
-    out.emitters.push({ kind: 'lantern', position: [base[0], base[1] + 0.08, base[2]], colour: [1, 0.93, 0.82], intensity: 1.6, flicker: 0.35 });
+    out.emitters.push({ kind: 'lantern', position: [base[0], base[1] + 0.08, base[2]], colour: [1, 0.93, 0.82], intensity: 0.6, flicker: 0.35 });
     out.group.push(group);
   }
   return out;
@@ -378,6 +515,5 @@ export function caveRampSoups(P: CavePlan): { id: string; soup: number[] }[] {
 }
 
 const sub3 = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const dot3 = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross3 = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm3 = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };

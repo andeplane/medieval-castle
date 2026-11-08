@@ -2,7 +2,8 @@
 import type { View } from './controls';
 import type { PlanX } from '../castle/interior/plan';
 import type { V2 } from '../core/math2d';
-import { passageFrame } from '../castle/interior/caves';
+import { passageFrame, type CaveChamber } from '../castle/interior/caves';
+import { caveField } from '../castle/interior/caveGeom';
 
 const EYE = 1.65;
 
@@ -69,5 +70,39 @@ function caveViews(P: PlanX): View[] {
     out.push(v('caves', 'Cave: the great cavern', [at[0], cav.y + EYE, at[1]], [tg[0], cav.y + 0.9, tg[1]]));
   }
   atDoor(C.exit, 'great-c', 'cave-exit', 'Cave: the way out, in the great tower cellar', 2.6);
+  // the finds, from the mouth they are reached by: a metre into the chamber, looking at them
+  const mouth = (k: CaveChamber): V2 => {
+    const p = C.passages.find((x) => x.ends.includes(k.id))!, e = p.ends[0] === k.id ? p.from : p.to;
+    return [e[0] + (k.c[0] - e[0]) * 0.25, e[2] + (k.c[1] - e[2]) * 0.25];
+  };
+  for (const [kind, name, label] of [['shrine', 'cave-ossuary', 'Cave: the ossuary and its old shrine'], ['cache', 'cave-cache', "Cave: the smugglers' cache"]] as const) {
+    const f = C.features.find((x) => x.kind === kind), k = f && C.chambers.find((c) => c.id === f.room);
+    if (f && k) { const m = mouth(k); out.push(v(name, label, [m[0], k.y + EYE, m[1]], [f.at[0], f.at[1] + 0.6, f.at[2]])); }
+  }
+  if (cav?.pool) {
+    // the pool from its near side, two radii out towards the cavern's middle, looking down at the water
+    const pc = cav.pool.c, d = Math.hypot(cav.c[0] - pc[0], cav.c[1] - pc[1]) || 1, back = cav.pool.r * 1.6;
+    out.push(v('cave-pool', 'Cave: the still pool', [pc[0] + ((cav.c[0] - pc[0]) / d) * back, cav.y + EYE, pc[1] + ((cav.c[1] - pc[1]) / d) * back], [pc[0], cav.y - 0.2, pc[1]]));
+  }
+  if (drop) {
+    // the steps from their foot, a little out into the cavern, looking back up them
+    const f = passageFrame(drop), foot: V2 = [drop.to[0] + f.u[0] * 1.6, drop.to[2] + f.u[1] * 1.6];
+    out.push(v('cave-steps', 'Cave: the drop from below', [foot[0], drop.to[1] + EYE, foot[1]], [drop.from[0], drop.from[1] + 1.2, drop.from[2]]));
+  }
+  if (cav) {
+    // close to the rock (≈0.6 m) for the look of the stone: the cavern wall farthest from its passage mouths,
+    // found on the rock's own field, at eye height
+    const F = caveField(C, P.seed), y = cav.y + EYE, mouths = C.passages.flatMap((p) => p.ends.flatMap((e, i) => (e === cav.id ? [i ? p.to : p.from] : [])));
+    let best: { at: V2; dir: V2; score: number } | null = null;
+    for (let a = 0; a < 16; a++) {
+      const dir: V2 = [Math.cos((a / 16) * Math.PI * 2), Math.sin((a / 16) * Math.PI * 2)];
+      let t = 0;
+      while (t < 20 && F.f(cav.c[0] + dir[0] * t, y, cav.c[1] + dir[1] * t) < 0) t += 0.05;
+      const at: V2 = [cav.c[0] + dir[0] * t, cav.c[1] + dir[1] * t], score = Math.min(...mouths.map((m) => Math.hypot(m[0] - at[0], m[2] - at[1])));
+      if (!best || score > best.score) best = { at, dir, score };
+    }
+    const b = best!;
+    out.push(v('cave-wall', 'Cave: the rock at 0.6 m', [b.at[0] - b.dir[0] * 0.6, y, b.at[1] - b.dir[1] * 0.6], [b.at[0], y - 0.15, b.at[1]]));
+  }
   return out;
 }
