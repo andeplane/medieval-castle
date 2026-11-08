@@ -223,8 +223,17 @@ export function stepBlocks(p: CavePassage, seed: number) {
   }
   return out;
 }
+/** The steps as rough rock blocks in the rock bin (Builder.box takes only castle materials): five faces, no bottom. */
 function steps(B: Builder, p: CavePassage, seed: number) {
-  for (const s of stepBlocks(p, seed)) B.box('rock', s.c, s.size, s.dir, { bottom: false });
+  const bin = B.bins.rock;
+  for (const { c, size: [sx, sy, sz], dir: d } of stepBlocks(p, seed)) {
+    const n: V2 = [d[1], -d[0]], y0 = c[1] - sy / 2, y1 = c[1] + sy / 2;
+    const at = (s: number, t: number, y: number): V3 => [c[0] + d[0] * s * sx / 2 + n[0] * t * sz / 2, y, c[2] + d[1] * s * sx / 2 + n[1] * t * sz / 2];
+    const quad = (a: V3, b: V3, e: V3, f: V3, nn: V3) => { bin.tri(a, b, e, nn, [0, 0], [1, 0], [1, 1]); bin.tri(a, e, f, nn, [0, 0], [1, 1], [0, 1]); };
+    quad(at(-1, -1, y1), at(1, -1, y1), at(1, 1, y1), at(-1, 1, y1), [0, 1, 0]);
+    for (const [s0, t0, s1, t1, nn] of [[-1, -1, 1, -1, [-n[0], 0, -n[1]]], [1, -1, 1, 1, [d[0], 0, d[1]]], [1, 1, -1, 1, [n[0], 0, n[1]]], [-1, 1, -1, -1, [-d[0], 0, -d[1]]]] as [number, number, number, number, V3][])
+      quad(at(s0, t0, y0), at(s1, t1, y0), at(s1, t1, y1), at(s0, t0, y1), nn);
+  }
 }
 
 /** The pool's still water: a disc a little under the chamber floor, its rim under the basin's slope. */

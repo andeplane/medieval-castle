@@ -1,5 +1,51 @@
 # Progress
 
+## 2026-11-08: natural caves under the north moat (branch `claude/project-thread-ns4g2v-caves`)
+
+Anders: "btw are there no basement and caves?", "i never found the basements. but nice. will look. i think we need caves that go under the moat etc. make it exciting and interesting".
+
+**The route** (`castle/interior/caves.ts`, a pure function of the seed: the route and sizes are fixed, every chamber's place, turn and size is jittered):
+- In through a breach in the N cellar's outer wall (`N-c1`, at the foot of the cellar stair from `N0-3`), a round-headed opening with no leaf. A wall torch now hangs beside it (`interiorFire.ts besideWayDown`: a room's torch goes beside a doorway down into a lower room), which also puts one beside the cellar stair's foot.
+- `cave-breach`, a fissure sloping down 2.8 m over 9.5 m (16°), into `cave-hall`, the fissure hall (7 × 6 m, 3.4 m dome, floor −4.6).
+- Dead end 1: `cave-crawl` → `cave-ossuary` (5 × 5 m): bones and an old rough altar with a stone cross and two candle stubs.
+- `cave-squeeze`: 9.5 m long, 1.1 m wide, 2.25 m high, under the island's edge.
+- `cave-ledge`, then `cave-drop`: 17 rough steps cut down 4.2 m (rise 0.25, going 0.38).
+- `cave-cavern`, the great cavern under the moat and its outer bank: 20 × 15 m, a 6.2 m dome, floor −10.6 (10.6 m under the water), a still pool at its far end (6.6 m across, 0.6 m deep), glowing fungi on the lower walls, a skeleton.
+- Dead end 2: `cave-smugglers` → `cave-cache`: casks, crates and a lantern still burning.
+- The way back: `cave-rise` → `cave-well` (a lost lantern) → `cave-slope` → `cave-sump` → `cave-climb` (rising 4.6 m) → an opening in the great tower's north wall into its cellar `great-c`, so the caves are a loop.
+
+**One owner.** The caves are interior rooms (zone `cave`, phase `old`) and their openings are `DoorSpec`s in the interior plan, so the nav graph, the room graph (drawn by graph steps; natural openings are open doorways), the visibility group (`cave:-1`), collision and the key-path tests all come from the same plan. The two castle doorways are ordinary leafless openings (`connect(..., { leaf: false })`), carved and revealed by `shell.ts`; the cave openings between chambers are `natural` (no reveal, no carve). `validatePlan` exempts the cave zone from the island and footprint checks only.
+
+**Geometry** (`castle/interior/caveGeom.ts`): one signed field (chambers are flattened noisy ellipsoids with flat floors, passages noisy tubes along their floor line, the drop with a stepped floor) meshed by surface nets at 0.4 m into the new `rock` bin, ≈30k triangles; the tube is left open behind each castle doorway and a rock collar with the doorway's outline as its hole closes the seam. The steps are rough rock blocks with collision ramps over their nosings (`ramp:cave-drop`), the pool a disc in a `pool` bin, fungi small caps in a `glow` bin, the finds in trim, wood and iron. All of it is one group, built in ≈0.5 s (surface nets) on the main thread with the rest of the interior.
+
+**Light.** No torches in the caves. The player carries a lantern (`player/lantern.ts`): one more mobile source of the shared `LightRig`, lit only while the camera is in a cave room. The fungi glow faintly (emissive, no light). The cache's lantern and the lost lantern are lantern sources in `caveFires` (shown with the wall torches, so only without `?furniture=1`).
+
+**Materials** (`render/materials.ts caveMaterials`): rock is triplanar macro/detail noise, wavy strata, iron staining and a bump; damp and shinier on the floors. Pool is dark, transparent, smooth water. Glow is emissive teal-green.
+
+**Bookmarks**: `caves` (the cavern from the foot of the drop), `cave-entrance` (in N-c1 facing the breach), `cave-squeeze`, `cave-drop`, `cave-exit` (in great-c facing the way out). `cellar` still works.
+
+**Tests**
+- `tests/caves.test.ts`: the plan is valid and seed-pure (also seeds 2, 77, 4242); the chambers under the moat (at least two) are 6–14 m under the water; ceilings stay under the ground; the cavern's size and pool; the squeeze, the drop, two dead ends with finds; graph steps and nav; the rock soup is closed except behind the two doorways; a walkable floor (within 0.3 m, ≤ 48°) under every walk point; headroom ≥ 2 m and width ≥ 0.75 m along every walk; steps, pool, fungi, ramps, fires, the lantern.
+- `tests/keypaths.test.ts`: "the N cellar → the breach → the squeeze → down the drop → the great cavern, as the nav graph leads", and "every cave chamber on foot ... out through the crack into the great tower's cellar" (the whole loop, with the player's motor and collision).
+- `tests/world.test.ts`: cave poses stand on the cave floor; the caves are drawn by the room graph from every walk point and from a 1 m grid in both cellars they open into.
+- `tests/groundInRooms.test.ts`: no terrain or water in any cave room (with the cave floor and dome from `caveSpan`).
+- `tests/interiorFire.test.ts`: the torch beside a way down.
+- Coverage: caves.ts 100 / 97 / 100 / 100, caveGeom.ts 99.5 / 93.9 / 100 / 100 (statements / branches / functions / lines), added to the interior threshold group.
+
+**Numbers** (headless WebGL2, `scripts/drawcalls.mjs`, one frame, no furniture): `caves` 24 draw calls, 0.10 M triangles (4 of 87 groups shown: the room graph draws the caves and the two cellars, nothing outdoors); `cave-drop` 27, 0.13 M; `hero` 463, 3.74 M. Rock ≈30k triangles, fungi ≈3k. The interior build takes ≈1 s longer (surface nets ≈0.5 s, on a loaded box).
+
+**Captures** (`/mnt/project-files/castle-plan/caves/`): `cave-entrance`, `cave-squeeze`, `cave-drop`, `caves` (the cavern), `cave-exit`, `cave-walk-breach` (after a live 5 s walk forward from the N cellar through the breach: the player ends on the fissure hall's floor at y −4.59), `cellar`, `hero`, `gate`, `courtyard`.
+
+**Assumptions (Anders can veto):**
+- Entrance: an open round-headed breach in the N cellar's outer wall, at the foot of the cellar stair, with a torch beside it so it is found. Exit: an open opening in the great tower cellar's north wall. No way out on the far bank (the player stays on the island).
+- The carried lantern is lit automatically in the caves; no key or item.
+- The natural light is glowing fungi; the rock is a cool grey-brown with strata.
+- The finds: an ossuary shrine, a smugglers' cache with a burning lantern, a skeleton in the cavern and a lost lantern.
+
+**Seen in the captures and not fixed**: in the narrow passages the lantern lights the near walls flat and orange (inverse-square falloff, then auto-exposure brightens the image), so the rock's texture is lost there; the fungi near the eye read as pale flakes; the great tower cellar at `cave-exit` is very dark. The cavern reads as smooth rock with soft strata, not as sharp broken stone.
+
+**Not checked**: close-range captures of the ossuary, the cache and the pool (my `lookFrom` poses landed outdoors, so I dropped them); on WebGPU or on the Mac (all captures are headless WebGL2); the frame rate in the caves; moving the cave build into a worker (it adds ≈1 s to the interior build, on the main thread); the lantern's look while walking (captures are at bookmarks, where the lantern is lit but static).
+
 ## 2026-11-08: no tunnel stall while "Lighting the halls…" (branch `claude/project-thread-ns4g2v-freeze`)
 
 Anders, on his Mac (Chrome 157, WebGPU, live 5ed733a): the loading screen still freezes for a few seconds at "Lighting the halls…", although the page's long tasks there are at most 0.6 s.
