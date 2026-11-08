@@ -5,16 +5,18 @@
 // skips whatever lies wholly beyond, and a pixel the pre-pass leaves empty is one the AO does not reach.
 // Only the AO's input changes; what the view draws is untouched.
 import type * as THREE from 'three/webgpu';
+import { FX_LAYER } from './passLayers';
 
 /** View depth (m) beyond which the scene pass uses no AO at all. */
 export const AO_FADE = 260;
 /** The pre-pass's far plane: a little past AO_FADE, so every pixel the AO still reaches has its depth. */
 export const AO_FAR = AO_FADE + 15;
 
-/** Make `to` the view camera `from` with the pre-pass's far plane (call before each pre-pass render). */
+/** Make `to` the view camera `from` with the pre-pass's far plane and without FX_LAYER (call before each pre-pass render). */
 export function aoCamera(from: THREE.PerspectiveCamera, to: THREE.PerspectiveCamera): void {
   to.copy(from, false);
   to.far = Math.min(from.far, AO_FAR);
+  to.layers.disable(FX_LAYER);
   to.updateProjectionMatrix();
   to.updateMatrixWorld();
 }

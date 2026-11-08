@@ -25,7 +25,7 @@ import { pointInPoly } from '../src/core/math2d';
 import { GROUND, WINGS } from '../src/castle/spec';
 import { TUNING } from '../src/player/movement';
 import type { WindowInput } from '../src/render/interiorMath';
-import { VIEW_MASK, MIRROR_MASK } from '../src/render/passLayers';
+import { VIEW_MASK, MIRROR_MASK, FX_LAYER, VIEW_LAYER } from '../src/render/passLayers';
 import { aoCamera, AO_FAR } from '../src/render/aoCamera';
 import { NearFarShadowNode } from '../src/render/shadows';
 import { courtyard, castleCentre } from '../src/castle/layout';
@@ -213,6 +213,9 @@ describe('draw calls per frame on WebGPU, from the scene graph', () => {
     expect(pre.far).toBe(AO_FAR);
     expect(pre.position.equals(c.position) && pre.quaternion.equals(c.quaternion)).toBe(true);
     expect(pre.matrixWorld.equals(c.matrixWorld)).toBe(true);
+    // the flame sprites (FX_LAYER) are drawn by the view and the reflection, not into the AO pre-pass
+    c.layers.mask = VIEW_MASK; aoCamera(c, pre);
+    expect([c.layers.isEnabled(FX_LAYER), pre.layers.isEnabled(FX_LAYER), pre.layers.isEnabled(VIEW_LAYER), (MIRROR_MASK >> FX_LAYER) & 1]).toEqual([true, false, true, 1]);
   });
 
   it('counts as three projects: hidden, other layers, culled, groups, non-meshes', () => {

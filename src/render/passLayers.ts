@@ -13,11 +13,14 @@
 
 export const VIEW_LAYER = 2;
 export const MIRROR_LAYER = 3;
+/** Glow drawn by the view and the reflection but not into the AO pre-pass: the flame sprites (light/three.ts),
+ * blended, writing no depth, so they gave the AO nothing but their normals smeared over what is behind. */
+export const FX_LAYER = 4;
 
-/** The view camera's layers (and every pass that draws what it sees: the AO pre-pass, the sun's shadow). */
-export const VIEW_MASK = (1 << 0) | (1 << VIEW_LAYER);
+/** The view camera's layers (and every pass that draws what it sees: the AO pre-pass less FX_LAYER, the sun's shadow). */
+export const VIEW_MASK = (1 << 0) | (1 << VIEW_LAYER) | (1 << FX_LAYER);
 /** The water reflection's mirrored camera. */
-export const MIRROR_MASK = (1 << 0) | (1 << MIRROR_LAYER);
+export const MIRROR_MASK = (1 << 0) | (1 << MIRROR_LAYER) | (1 << FX_LAYER);
 
 /** A layer no camera renders: meshes kept for whoever reads them by name (the terrain's whole near and far
  * grids, the near rocks' physics set). */

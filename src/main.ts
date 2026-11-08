@@ -66,7 +66,7 @@ import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 import { createStatsOverlay } from './ui/statsOverlay';
 import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
-import { VIEW_MASK } from './render/passLayers';
+import { VIEW_MASK, FX_LAYER } from './render/passLayers';
 import { aoCamera, AO_FADE } from './render/aoCamera';
 import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
@@ -427,6 +427,7 @@ async function main() {
   const lookDir = new THREE.Vector3();
   const flameK = new Float32Array(flames.length);
   const sprites = makeFlameSprites(flames);
+  for (const m of sprites.group.children) m.layers.set(FX_LAYER); // not into the AO pre-pass (render/passLayers.ts)
   scene.add(sprites.group);
   let fireT = 0;
   // windows glow at night for rooms with firelight

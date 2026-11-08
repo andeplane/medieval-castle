@@ -273,7 +273,7 @@ describe('leaf placement', () => {
 
 describe('leaf geometry', () => {
   it('draws every leaf class of the castle far away as the same leaf, square-edged and unstudded', () => {
-    // DOOR_FAR: only how a leaf is drawn changes (no chamfers or nail heads), never its boards or outline
+    // DOOR_FAR: only how a leaf is drawn changes (no chamfers or nail heads, coarser curves), never its boards or outline
     const box = (b: PartBin) => { const v = verts(b); return [0, 1, 2].flatMap((k) => [Math.min(...v.map((p) => p[k])), Math.max(...v.map((p) => p[k]))]); };
     let near = 0, far = 0;
     const seen = new Set<string>();
@@ -282,13 +282,13 @@ describe('leaf geometry', () => {
       seen.add(pl.classKey);
       const cls = leafClassFor(d, pl.kind), a = leafGeometry(cls, mulberry32(3)), f = leafGeometry(cls, mulberry32(3), true);
       const ba = box(pl.kind === 'grille' ? a.iron : a.wood), bf = box(pl.kind === 'grille' ? f.iron : f.wood);
-      ba.forEach((x, k) => expect(bf[k]).toBeCloseTo(x, 6));
+      ba.forEach((x, k) => expect(Math.abs(bf[k] - x)).toBeLessThan(0.006)); // the head in longer chords: ≤ 6 mm
       expect(f.boxes).toEqual(a.boxes);
       expect(f.wood.pos.length + f.iron.pos.length).toBeLessThan(a.wood.pos.length + a.iron.pos.length);
       near += a.wood.pos.length + a.iron.pos.length; far += f.wood.pos.length + f.iron.pos.length;
     }
     expect(seen.size).toBeGreaterThan(5);
-    expect(far / near).toBeLessThan(0.7);
+    expect(far / near).toBeLessThan(0.55);
   });
 
   it('is deterministic per seed and differs between seeds', () => {
