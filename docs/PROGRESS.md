@@ -19,6 +19,8 @@ Tests (`props-dress.test.ts`, helpers in `tests/helpers/variety.ts`): characters
 
 Captures (headless WebGL2, `?furniture=1`, walk mode at eye height from 0.7 m inside each room's first doorway, before = main f98c864, after = this branch): `castle-plan/fix-variety/{before,after}-<role>-<room>.png` for 12 rooms: bedchambers N5-0, N5-3, E4-1, S3-3; solars S5-2, great-5 (round tower), sw-3; studies N2-1, W2-0; libraries N2-2, E3-0; sewing room S2-2. Seen in them and fixed: the murrey palette rendered magenta (now a browner mulberry); hangings had random banded cells down their sides (now both sides or neither).
 
+`scripts/drawcalls.mjs` (headless WebGL2, `?furniture=1`, this branch): hall 355 draw calls / 2.53 M triangles (interior group 55k a pass), chamber 274 / 2.08 M, tower room 332 / 2.24 M; `drawBudget.test.ts` passes.
+
 Not checked: WebGPU; the Mac; every room by eye (12 of 192); a library can get two identical rugs (the recipe's and its extras'); the poses look in from the first doorway, so a few shots face a wall with a door rather than the room.
 
 Assumptions for Anders to veto: the six palettes; the tier rules (lord's wing, size rank); the five new pieces and how they look; plain household rooms get dyed hangings or painted shields instead of tapestries, servants' rooms pegs and baskets; window seats are chests or benches under the sill.
