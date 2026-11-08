@@ -63,6 +63,9 @@ export function roomAt(rooms: RoomSpec[], p: V3, tol = 0): number {
   for (let i = 0; i < rooms.length; i++) {
     const r = rooms[i];
     if (p[1] < r.y0 - 0.3 - tol || p[1] > r.y1 + 0.6 + tol) continue;
+    // farther than tol from the room's box is farther from the room (1 µm spare for rounding): same answer, fewer polygons
+    const b = boxOf(r), bx = Math.max(b[0] - p[0], 0, p[0] - b[2]), bz = Math.max(b[1] - p[2], 0, p[2] - b[3]);
+    if (bx * bx + bz * bz > (tol + 1e-6) ** 2) continue;
     const d = polyDist(r.poly, p[0], p[2]);
     if (d <= tol && d < bd) { bd = d; best = i; }
   }

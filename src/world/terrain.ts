@@ -677,6 +677,9 @@ export interface TerrainMeshOptions {
   holes?: V2[][];
 }
 
+/** buildTerrain's near grid (`terrain-near`) on its own: what walking, physics and the ground checks read. */
+export const nearGrid = (T: Terrain = defaultTerrain(), o: Pick<TerrainMeshOptions, 'near' | 'nearSeg' | 'holes'> = {}) => buildGrid(T, o.near ?? 380, o.nearSeg ?? 420, o.holes);
+
 /** Meshes for a terrain: near grid, polar far mesh, stream corridor and water, rocks. The material's
  *  userData may carry `stream`, `rock` (materials) and `reliefTex` (filled here). */
 export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerrain(), o: TerrainMeshOptions = {}) {
@@ -685,7 +688,7 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const inside = (x: number, z: number) => NEAR / 2 - Math.max(Math.abs(x), Math.abs(z));
   const group = new THREE.Group();
   group.name = 'terrain';
-  const near = new THREE.Mesh(buildGrid(T, NEAR, o.nearSeg ?? 420, o.holes), material);
+  const near = new THREE.Mesh(nearGrid(T, o), material);
   near.receiveShadow = true; near.name = 'terrain-near';
   const tNear = performance.now();
   const far = new THREE.Mesh(buildFar(T, 150, 16000, o.farRings ?? 200, o.farSegs ?? 560, (x, z, s) => 4 * smoothstep(0, 25, inside(x, z)) + (s.stream !== undefined ? 9 * (1 - smoothstep(CORRIDOR - 14, CORRIDOR - 2, s.stream)) : 0)), material);
