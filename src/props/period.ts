@@ -676,6 +676,20 @@ export function hideShape(kind: HideKind, L: number, r: Rng) {
   return { d, nose, head };
 }
 
+/** Marching squares on one grid cell: the parts inside (value < 0) of the square with corners c (in order
+ * round it) and values v there, cut points on the edges by interpolation. One polygon, or two triangles
+ * when two opposite corners are inside alone (a saddle). */
+export function clipCell(c: [number, number][], v: number[]): [number, number][][] {
+  const poly: [number, number][] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = c[i], b = c[(i + 1) % 4], da = v[i], db = v[(i + 1) % 4];
+    if (da < 0) poly.push(a);
+    if ((da < 0) !== (db < 0)) { const t = da / (da - db); poly.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+  }
+  if (v.filter((x) => x < 0).length !== 2 || (v[0] < 0) !== (v[2] < 0)) return [poly];
+  return [0, 2].map((k) => { const p = poly.indexOf(c[v[k] < 0 ? k : k + 1]), n = poly.length; return [poly[p], poly[(p + 1) % n], poly[(p + n - 1) % n]]; });
+}
+
 /** Animal skin by the fire: a flat bear or deer hide (head with snout and ears, four splayed legs, tail)
  * or a sheepskin. The pelt is a height field over a 5 cm grid clipped to the outline (marching squares),
  * so the cut edge is exact and nothing overlaps: thin at the edge, a little fur thickness inside, the
@@ -722,16 +736,7 @@ export const skin: PropKind = {
       const c: [number, number][] = [[x0, z0], [x0 + s, z0], [x0 + s, z0 + s], [x0, z0 + s]], v = c.map(([x, z]) => d(x, z));
       if (v.every((a) => a >= 0)) continue;
       const tu = Math.floor((x0 + s / 2 - TU / 2) / TU), tv = Math.floor((z0 + s / 2 - TV / 2) / TV); // tile indices
-      // marching squares: the inside part of the cell, its cut points on the edges by interpolation
-      const poly: [number, number][] = [];
-      for (let i = 0; i < 4; i++) {
-        const a = c[i], b = c[(i + 1) % 4], da = v[i], db = v[(i + 1) % 4];
-        if (da < 0) poly.push(a);
-        if ((da < 0) !== (db < 0)) { const t = da / (da - db); poly.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
-      }
-      if (v.filter((a) => a < 0).length === 2 && v[0] < 0 === v[2] < 0) { // a saddle: two separate corners
-        for (const k of [0, 2]) { const i = v[k] < 0 ? k : k + 1, p = poly.findIndex((q) => q === c[i]); push([poly[p], poly[(p + 1) % poly.length], poly[(p + poly.length - 1) % poly.length]], tu, tv); }
-      } else push(poly, tu, tv);
+      for (const poly of clipCell(c, v)) push(poly, tu, tv);
     }
     if (kind === 'bear') for (const sx of [-1, 1]) { // glass eyes on the head
       const ex = head[0] + sx * L * 0.035, ez = head[1] + L * 0.025;

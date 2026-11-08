@@ -4,7 +4,7 @@
 // skin lying on or under another floor textile or a hearth (props-dress.test.ts).
 import { describe, it, expect } from 'vitest';
 import { makeProp } from '../src/props/kit';
-import { hideShape, FUR_TILE, HIDE_STEP, type HideKind } from '../src/props/period';
+import { hideShape, clipCell, FUR_TILE, HIDE_STEP, type HideKind } from '../src/props/period';
 import { ATLAS } from '../src/props/geom';
 import { mulberry32 } from '../src/core/rng';
 import { flat } from '../src/props/dress';
@@ -63,6 +63,18 @@ describe('the skin rug', () => {
         const dudz = ((uc[0] - ua[0]) * (b[0] - a[0]) - (ub[0] - ua[0]) * (c[0] - a[0])) / det;
         expect(dudx / dvdz).toBeCloseTo(1, 2); expect(Math.abs(dudz)).toBeLessThan(1e-6);
       }
+    }
+  });
+
+  it('clips a grid cell to the outline: one polygon, or two corner triangles at a saddle', () => {
+    const c: [number, number][] = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    expect(clipCell(c, [-1, -1, -1, -1])).toEqual([c]);
+    expect(clipCell(c, [-1, 1, 1, 1])).toEqual([[[0, 0], [0.5, 0], [0, 0.5]]]);
+    expect(clipCell(c, [-1, -1, 1, 1])).toEqual([[[0, 0], [1, 0], [1, 0.5], [0, 0.5]]]);
+    for (const v of [[-1, 1, -1, 1], [1, -1, 1, -1]]) {
+      const t = clipCell(c, v);
+      expect(t).toHaveLength(2);
+      for (const [k, tri] of t.entries()) { expect(tri).toHaveLength(3); expect(tri).toContainEqual(c[v[0] < 0 ? 2 * k : 2 * k + 1]); }
     }
   });
 });
