@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { KIT, KIND, makeProp, footprint } from '../src/props/kit';
 import { checkMesh } from './helpers/mesh';
+import { buildShutter } from '../src/props/medieval';
+import { PropMesh, ATLAS } from '../src/props/geom';
+import { mulberry32 } from '../src/core/rng';
 
 const H = (name: string, seed = 0) => makeProp(name, seed).bounds;
-const FIXTURES = ['candlestick', 'sconce', 'chandelier', 'altar', 'chimneypiece', 'hooded-hearth', 'candle-sconce', 'oil-lamp', 'candelabrum'];
+const FIXTURES = ['stone-altar', 'spit-hearth', 'candlestick', 'sconce', 'chandelier', 'altar', 'chimneypiece', 'hooded-hearth', 'candle-sconce', 'oil-lamp', 'candelabrum'];
 
 describe('prop kit', () => {
   it('has the families the brief needs, with unique names', () => {
@@ -135,7 +138,7 @@ describe('19th-century pieces', () => {
     expect(makeProp('candelabrum', 1).mesh.flames.length).toBeGreaterThanOrEqual(3);
     for (const n of ['rug', 'carpet', 'runner']) { expect(KIND[n].blocksNav).toBe(false); expect(makeProp(n, 1).bounds.max[1]).toBeLessThan(0.03); }
     for (let s = 0; s < 6; s++) expect(makeProp('skin', s).bounds.max[1]).toBeLessThan(0.3); // a bear's head at most
-    let bear = false; for (let s = 0; s < 8; s++) if (makeProp('skin', s).mesh.bins.cloth.triangles > 0) bear = true;
+    let bear = false; for (let s = 0; s < 8; s++) if (makeProp('skin', s).mesh.bins.ceramic.triangles > 0) bear = true;
     expect(bear).toBe(true);
   });
 });
@@ -153,6 +156,47 @@ describe('glass and canvases face the room', () => {
       expect(facing('overmantel-mirror', 'brass', v, 0.02)).toBe(1);
       expect(facing('candle-sconce', 'brass', v, 0.012)).toBe(1);
       expect(facing('portrait', 'paint', v)).toBe(1);
+    }
+  });
+});
+
+describe('medieval sets', () => {
+  it('have real-world sizes', () => {
+    for (let s = 0; s < 6; s++) {
+      const t = H('refectory-table', s); expect(t.max[1]).toBeGreaterThan(0.74); expect(t.max[1]).toBeLessThan(0.8); expect(t.max[0] - t.min[0]).toBeGreaterThan(2.9);
+      const w = H('work-table', s); expect(w.max[1]).toBeGreaterThan(0.84); expect(w.max[0] - w.min[0]).toBeGreaterThan(2);
+      expect(H('box-chair', s).max[1]).toBeGreaterThan(1.5);
+      expect(H('dresser', s).max[1]).toBeGreaterThan(1.7);
+      expect(H('prie-dieu', s).max[1]).toBeLessThan(1);
+      const a = H('stone-altar', s); expect(a.max[1]).toBeGreaterThan(1.2); // the cross stands on the mensa
+    }
+  });
+  it('light the altar with two prickets and the kitchen hearth with its fire', () => {
+    const a = makeProp('stone-altar', 2);
+    expect(a.meta.emitters.filter((e) => e.kind === 'candle')).toHaveLength(2);
+    expect(a.mesh.bins.stone.triangles).toBeGreaterThan(0);
+    const h = makeProp('spit-hearth', 2);
+    expect(h.meta.emitters[0].kind).toBe('hearth');
+    expect(h.mesh.bins.iron.triangles).toBeGreaterThan(makeProp('hooded-hearth', 2).mesh.bins.iron.triangles); // spit, crane and cauldron
+  });
+  it('sizes a shutter leaf to its window and runs the straps from the hinge edge', () => {
+    for (const hinge of [1, -1] as const) {
+      const m = new PropMesh(), meta = buildShutter(m, mulberry32(3), 0.8, 1.6, hinge), b = m.bounds();
+      expect(b.max[0] - b.min[0]).toBeCloseTo(0.8, 1); expect(b.max[1]).toBeCloseTo(1.6, 1); expect(b.min[2]).toBeGreaterThan(0.01);
+      const iron = m.bins.iron.pos, xs = iron.filter((_, i) => i % 3 === 0);
+      expect(Math.max(...xs.map((x) => x * hinge))).toBeGreaterThan(0.38);
+      expect(meta.colliders).toHaveLength(1);
+    }
+  });
+  it('maps the pelt flat: fur UVs proportional to metres, inside the fur rectangle', () => {
+    for (let s = 0; s < 6; s++) {
+      const p = makeProp('skin', s), pos = p.mesh.bins.paint.pos, uv = p.mesh.bins.paint.uv;
+      for (let i = 0; i < uv.length; i += 2) { expect(uv[i]).toBeGreaterThanOrEqual(ATLAS.fur[0] - 1e-6); expect(uv[i]).toBeLessThanOrEqual(ATLAS.fur[2] + 1e-6); }
+      // on the flat hide (y < 0.03), u follows x and v follows z linearly
+      const flat: number[] = []; for (let i = 0; i < 1512; i++) flat.push(i); // the hide: 72 spokes, 4 rings (the head comes after)
+      const a = flat[0], b = flat.find((i) => Math.abs(pos[i * 3] - pos[a * 3]) > 0.3)!;
+      const k = (uv[b * 2] - uv[a * 2]) / (pos[b * 3] - pos[a * 3]);
+      for (const i of flat) expect(uv[i * 2] - uv[a * 2]).toBeCloseTo(k * (pos[i * 3] - pos[a * 3]), 5);
     }
   });
 });

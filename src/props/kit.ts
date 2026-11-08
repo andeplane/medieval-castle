@@ -6,6 +6,7 @@ import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } fro
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
 import { WOOD, CLOTH, IRON, FLAME, jitterTint, woodTint, boxCollider, hull, none, planks, leg, flame, jug, bowl, book, candle, v3dir, type PropKind, type PropMeta, type Emitter } from './parts';
 import { PERIOD } from './period';
+import { MEDIEVAL } from './medieval';
 export { WOOD, CLOTH };
 export type { Placement, Emitter, Collider, PropMeta, PropKind } from './parts';
 
@@ -535,7 +536,7 @@ export const KIT: readonly PropKind[] = [
   cauldron, tableware, candlestick, sconce, chandelier,
   weaponRack, armourStand, lectern, altar, bookStack,
   tapestry, firewood, strawHeap,
-  ...PERIOD,
+  ...PERIOD, ...MEDIEVAL,
 ];
 export const KIND = Object.fromEntries(KIT.map((k) => [k.name, k])) as Record<string, PropKind>;
 

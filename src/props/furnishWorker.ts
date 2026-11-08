@@ -3,13 +3,14 @@
 // workers and hands out jobs to the least busy one. Both are plain logic over injected message
 // ports, so tests run them with fakes (tests/props-stream.test.ts).
 import type { InteriorPlan, SpaceId } from '../castle/interior/types';
+import type { WindowFace } from '../castle/interior/shell';
 import { createFurnisher, transferables, type RoomFurniture } from './roomFurniture';
 import { propTextures, type PropTex } from './textures';
 
 /** The prop kit's textures (structurally render.ts PropTextures, without three.js). */
 export type PropTexSet = ReturnType<typeof propTextures>;
 
-export interface FurnishInit { plan: InteriorPlan; maxRooms: number; seed?: number }
+export interface FurnishInit { plan: InteriorPlan; maxRooms: number; seed?: number; windows?: WindowFace[] }
 export type ToFurnisher = ({ t: 'init' } & FurnishInit) | { t: 'room'; job: number; room: SpaceId } | { t: 'textures'; job: number };
 export type FromFurnisher = { t: 'room'; job: number; result: RoomFurniture } | { t: 'textures'; job: number; result: PropTexSet } | { t: 'error'; job: number; message: string };
 
@@ -23,7 +24,7 @@ export interface FurnishScope {
 export function serveFurnish(scope: FurnishScope, make: typeof createFurnisher = createFurnisher, textures: () => PropTexSet = propTextures) {
   let furnish: ((room: SpaceId) => RoomFurniture) | null = null;
   scope.onmessage = ({ data: m }) => {
-    if (m.t === 'init') { furnish = make(m.plan, { maxRooms: m.maxRooms, seed: m.seed }); return; }
+    if (m.t === 'init') { furnish = make(m.plan, { maxRooms: m.maxRooms, seed: m.seed, windows: m.windows }); return; }
     try {
       if (m.t === 'textures') {
         const result = textures();
