@@ -463,3 +463,53 @@ export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, grow = 0.32): { pol
     return { poly, y: r.y1 + lift };
   });
 }
+
+// ---------- room grid (which room a point is in, for surfaces with no room tag) ----------
+
+/** A world box cut into cells; `data` holds room index + 1 per cell (0 = no room), x fastest, then y, then z. */
+export interface RoomGrid { origin: V3; cell: V3; size: [number, number, number]; data: Float32Array }
+
+/** An empty grid over the rooms' bounds (+ `pad` m), `cell` metres per cell. */
+export function roomGridFor(rooms: RoomSpec[], cell: V3 = [0.5, 1, 0.5], pad = 2): RoomGrid {
+  if (!rooms.length) return { origin: [0, 0, 0], cell, size: [1, 1, 1], data: new Float32Array(1) };
+  const xs = rooms.flatMap((r) => r.poly.map((p) => p[0])), zs = rooms.flatMap((r) => r.poly.map((p) => p[1]));
+  const lo: V3 = [Math.min(...xs) - pad, Math.min(...rooms.map((r) => r.y0)) - pad, Math.min(...zs) - pad];
+  const hi: V3 = [Math.max(...xs) + pad, Math.max(...rooms.map((r) => r.y1)) + pad, Math.max(...zs) + pad];
+  const size = [0, 1, 2].map((k) => Math.max(1, Math.ceil((hi[k] - lo[k]) / cell[k]))) as [number, number, number];
+  return { origin: lo, cell, size, data: new Float32Array(size[0] * size[1] * size[2]) };
+}
+
+/**
+ * Fill a grid with the rooms (index in `rooms`): a cell whose centre is inside a room (outline, floor to
+ * ceiling) is that room; then empty cells take a neighbour's room across x and z, `reach` cells deep,
+ * so a point in a doorway or a wall's reveal finds the room beside it.
+ */
+export function fillRoomGrid(g: RoomGrid, rooms: RoomSpec[], reach = 5): RoomGrid {
+  const [nx, ny, nz] = g.size, at = (i: number, j: number, k: number) => i + nx * (j + ny * k);
+  g.data.fill(0);
+  rooms.forEach((r, ri) => {
+    const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]);
+    const i0 = Math.max(0, Math.floor((Math.min(...xs) - g.origin[0]) / g.cell[0])), i1 = Math.min(nx - 1, Math.floor((Math.max(...xs) - g.origin[0]) / g.cell[0]));
+    const k0 = Math.max(0, Math.floor((Math.min(...zs) - g.origin[2]) / g.cell[2])), k1 = Math.min(nz - 1, Math.floor((Math.max(...zs) - g.origin[2]) / g.cell[2]));
+    const j0 = Math.max(0, Math.floor((r.y0 - g.origin[1]) / g.cell[1])), j1 = Math.min(ny - 1, Math.floor((r.y1 - g.origin[1]) / g.cell[1]));
+    for (let k = k0; k <= k1; k++) for (let i = i0; i <= i1; i++) {
+      if (!inPoly(r.poly, g.origin[0] + (i + 0.5) * g.cell[0], g.origin[2] + (k + 0.5) * g.cell[2])) continue;
+      for (let j = j0; j <= j1; j++) { const y = g.origin[1] + (j + 0.5) * g.cell[1]; if (y >= r.y0 - g.cell[1] * 0.5 && y <= r.y1) g.data[at(i, j, k)] = ri + 1; }
+    }
+  });
+  for (let step = 0; step < reach; step++) {
+    const prev = g.data.slice();
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (prev[at(i, j, k)]) continue;
+      const v = (i > 0 && prev[at(i - 1, j, k)]) || (i < nx - 1 && prev[at(i + 1, j, k)]) || (k > 0 && prev[at(i, j, k - 1)]) || (k < nz - 1 && prev[at(i, j, k + 1)]) || 0;
+      if (v) g.data[at(i, j, k)] = v;
+    }
+  }
+  return g;
+}
+
+/** The room index (or -1) the grid gives a world point, as the shader reads it. */
+export function gridRoom(g: RoomGrid, p: V3): number {
+  const c = [0, 1, 2].map((k) => Math.min(g.size[k] - 1, Math.max(0, Math.floor((p[k] - g.origin[k]) / g.cell[k]))));
+  return g.data[c[0] + g.size[0] * (c[1] + g.size[1] * c[2])] - 1;
+}
