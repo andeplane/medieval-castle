@@ -25,7 +25,7 @@ import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, leafSwingFits, type PlanX } from '../src/castle/interior/plan';
-import { placeLeaves, leafPoint, leafSwing, leafDepth, leafHead, headRise, leafClassFor, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { placeLeaves, leafPoint, leafSwing, leafDepth, headRise, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
@@ -34,44 +34,17 @@ import { planStair, spiralNosingY, STAIR_RULES, type SpiralPlan, type StraightPl
 import type { DoorSpec } from '../src/castle/interior/types';
 import { masses, convexOverlap, CLEAR, FRONT, STAIR_SLIT, type Mass } from '../src/castle/openings';
 import { pointInPoly, type V2 } from '../src/core/math2d';
-import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
-import { createVisibility, drawnSpaces, roomGraph } from '../src/world/visibility';
 import * as T3 from 'three';
-import { buildTerrain } from '../src/world/terrain';
-import { PAVE_Y } from '../src/castle/paving';
-import { WINGS, TOWERS } from '../src/castle/spec';
-import { outerFootprint } from '../src/castle/interior/plan';
-import { caveSpan, caveWalk, CAVE_ZONE } from '../src/castle/interior/caves';
-import { courtyard, stairTowerPoly } from '../src/castle/layout';
-import { interiorViews } from '../src/camera/interiorViews';
+import { nearGrid } from '../src/world/terrain';
+import { TOWERS } from '../src/castle/spec';
 import { StoneSet } from '../src/castle/stones/set';
-import { wallTorches } from '../src/render/interiorFire';
-import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
 import { OUTDOOR_TAG } from '../src/render/interiorMath';
-import type { LightEmitter } from '../src/light/types';
 import { triGrid } from './helpers/triGrid';
-import { rayIndex } from './helpers/rays';
+import { worldViews, OUTDOOR, on, trianglesOf, bvhOf, groupTris, type V3, type Tri } from './helpers/worldViews';
 
-type V3 = [number, number, number];
-const OUTDOOR = new Set(['courtyard', 'outside']);
-/** Plan point at (across, through) of a door: along its wall and along its normal. */
-const on = (d: DoorSpec, across: number, through: number): V2 => [d.centre[0] + d.along[0] * across + d.normal[0] * through, d.centre[2] + d.along[1] * across + d.normal[1] * through];
 const leafy = (d: DoorSpec) => d.leaf && d.kind !== 'gate';
 const bbox = (pts: V2[]) => ({ s0: Math.min(...pts.map((p) => p[0])), s1: Math.max(...pts.map((p) => p[0])), y0: Math.min(...pts.map((p) => p[1])), y1: Math.max(...pts.map((p) => p[1])) });
-/** The castle's triangles (after the interior's carve), each with its bounding box. */
-interface Tri { a: V3; b: V3; c: V3; lo: V3; hi: V3 }
-function trianglesOf(B: Builder): Tri[] {
-  const out: Tri[] = [];
-  for (const bin of Object.values(B.bins) as { pos: number[] }[]) for (let i = 0; i < bin.pos.length; i += 9) {
-    const a = bin.pos.slice(i, i + 3) as V3, b = bin.pos.slice(i + 3, i + 6) as V3, c = bin.pos.slice(i + 6, i + 9) as V3;
-    out.push({ a, b, c, lo: [0, 1, 2].map((k) => Math.min(a[k], b[k], c[k])) as V3, hi: [0, 1, 2].map((k) => Math.max(a[k], b[k], c[k])) as V3 });
-  }
-  return out;
-}
-const mkTri = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
-/** A BVH over triangles, for rays: `hits(ray, near, far)` as three-mesh-bvh's raycastFirst (helpers/rays.ts, ~4× faster under coverage). */
-const bvhOf = (tris: Tri[]) => rayIndex(tris);
 /** World positions of every mesh under an object, as one non-indexed soup. */
 function meshPositions(root: THREE.Object3D): number[] {
   const out: number[] = [];
@@ -375,12 +348,6 @@ function flightFaults(P: PlanX, tris: { p: V3[]; n: V3 }[]): string[] {
 }
 
 /** The triangles of interior groups (world space). */
-function groupTris(gs: InteriorGroup[]): Tri[] {
-  const B = { bins: {} as Record<string, { pos: number[] }> };
-  gs.forEach((g, i) => g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) B.bins[`${i}:${o.name}`] = { pos: Array.from(((o as THREE.Mesh).geometry.getAttribute('position') as THREE.BufferAttribute).array) }; }));
-  return trianglesOf(B as unknown as Builder);
-}
-
 /** Is a point inside one of a spiral's step stones (tread down to soffit, or to the floor when solid)? */
 function inStep(sp: SpiralPlan, q: V3): boolean {
   const ex = q[0] - sp.c[0], ez = q[2] - sp.c[1], rr = Math.hypot(ex, ez);
@@ -480,6 +447,8 @@ function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
 
 describe('every opening in the castle: one owner, one outline, room to open', () => {
   let walls: WallRecord[], P: PlanX, tris: Tri[], B: Builder, inner: ReturnType<typeof buildInterior>, lights: WindowInput[], curved: CurvedRecord[], stairTris: Map<string, Tri[]>, shell: { p: V3[]; n: V3 }[];
+  // the poses, openings and shut leaves the visibility checks share with world-views.test.ts
+  const { set, baked, castleSolid, allGroupTris, shutLeaf } = worldViews();
   beforeAll(() => {
     const isl = islandCastle(); // the castle as main.ts lays it, cut by the interior as main.ts does
     B = isl.builder; lights = isl.lights as WindowInput[];
@@ -487,6 +456,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     P = inner.plan; shell = shellTriangles(inner.groups);
     walls = B.walls; tris = trianglesOf(B); curved = B.curved;
     stairTris = new Map(inner.groups.filter((g) => g.key.startsWith('stairs:')).map((g) => [g.key.slice(7), groupTris([g])]));
+    set({ P, B, inner, lights });
   }, 300_000);
 
   it('lights every round tower\'s spiral through real slits', () => {
@@ -582,245 +552,6 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(openingFaults(walls, { ...R, doors: [sunk] }, masses(), tris)).toContain('court>E0-2: leaf scrapes the ground of the courtyard');
   }, 300_000);
 
-  // ---- the player's poses, the openings and the shut leaves, for the visibility checks below ----
-  const cam = { position: { x: 0, y: 0, z: 0 } };
-  let bakeCache: ReturnType<typeof bakeInteriorLight> | undefined;
-  const baked = () => (bakeCache ??= bakeInteriorLight(inner.groups, { blocked: () => false }, { plan: P, windows: lights, sun: () => ({ dir: [-0.4, 0.63, 0.66], irradiance: [3, 3, 3] }), light: createInteriorLight() }));
-  const court = courtyard(), roofs = Math.min(...WINGS.map((w) => w.top));
-  const inCourt = (x: number, z: number) => pointInPoly(court, x, z);
-  /** The visibility as main.ts makes it. */
-  const makeVis = () => createVisibility(cam, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs });
-  /** The castle as drawn, less its window glass (you see through it). */
-  let solidCache: Tri[] | undefined, groupCache: Tri[] | undefined;
-  const castleSolid = () => (solidCache ??= trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder));
-  /** Every interior group's triangles (built once: the checks below only read them). */
-  const allGroupTris = () => (groupCache ??= groupTris(inner.groups));
-  /** A door's shut leaf as a flat outline at its mid-thickness: triangles, the outline, its depth along the door's normal. */
-  const shutLeaf = (d: DoorSpec) => {
-    const pl = placeLeaves(d)[0];
-    if (!pl) return null;
-    const cls = leafClassFor(d, pl.kind), top = leafHead(cls), sill = cls.sill;
-    const { zBack, zFront } = leafDepth(pl.kind), z = (zBack + zFront) / 2, M = leafSwing(pl, 0), N = 24;
-    const ring: V3[] = [leafPoint(pl, M, [0, 0, z]), leafPoint(pl, M, [pl.width, 0, z])];
-    for (let i = 0; i <= N; i++) { const x = pl.width * (1 - i / N); ring.push(leafPoint(pl, M, [x, top(cls.sOff + x) - sill, z])); }
-    const c = [0, 1, 2].map((k) => ring.reduce((s, p) => s + p[k], 0) / ring.length) as V3;
-    const tris = ring.map((p, i) => mkTri(c, p, ring[(i + 1) % ring.length]));
-    // and its rim, as thick as its boards (a ray slipping past the edge at a slant meets it)
-    const at = (p: V3, dz: number): V3 => { const n = pl.eV; return [p[0] + n[0] * dz, p[1], p[2] + n[1] * dz]; };
-    const half = (zFront - zBack) / 2;
-    ring.forEach((p, i) => { const q = ring[(i + 1) % ring.length]; tris.push(mkTri(at(p, -half), at(q, -half), at(q, half)), mkTri(at(p, -half), at(q, half), at(p, half))); });
-    const t = (ring[0][0] - d.centre[0]) * d.normal[0] + (ring[0][2] - d.centre[2]) * d.normal[1];
-    return { tris, ring, t, sill };
-  };
-  /** Every door (at its mid-plane) and every window and slit (at its glass), with the two spaces it joins. */
-  const openingsOf = () => {
-    const ops: { id: string; spaces: [string, string]; p: V3; n: V2; leafT?: number; window?: boolean }[] = P.doors.map((d) => ({
-      id: d.id, spaces: d.spaces.map((s) => (s === 'farbank' ? 'outside' : s)) as [string, string],
-      p: [d.centre[0], d.centre[1] + Math.min(1.2, d.height / 2), d.centre[2]], n: d.normal, leafT: shutLeaf(d)?.t,
-    }));
-    for (const a of baked().apertures) if (a.door === undefined && a.kind !== 'portal') {
-      ops.push({ id: `${a.id} (${P.rooms[a.room].id})`, spaces: [P.rooms[a.room].id, inCourt(a.c[0] + a.n[0], a.c[2] + a.n[2]) ? 'courtyard' : 'outside'], p: a.c, n: [a.n[0], a.n[2]], window: true });
-    }
-    return ops;
-  };
-  /** Where a player stands: near and far in front of every outdoor doorway, outside up to 150 m, the courtyard, every room and in front of each of its doors, the gate passage. */
-  const playerPoses = () => {
-    const poses: { label: string; eye: V3 }[] = [];
-    const foot = outerFootprint(), tower = stairTowerPoly();
-    const outdoors = (s: string, q: V2) => s === 'courtyard' ? inCourt(q[0], q[1]) && !pointInPoly(tower, q[0], q[1]) : !foot.some((f) => pointInPoly(f, q[0], q[1]));
-    for (const d of P.doors) {
-      const out = d.spaces.find((s) => OUTDOOR.has(s));
-      if (!out) continue;
-      const sgn = d.spaces[0] === out ? 1 : -1; // the normal points from spaces[0] to spaces[1]
-      for (const dist of [1.5, 3, 5, 8, 12, 16, 20, 25, 30, 40, 60, 90, 150]) for (const side of [-4, -1.5, 0, 1.5, 4]) {
-        const q = on(d, side, -sgn * (d.wall / 2 + dist));
-        if (outdoors(out, q)) poses.push({ label: `${dist} m in front of ${d.id}, ${side} m aside`, eye: [q[0], Math.max(d.centre[1], heightAt(q[0], q[1]), 0) + 1.6, q[1]] });
-      }
-    }
-    const xs = court.map((p) => p[0]), zs = court.map((p) => p[1]);
-    for (let x = Math.min(...xs) + 1; x < Math.max(...xs); x += 3) for (let z = Math.min(...zs) + 1; z < Math.max(...zs); z += 3) {
-      if (outdoors('courtyard', [x, z])) poses.push({ label: `the courtyard at (${x.toFixed(1)}, ${z.toFixed(1)})`, eye: [x, PAVE_Y + 1.6, z] });
-    }
-    // a cave room's floor slopes and dips: stand on it where you are (caves.ts caveSpan), not at its lowest point
-    const floorAt = (r: { id: string; zone: string; y0: number }, q: V2, y: number) => (r.zone === CAVE_ZONE ? caveSpan(P.caves!, r.id, q)!.floor : y);
-    for (const r of P.rooms) {
-      const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
-      if (pointInPoly(r.poly, c[0], c[1])) poses.push({ label: `the middle of ${r.id}`, eye: [c[0], floorAt(r, c, r.y0) + 1.6, c[1]] });
-    }
-    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
-    for (const d of P.doors) for (const k of [0, 1]) {
-      const r = rooms.get(d.spaces[k]), q = on(d, 0, (k === 0 ? -1 : 1) * (d.wall / 2 + 1.5));
-      if (r && r.zone !== 'tunnel' && pointInPoly(r.poly, q[0], q[1])) poses.push({ label: `${r.id}, 1.5 m in front of ${d.id}`, eye: [q[0], floorAt(r, q, d.centre[1]) + 1.6, q[1]] });
-    }
-    // (the caves' walking lines are posed in their own test below, by the room graph: no need to cast every opening from them)
-    const gm = P.doors.find((d) => d.id === 'gate-main')!, gc = P.doors.find((d) => d.id === 'gate-court')!;
-    for (let f = 0; f <= 1 + 1e-9; f += 0.05) {
-      const x = gm.centre[0] + (gc.centre[0] - gm.centre[0]) * f, z = gm.centre[2] + (gc.centre[2] - gm.centre[2]) * f;
-      poses.push({ label: `the gate passage, ${(f * 100).toFixed(0)} % in`, eye: [x, gc.centre[1] + 1.7, z] });
-    }
-    return poses;
-  };
-  // One model for visibility and LOD: no level of detail or cull may add, move or remove an opening or a
-  // door. Which rooms are drawn is a graph walk (world/visibility.ts): the same spaces from every distance.
-  // Checked here by looking: from every pose a player has (in front of every outdoor doorway near and far,
-  // the middle of every room and in front of each of its doors, the courtyard, outside, the gate passage),
-  // every opening the eye can reach (a ray through the real castle, the rooms and the shut leaves, past the
-  // glass) has its spaces drawn: both for an opening nothing shuts, the eye's side for a shut leaf.
-  // Anders, 2026-11-07: from the gate passage the courtyard doors showed sky (E0-2) or plain wall (the stair
-  // tower), from a few metres into the courtyard they were fine; a shut door in a room showed a white outline.
-  it('draws the spaces of every opening seen from any pose, near or far, doors shut or open', () => {
-    const vis = makeVis(), poses = playerPoses();
-    const solid = [...castleSolid(), ...allGroupTris()];
-    const faults = new Map<string, string>(), ray = new T3.Ray();
-    let seen = 0, n = 0;
-    for (const open of [false, true]) { // as the castle starts, and with every leaf swung open (any agent may open any door)
-      const occ = bvhOf(open ? solid : [...solid, ...P.doors.flatMap((d) => shutLeaf(d)?.tris ?? [])]);
-      const ops = openingsOf().map((o) => (open ? { ...o, leafT: undefined } : o));
-      for (const d of P.doors) vis.setDoorOpen(d.id, open); // the doors system tells the graph (main.ts syncDoorLight)
-      n = ops.length;
-      poses.forEach(({ label, eye }, i) => {
-        cam.position = { x: eye[0], y: eye[1], z: eye[2] };
-        vis.update();
-        for (const op of ops) {
-          let target = op.p, need = op.spaces as string[];
-          if (op.leafT !== undefined) { // a shut leaf: the eye's side, up to the leaf
-            const side = Math.sign((eye[0] - op.p[0]) * op.n[0] + (eye[2] - op.p[2]) * op.n[1]) || 1;
-            target = [op.p[0] + op.n[0] * (op.leafT + side * 0.04), op.p[1], op.p[2] + op.n[1] * (op.leafT + side * 0.04)];
-            need = [side < 0 ? op.spaces[0] : op.spaces[1]];
-          }
-          // a window seen from outside shows its dark fallback pane, not the room (windows lead out only)
-          if (op.window && (eye[0] - op.p[0]) * op.n[0] + (eye[2] - op.p[2]) * op.n[1] > 0) need = [op.spaces[1]];
-          // A ray is only needed to tell whether an undrawn space is seen. Everything drawn is fine whether or not
-          // it is seen, so the ray is skipped (it costs ~100 ms per 1000 under coverage); every 8th pose still
-          // casts all of them, so the count of openings seen below shows the rays reach the openings.
-          const undrawn = need.filter((s) => !vis.isRoomVisible(s) && !faults.has(`${op.id}:${s}`));
-          if (!undrawn.length && i % 8) continue;
-          const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
-          if (dist > 220 || dist < 0.05) continue;
-          ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
-          if (occ.hits(ray, 0, dist - 0.02)) continue;
-          seen++;
-          for (const s of undrawn) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
-        }
-      });
-    }
-    console.info(`openings seen: ${poses.length} poses, ${n} openings, ${seen} seen, ${faults.size} faults`);
-    expect(poses.length).toBeGreaterThan(900);
-    expect(seen).toBeGreaterThan(600); // 876 measured: a sample of the 6822 openings seen from every pose
-    expect([...faults.values()]).toEqual([]);
-  }, 300_000);
-
-  // The caves (castle/interior/caves.ts) are rooms of the same graph: from anywhere in them the whole cave
-  // group is drawn (and from the great cavern, deep under the moat, the outdoors is not), and from anywhere in the two cellars that open into
-  // them, near their doorway or across the room, the cave group is drawn too: graph steps, never distance.
-  it('draws the caves by the room graph, from every point of their walks and of the cellars they open into', () => {
-    const vis = makeVis(), caves = new Set(P.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id));
-    const gi = inner.groups.findIndex((g) => g.rooms.some((r) => caves.has(r)));
-    expect(caves.size).toBeGreaterThanOrEqual(12);
-    expect(inner.groups[gi].rooms.every((r) => caves.has(r))).toBe(true);
-    const look = (eye: V3) => { cam.position = { x: eye[0], y: eye[1], z: eye[2] }; return vis.update(); };
-    const bad: string[] = [];
-    let n = 0;
-    for (const id of caves) for (const w of caveWalk(P.caves!, id)) {
-      const v = look([w[0], w[1] + 1.6, w[2]]); n++;
-      if (!v.from.some((s) => caves.has(s))) bad.push(`${id} at (${w[0].toFixed(1)}, ${w[2].toFixed(1)}): camera in ${v.from.join(', ')}`);
-      if (!v.visible[gi]) bad.push(`${id} at (${w[0].toFixed(1)}, ${w[2].toFixed(1)}): the cave group is not drawn`);
-      if (id === 'cave-cavern' && !v.underground) bad.push('the outdoors is drawn from the great cavern');
-      for (const c of caves) if (!v.drawn.has(c)) { bad.push(`${c} not drawn from ${id}`); break; }
-    }
-    for (const id of ['N-c1', 'great-c']) {
-      const r = P.rooms.find((x) => x.id === id)!, xs = r.poly.map((q) => q[0]), zs = r.poly.map((q) => q[1]);
-      for (let x = Math.min(...xs) + 0.4; x < Math.max(...xs); x += 1) for (let z = Math.min(...zs) + 0.4; z < Math.max(...zs); z += 1) {
-        if (!pointInPoly(r.poly, x, z)) continue;
-        const v = look([x, r.y0 + 1.6, z]); n++;
-        if (!v.visible[gi]) bad.push(`caves not drawn from ${id} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
-      }
-    }
-    expect(n).toBeGreaterThan(60);
-    expect(bad).toEqual([]);
-  });
-
-  it('draws the same spaces from the same place at every distance (a graph, no distance or facing test)', () => {
-    const vis = makeVis();
-    const by = new Map<string, { drawn: string; label: string }>(), faults: string[] = [];
-    for (const { label, eye } of playerPoses()) {
-      cam.position = { x: eye[0], y: eye[1], z: eye[2] };
-      const st = vis.update(), key = [...st.from].sort().join('+'), drawn = [...st.drawn].sort().join(',');
-      const was = by.get(key);
-      if (!was) by.set(key, { drawn, label }); else if (was.drawn !== drawn) faults.push(`${key}: ${label} draws other spaces than ${was.label}`);
-    }
-    expect(by.has('courtyard') && by.has('outside') && by.has('gate-1')).toBe(true);
-    expect(faults).toEqual([]);
-    // from outdoors no room is drawn only because of a window: the rooms are those its doors and stairs reach
-    const doorsOnly = roomGraph(P), outdoor: string[] = [];
-    for (const [key, { drawn }] of by) {
-      if (!key.split('+').every((s) => s === 'courtyard' || s === 'outside')) continue;
-      const reach = drawnSpaces(doorsOnly, key.split('+'));
-      outdoor.push(...drawn.split(',').filter((s) => !reach.has(s)).map((s) => `${s} drawn from ${key} through a window`));
-    }
-    expect(outdoor).toEqual([]);
-    // what the graph is for: from the gate passage every room off the courtyard is drawn, from far outside too
-    const courtRooms = P.doors.filter((d) => d.spaces.includes('courtyard') && d.id !== 'gate-court').map((d) => d.spaces.find((s) => s !== 'courtyard')!);
-    const g = P.doors.find((d) => d.id === 'gate-court')!, q = on(g, 0, -(g.wall / 2 + 2));
-    cam.position = { x: q[0], y: g.centre[1] + 1.7, z: q[1] }; vis.update();
-    expect(vis.roomId).toBe('gate-1');
-    expect(courtRooms.filter((r) => !vis.isRoomVisible(r))).toEqual([]);
-  }, 300_000);
-
-  // Frustum culling by room (render/interiorLight.ts tagGroups, world/visibility.ts tagBoxes): each interior
-  // mesh is culled by its rooms' boxes instead of one sphere round its group. A cull layer may decide only
-  // how something is drawn: so every triangle of every mesh lies in one of the mesh's boxes (a frustum that
-  // reaches a triangle reaches its box), and from player poses no mesh with a vertex in view is culled.
-  it('culls interior meshes by bounds that hold every triangle of their rooms', () => {
-    baked(); // tags the triangles and gives each mesh its room boxes
-    const meshes: THREE.Mesh[] = [];
-    for (const g of inner.groups) g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
-    const outside: string[] = [], v = new THREE.Vector3();
-    // every mesh's vertices in world space, once (flat loops: the vertex checks below run ~4× faster under coverage)
-    const world = new Map(meshes.map((m) => {
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute, w = new Float64Array(pos.count * 3);
-      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); w[i * 3] = v.x; w[i * 3 + 1] = v.y; w[i * 3 + 2] = v.z; }
-      return [m, w];
-    }));
-    let boxes = 0;
-    for (const m of meshes) {
-      const bs = m.userData.roomBoxes as THREE.Box3[], w = world.get(m)!;
-      boxes += bs.length;
-      for (let i = 0; i < w.length / 3; i++) {
-        const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
-        let inside = false;
-        for (const b of bs) { // Box3.distanceToPoint < 1e-4
-          const dx = Math.max(b.min.x - x, 0, x - b.max.x), dy = Math.max(b.min.y - y, 0, y - b.max.y), dz = Math.max(b.min.z - z, 0, z - b.max.z);
-          if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 1e-4) { inside = true; break; }
-        }
-        if (!inside) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
-      }
-    }
-    expect(meshes.length).toBeGreaterThan(250);
-    expect(boxes).toBeGreaterThan(meshes.length); // most meshes hold several rooms
-    expect(outside).toEqual([]);
-    // from a sample of the player's poses, looking four ways: a mesh with a vertex in the view is not culled
-    const culledInView: string[] = [], camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.25, 30000), fr = new THREE.Frustum(), pv = new THREE.Matrix4();
-    let culled = 0;
-    playerPoses().filter((_, i) => i % 60 === 0).forEach(({ label, eye }) => {
-      for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
-        camera.position.set(...eye); camera.lookAt(eye[0] + dx, eye[1], eye[2] + dz); camera.updateMatrixWorld();
-        fr.setFromProjectionMatrix(pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-        for (const m of meshes) {
-          if (m.intersectsFrustum(fr)) continue;
-          culled++;
-          const w = world.get(m)!, pl = fr.planes;
-          for (let i = 0; i < w.length / 3; i++) { // Frustum.containsPoint: on the inner side of all six planes
-            const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
-            if (pl.every((q) => q.normal.x * x + q.normal.y * y + q.normal.z * z + q.constant >= 0)) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
-          }
-        }
-      }
-    });
-    expect(culled).toBeGreaterThan(0);
-    expect(culledInView).toEqual([]);
-  }, 300_000);
-
   // The shut leaf sits in its rebate a few cm off the jambs (doorGeom LIP − GROW). Past it, round the
   // leaf, the eye must meet something drawn with its own side (the castle, its own room's reveal, the
   // stop, the leaf): never only the far room's geometry, which the graph may leave out (the white outline
@@ -882,8 +613,9 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   // at the courtyard face. From both sides of every outdoor doorway, every ray down across the threshold
   // meets a floor, a riser or the ground: none reaches the sky.
   it('meets the ground at every outdoor doorway: no sky through the threshold', () => {
-    const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: inner.groundHoles.terrain });
-    const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain.getObjectByName('terrain-near')!) } } } as unknown as Builder);
+    // buildTerrain's own near grid (terrain-near, its holes as main.ts gives them): the real ground at every doorway
+    const terrain = new THREE.Mesh(nearGrid(undefined, { holes: inner.groundHoles.terrain }));
+    const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain) } } } as unknown as Builder);
     const faults: string[] = [], ray = new T3.Ray(), castle = castleSolid(), rooms = allGroupTris();
     let rays = 0;
     for (const d of P.doors) {
@@ -907,152 +639,6 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(rays).toBeGreaterThan(50_000);
     expect(faults).toEqual([]);
   }, 300_000);
-
-  // walking through a doorway: from 1 m before it to 1 m past it, in 5 cm steps, the rooms on both
-  // sides stay drawn at every step (inside the wall's thickness the camera is in neither room)
-  it('keeps both rooms of every doorway drawn while the camera walks through it', () => {
-    const vis = makeVis();
-    const faults = new Map<string, string>();
-    let poses = 0;
-    for (const d of P.doors) {
-      const rooms = d.spaces.filter((s) => !OUTDOOR.has(s) && s !== 'farbank');
-      if (!rooms.length) continue;
-      const reach = d.wall / 2 + 1;
-      for (let t = -reach; t <= reach + 1e-9; t += 0.05) for (const across of [0, -d.width / 4, d.width / 4]) {
-        const q = on(d, across, t);
-        cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
-        vis.update(); poses++;
-        for (const r of rooms) if (!vis.isRoomVisible(r) && !faults.has(`${d.id}:${r}`)) faults.set(`${d.id}:${r}`, `${d.id}: ${r} culled ${t.toFixed(2)} m through, ${across.toFixed(2)} m aside (camera room ${vis.roomId ?? 'none'})`);
-      }
-    }
-    expect(poses).toBeGreaterThan(1000);
-    expect([...faults.values()]).toEqual([]);
-  }, 120_000);
-
-  // Anders, 2026-11-08: looking down into a room through an open door it was dark; a few steps closer
-  // its torch suddenly lit. The rig lit the 8 fires nearest the camera, each only within 1.6 × its range
-  // (a wall torch: 11 m), so a drawn room further off had no firelight at all. Now each room's fires are
-  // its row of the fire table (light/roomLight.ts), set as main.ts sets it: walking up to and through
-  // every doorway, from 15 m out, every room the graph draws has all its torches, at the same
-  // candela, and the firelight its walls get is the same at every pose.
-  it('lights every drawn room with all its fires, the same from every pose', () => {
-    const vis = makeVis(), index = baked().roomIndex;
-    const groupOf = new Map<string, string>();
-    for (const g of inner.groups) for (const id of g.rooms) groupOf.set(id, g.key);
-    const fire = wallTorches(P, (id) => groupOf.get(id));
-    const table = new FireTable(1024), byRoom = new Map<string, LightEmitter[]>();
-    fire.holders.forEach((h, i) => { if (!byRoom.has(h.room)) byRoom.set(h.room, []); byRoom.get(h.room)!.push(fire.emitters[i]); });
-    for (const [id, es] of byRoom) table.set(index.get(id)!, roomFires(P.rooms.find((r) => r.id === id)!, es)); // as main.ts
-    // the firelight on a room's floor at its centre, as the shader sums it (flicker held: motion 0)
-    table.update(0, 0);
-    const centre = (id: string): V3 => { const r = P.rooms.find((x) => x.id === id)!; return [r.poly.reduce((a, p) => a + p[0], 0) / r.poly.length, r.y0 + 0.01, r.poly.reduce((a, p) => a + p[1], 0) / r.poly.length]; };
-    const lightOf = (id: string) => { const row = index.get(id)!; return fireAt(table.fires(row).map((f, k) => ({ ...f, candela: f.candela * table.flick[row * MAX_FIRES + k] })), centre(id), [0, 1, 0]); };
-    const ref = new Map([...byRoom.keys()].map((id) => [id, lightOf(id)]));
-    const faults = new Map<string, string>();
-    let poses = 0, checked = 0;
-    for (const d of P.doors) {
-      const reach = d.wall / 2 + 15;
-      for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
-        const q = on(d, 0, t);
-        cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
-        vis.update(); poses++;
-        for (const [id, es] of byRoom) {
-          if (!vis.isRoomVisible(id)) continue;
-          checked++;
-          const row = index.get(id)!;
-          if (table.fires(row).length !== es.length) faults.set(id, `${id}: ${table.fires(row).length} of ${es.length} fires lit from ${t.toFixed(2)} m off ${d.id}`);
-          else if (Math.abs(lightOf(id) - ref.get(id)!) > 1e-9) faults.set(id, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} from ${t.toFixed(2)} m off ${d.id}`);
-        }
-      }
-    }
-    expect(fire.emitters.length).toBeGreaterThan(10);
-    expect(poses).toBeGreaterThan(1000);
-    expect(checked).toBeGreaterThan(5000);
-    expect([...faults.values()]).toEqual([]);
-  }, 120_000);
-
-  // The water's reflection renders the whole scene again from below (1.1 M of 3.2 M triangles at the hall on
-  // Anders' Mac). It is skipped when no line of sight can reach the water (world/waterView.ts). From poses all
-  // over the island (outdoors round the castle, the courtyard, every room, the bookmarks) rays through a grid
-  // of pixels, against the castle, the interiors and the ground: wherever one meets the water first, the
-  // water must be drawn (so its reflection is rendered that frame: never missing, never stale). Indoors it
-  // is skipped from most rooms, and from the hall, chamber and tower room bookmarks.
-  it('draws the water wherever it can be seen, and skips it (and its reflection) where it cannot', () => {
-    const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: inner.groundHoles.terrain });
-    const occ = bvhOf([...castleSolid(), ...groupTris(inner.groups), ...trianglesOf({ bins: { t: { pos: meshPositions(terrain.getObjectByName('terrain-near')!) } } } as unknown as Builder)]);
-    const pc = new T3.PerspectiveCamera(55, 16 / 10, 0.25, 30000), water = { visible: true, name: 'water' };
-    const fr = new T3.Frustum(), m = new T3.Matrix4(), v = new T3.Vector3();
-    const frustum = () => {
-      pc.updateMatrixWorld();
-      fr.setFromProjectionMatrix(m.multiplyMatrices(pc.projectionMatrix, pc.matrixWorldInverse));
-      const corners = ([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).map(([x, y]) => v.set(x, y, 1).unproject(pc).sub(pc.position).normalize().toArray() as V3);
-      return { planes: fr.planes, corners };
-    };
-    const vis = createVisibility(pc, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs, scene: { getObjectByName: (n: string) => (n === 'water' ? water : undefined) }, frustum });
-    const ray = new T3.Ray(), nd = new T3.Vector3();
-    /** Does a pixel of the grid see water first (y 0 where the ground is below it)? */
-    const seesWater = (W = 32, H = 20) => {
-      for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
-        nd.set(((i + 0.5) / W) * 2 - 1, ((j + 0.5) / H) * 2 - 1, 1).unproject(pc).sub(pc.position).normalize();
-        if (nd.y >= 0 || pc.position.y <= 0) continue; // (under the water: the rock is between)
-        const t = -pc.position.y / nd.y, x = pc.position.x + nd.x * t, z = pc.position.z + nd.z * t;
-        if (heightAt(x, z) >= 0) continue;
-        ray.origin.copy(pc.position); ray.direction.copy(nd);
-        if (!occ.hits(ray, 0, t)) return true;
-      }
-      return false;
-    };
-    const misses: string[] = [], skipped: string[] = [];
-    let poses = 0, seen = 0, indoor = 0;
-    const look = (label: string, eye: V3, yaw: number, pitch: number, isIndoor: boolean) => {
-      pc.position.set(...eye);
-      pc.lookAt(eye[0] + Math.cos(yaw) * Math.cos(pitch), eye[1] + Math.sin(pitch), eye[2] + Math.sin(yaw) * Math.cos(pitch));
-      water.visible = true;
-      vis.update(); poses++;
-      const truth = seesWater();
-      if (truth) seen++;
-      if (truth && !water.visible) misses.push(`${label}, yaw ${yaw.toFixed(2)} pitch ${pitch.toFixed(2)}`);
-      if (isIndoor) { indoor++; if (!water.visible) skipped.push(label); }
-      return water.visible;
-    };
-    const yaws = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => (k * Math.PI) / 4);
-    // outdoors, 45 m and 80 m from the castle's centre, level, down and up
-    for (const R of [45, 80]) for (const a of yaws) {
-      const x = Math.cos(a + 0.2) * R, z = Math.sin(a + 0.2) * R, eye: V3 = [x, Math.max(heightAt(x, z), 0) + 1.7, z];
-      for (const yaw of yaws) for (const pitch of [-0.3, 0, 0.35]) look(`outside at (${x.toFixed(0)}, ${z.toFixed(0)})`, eye, yaw, pitch, false);
-    }
-    // the courtyard, on a 6 m grid
-    const xs = court.map((q) => q[0]), zs = court.map((q) => q[1]);
-    for (let x = Math.min(...xs) + 2; x < Math.max(...xs); x += 6) for (let z = Math.min(...zs) + 2; z < Math.max(...zs); z += 6) {
-      if (!inCourt(x, z)) continue;
-      for (const yaw of yaws) for (const pitch of [0, 0.3]) look(`courtyard (${x.toFixed(0)}, ${z.toFixed(0)})`, [x, PAVE_Y + 1.7, z], yaw, pitch, false);
-    }
-    // every room but the caves, from its middle, four ways and a little down; with the doors shut, then
-    // with every leaf open (the rays below see through leaves either way: they are not in the occluder)
-    for (const open of [false, true]) {
-      for (const d of P.doors) vis.setDoorOpen(d.id, open);
-      for (const r of P.rooms) {
-        if (r.zone === CAVE_ZONE) continue;
-        const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
-        if (!pointInPoly(r.poly, c[0], c[1])) continue;
-        for (const yaw of [0, 1, 2, 3].map((k) => (k * Math.PI) / 2)) look(`${r.id}${open ? ', doors open' : ''}`, [c[0], r.y0 + 1.6, c[1]], yaw, -0.15, true);
-      }
-    }
-    for (const d of P.doors) vis.setDoorOpen(d.id, false);
-    // the bookmarks
-    const marks = interiorViews(P).filter((w) => ['hall', 'chamber', 'towerroom'].includes(w.name));
-    const markShown = marks.map((w) => {
-      const d = [w.target[0] - w.pos[0], w.target[1] - w.pos[1], w.target[2] - w.pos[2]], l = Math.hypot(d[0], d[2]);
-      const shown = look(w.name, w.pos as V3, Math.atan2(d[2], d[0]), Math.atan2(d[1], l), true);
-      return [w.name, shown, seesWater(320, 200)] as const;
-    });
-    expect(poses).toBeGreaterThan(1000);
-    expect(seen).toBeGreaterThan(200);
-    expect(misses.slice(0, 10)).toEqual([]);
-    expect(skipped.length).toBeGreaterThan(indoor / 2);
-    // none of the three sees the water (at 320 × 200 rays), and none draws it
-    expect(markShown).toEqual([['hall', false, false], ['chamber', false, false], ['towerroom', false, false]]);
-  }, 600_000);
 
   // Anders, 2026-11-08 (live, WebGPU): the reveal of a courtyard door rendered pitch black beside the daylit
   // wall. Its outer half was tagged to the room behind, so it got that room's daylight through the shut

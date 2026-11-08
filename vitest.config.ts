@@ -1,19 +1,40 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 import { BaseSequencer, type TestSpecification } from 'vitest/node';
+import { DOM_TESTS } from './tests/dom-files.ts';
 
-// The longest files (CI, 4 workers, under coverage: 35-120 s each, most others under 25 s) start first, so none
-// of them is left running alone at the end. Only the order changes; a stale name just sorts as before.
-const LONGEST = ['world', 'doorswing', 'interior', 'stairwalk', 'props-stream', 'doors'].map((n) => `/tests/${n}.test.ts`);
+// Seconds per file under coverage on one CI runner (EPYC 9V45, the whole suite on 4 workers; world and
+// world-views split from one 63 s file), only to order and split the run: the longest files start first, so
+// none is left running alone at the end, and CI's two shards (--shard=1/2, 2/2) get about the same work. A file
+// not listed counts 0.5 s; a stale entry only unbalances the shards, it never drops or repeats a file.
+const SECONDS: Record<string, number> = {
+  world: 36, 'world-views': 43, interior: 33, doorswing: 27, 'props-stream': 17.5, stairwalk: 15.3, island: 15.2,
+  'props-zfight': 13.7, 'props-dress': 13.6, sunLeak: 13.1, 'stones-offthread': 12.5, openings: 11.4, keypaths: 11.1,
+  doors: 10.6, groundInRooms: 10.5, 'props-kit': 10.3, 'light/roomLight': 9.7, caves: 8.6, interiorLightShell: 7.6,
+  texgen: 6.5, torches: 6.4, paving: 5.5, stairs: 3.9, terrain: 3.1, 'props-render': 2.8, doorLight: 2.7,
+  'castle-stones': 2.3, vegetation: 2.2, rays: 2.1, batter: 1.3, 'props-place': 1.1,
+};
+const seconds = (f: TestSpecification) => SECONDS[f.moduleId.replace(/^.*\/tests\//, '').replace(/\.test\.ts$/, '')] ?? 0.5;
 class LongestFirst extends BaseSequencer {
   async sort(files: TestSpecification[]) {
-    const rank = (f: TestSpecification) => { const i = LONGEST.findIndex((n) => f.moduleId.endsWith(n)); return i < 0 ? LONGEST.length : i; };
-    return (await super.sort(files)).map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map(({ f }) => f);
+    return (await super.sort(files)).map((f, i) => ({ f, i })).sort((a, b) => seconds(b.f) - seconds(a.f) || a.i - b.i).map(({ f }) => f);
+  }
+  /** Longest first, each file to the shard with the least work so far (vitest's own split is by path hash). */
+  async shard(files: TestSpecification[]) {
+    const { index, count } = this.ctx.config.shard!, load: number[] = new Array(count).fill(0), mine: TestSpecification[] = [];
+    for (const f of [...files].sort((a, b) => seconds(b) - seconds(a) || (a.moduleId < b.moduleId ? -1 : 1))) {
+      const k = load.indexOf(Math.min(...load));
+      load[k] += seconds(f);
+      if (k === index - 1) mine.push(f);
+    }
+    return mine;
   }
 }
+// A shard holds half the suite, so half the coverage: the thresholds are checked on the merged report
+// (vitest --merge-reports --coverage), never per shard.
+const SHARD = process.argv.some((a) => a.startsWith('--shard'));
 
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts'],
     // generation tests build real terrain and vegetation; give them room on a loaded machine
     testTimeout: 30000,
     // worker threads on all four cores of the CI runner, longest files first (vitest's default is forks on
@@ -21,6 +42,15 @@ export default defineConfig({
     pool: 'threads',
     maxWorkers: '100%',
     sequence: { sequencer: LongestFirst },
+    // The node files share the modules they import within a worker (isolate: false: about 18 % less time on the
+    // same runner, 84 s against 100-107 s, mostly imports and the generators' memos not made again per file).
+    // Safe while no module keeps state one file can leave for the next: tests/isolation.test.ts checks every
+    // module-level variable, Map, Set and array in src and the test helpers, and that no node test mocks, stubs
+    // or fakes timers. The DOM files (happy-dom) keep their own module graph.
+    projects: [
+      { extends: true, test: { name: 'node', include: ['tests/**/*.test.ts'], exclude: [...configDefaults.exclude, ...DOM_TESTS], isolate: false } },
+      { extends: true, test: { name: 'dom', include: DOM_TESTS } },
+    ],
     coverage: {
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
@@ -29,7 +59,7 @@ export default defineConfig({
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts',
         'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts', 'src/world/visibility.ts', 'src/world/waterView.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts', 'src/render/drawCount.ts'],
       exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/castle/stones/layout.worker.ts', 'src/props/furnish.worker.ts', 'src/props/preview.ts', 'src/light/preview.ts', 'src/castle/interior/types.ts'],
-      thresholds: {
+      thresholds: SHARD ? undefined : {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         'src/props/**': { lines: 99, functions: 100, branches: 95, statements: 99 },
         'src/light/**': { lines: 100, functions: 100, branches: 95, statements: 100 },

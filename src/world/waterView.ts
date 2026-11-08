@@ -3,7 +3,7 @@
 // rendered, when no line of sight from the camera can reach it. Only how the water is drawn: the decision
 // is conservative (castle walls are not counted as cover), so wherever water could be seen it is drawn,
 // and the reflector renders afresh in the first frame it is drawn again (three's ReflectorNode updates
-// before the frame that draws it), so it never shows a stale reflection. tests/world.test.ts checks it
+// before the frame that draws it), so it never shows a stale reflection. tests/world-views.test.ts checks it
 // against rays through every pixel of poses all over the castle.
 //
 // - Outdoors (the camera's spaces include 'outside', or it is above the roofs): the water lies at y 0, so
@@ -38,11 +38,11 @@ const LEVEL = 0;
 
 /** Does the line from p along unit d meet water before the ground (within `reach` m)? Steps grow with distance. */
 export function reachesWater(p: V3, d: V3, ground: Ground, reach = 600): boolean {
-  for (let t = 0; t <= reach; t += Math.max(0.25, t * 0.04)) {
+  if (d[1] >= 0 && p[1] > LEVEL + 0.05) return false; // level or rising from above the water: never comes down to it
+  for (let t = 0; t <= reach; t += Math.max(1, t * 0.08)) {
     const x = p[0] + d[0] * t, y = p[1] + d[1] * t, z = p[2] + d[2] * t, g = ground(x, z);
     if (g > y + 0.3) return false; // under the ground (with a margin: the terrain mesh sags between its vertices)
     if (y <= LEVEL + 0.05 && g < LEVEL) return true;
-    if (d[1] >= 0 && y > LEVEL + 0.05) { if (t > 60) return false; } // level or rising, well clear of the water
   }
   return false;
 }

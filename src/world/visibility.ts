@@ -218,6 +218,13 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
   let last: VisResult = { room: -1, inside: false, from: [], drawn: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), shown: new Set([COURT, OUTSIDE, ...plan.rooms.map((r) => r.id)]), deep: false, underground: false, visible: groups.map(() => true) };
   const dynamic = new Set<{ obj: { visible: boolean }; roomOf: () => SpaceId | null }>();
   const opened = new Set<string>(), isOpen = (id: string) => opened.has(id);
+  // the openings a line of sight can pass change only with the camera's spaces and the doors: kept between frames
+  let opsKey = '', ops: Opening[] = [];
+  const openingsFrom = (from: SpaceId[]) => {
+    const key = `${from.join()}|${[...opened].join()}`;
+    if (key !== opsKey) { opsKey = key; ops = outsideOpenings(plan, opts.apertures ?? [], opts.court ?? (() => false), sightSpaces(graph, from, isOpen), isOpen); }
+    return ops;
+  };
   return {
     graph,
     /** A leaf swung open (any bit) opens its doorway in the graph; shut, it closes it again. */
@@ -246,7 +253,8 @@ export function createVisibility(camera: CamLike, groups: InteriorGroup[], plan:
       }
       // the water (and its reflection, a second render of the scene) only when a line of sight can reach it
       if (water?.visible && opts.frustum) {
-        water.visible = waterInView({ eye: [p.x, p.y, p.z], ...opts.frustum(), outdoors: last.from.includes(OUTSIDE), openings: outsideOpenings(plan, opts.apertures ?? [], opts.court ?? (() => false), sightSpaces(graph, last.from, isOpen), isOpen) }, opts.ground ?? (() => -Infinity));
+        const outdoors = last.from.includes(OUTSIDE);
+        water.visible = waterInView({ eye: [p.x, p.y, p.z], ...opts.frustum(), outdoors, openings: outdoors ? [] : openingsFrom(last.from) }, opts.ground ?? (() => -Infinity));
       }
       for (const e of dynamic) e.obj.visible = spaceShown(last, e.roomOf());
       return last;

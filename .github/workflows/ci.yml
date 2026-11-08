@@ -1,7 +1,9 @@
 name: CI
 
-# One fast job on pull requests: typecheck, tests with coverage thresholds, production build.
-# Keep the whole run under ~1-2 minutes: one OS, one Node version, no browser matrix.
+# Pull requests: typecheck, tests with coverage thresholds, production build, in one workflow on one OS and one
+# Node version, no browser matrix. For wall time (~2 minutes) the tests run as two shards side by side (balanced
+# by vitest.config.ts SECONDS), the build beside them, and one job merges the shards' reports and checks the
+# coverage thresholds on the merged coverage of the whole suite.
 on:
   pull_request:
   workflow_dispatch:
@@ -11,7 +13,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx vitest run --coverage --shard=${{ matrix.shard }}/2 --reporter=default --reporter=blob
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blob-${{ matrix.shard }}
+          path: .vitest/blob/
+          include-hidden-files: true
+          overwrite: true
+          retention-days: 1
+
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -21,5 +46,23 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm run coverage
       - run: npm run build
+
+  coverage:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: blob-*
+          path: .vitest/blob
+          merge-multiple: true
+      # every test file's results once, and the thresholds (vitest.config.ts) on the whole suite's coverage
+      - run: npx vitest run --merge-reports --coverage
