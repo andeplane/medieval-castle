@@ -99,7 +99,9 @@ class InteriorEnvNode extends LightingNode {
   setup(builder: THREE.NodeBuilder) {
     const ctx = builder.context as unknown as Record<'irradiance' | 'radiance' | 'iblIrradiance', THREE.Node & { addAssign(n: unknown): void }>;
     const fire = isolate(this.fire) as unknown as THREE.Node<'vec3'>;
-    ctx.irradiance.addAssign((this.day as THREE.Node<'vec3'>).add(fire));
+    // as three's EnvironmentNode does: iblIrradiance feeds both the diffuse and the multi-scattered
+    // specular (so it must not also go into `irradiance`, which would count the fire twice)
+    ctx.irradiance.addAssign(this.day);
     ctx.radiance.addAssign(fire.mul(1 / Math.PI));
     ctx.iblIrradiance.addAssign(fire);
     return null;
