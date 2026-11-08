@@ -9,7 +9,9 @@ import { ATLAS } from '../src/props/geom';
 import { mulberry32 } from '../src/core/rng';
 import { flat } from '../src/props/dress';
 
-const SEEDS = Array.from({ length: 16 }, (_, i) => i);
+// Seed 234 is a deer hide with a marching-squares saddle cell (two opposite grid corners inside the outline, the
+// other two outside), which the first 16 seeds never produce; it keeps that branch of the mesh builder covered.
+const SEEDS = [...Array.from({ length: 16 }, (_, i) => i), 234];
 
 describe('the skin rug', () => {
   it('lies flat on the floor: a thin edge, a little fur, nothing floating or below the floor', () => {
