@@ -312,9 +312,12 @@ describe('leaf geometry', () => {
       const tris: number[][] = [];
       for (let i = 0; i < g.wood.pos.length; i += 9) if (Math.abs(g.wood.nor[i + 2]) > 0.3) tris.push([0, 1, 3, 4, 6, 7].map((k) => g.wood.pos[i + k]));
       const topO = leafHead(cls), top = (x: number) => topO(cls.sOff + x) - cls.sill;
-      for (let x = 0.03; x < g.width - 0.03; x += 0.0013) for (let y = 0.05; y < Math.min(top(x - 0.03), top(x), top(x + 0.03)) - 0.03; y += 0.37) {
+      // the faces whose x-range holds x (a point outside a face's bounds is never inside it), once per column of
+      // points; a face with no area passes `covered` along its whole line, so it stays in every column
+      const xr = tris.map((t) => ((t[2] - t[0]) * (t[5] - t[1]) - (t[4] - t[0]) * (t[3] - t[1]) === 0 ? [-Infinity, Infinity] : [Math.min(t[0], t[2], t[4]) - 1e-9, Math.max(t[0], t[2], t[4]) + 1e-9]));
+      for (let x = 0.03; x < g.width - 0.03; x += 0.0013) for (let y = 0.05, col = tris.filter((_, i) => xr[i][0] <= x && x <= xr[i][1]); y < Math.min(top(x - 0.03), top(x), top(x + 0.03)) - 0.03; y += 0.37) {
         checked++;
-        if (!covered(tris, x, y)) { holes++; if (where.length < 5) where.push(`${pl.classKey} x=${x.toFixed(3)} y=${y.toFixed(2)}`); }
+        if (!covered(col, x, y)) { holes++; if (where.length < 5) where.push(`${pl.classKey} x=${x.toFixed(3)} y=${y.toFixed(2)}`); }
       }
     }
     expect(seen.size).toBeGreaterThan(3);
