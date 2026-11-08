@@ -638,7 +638,7 @@ function buildStream(T: Terrain, waterMat: THREE.Material | null) {
   return { ground: g, water };
 }
 
-const NEAR_TILES = 6, FAR_SECTORS = 16, FAR_BANDS = 3;
+const NEAR_TILES = 6, FAR_SECTORS = 8, FAR_BANDS = 3; // 6 x 6 and 8 x 3: as few draws as cull nearly as well (finer tiles saved < 10%)
 /** A layer no camera renders: the whole near and far meshes sit on it, kept for whoever reads them by name. */
 export const UNDRAWN_LAYER = 31;
 

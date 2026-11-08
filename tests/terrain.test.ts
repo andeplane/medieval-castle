@@ -233,7 +233,7 @@ describe('meshes', () => {
       expect(whole.layers.isEnabled(0)).toBe(false);
       expect(whole.layers.isEnabled(UNDRAWN_LAYER)).toBe(true);
       const tiles = g.children.filter((c) => c.name.startsWith(name + '-')) as THREE.Mesh[];
-      expect(tiles.length).toBeGreaterThan(name === 'terrain-near' ? 30 : 30);
+      expect(tiles.length).toBeGreaterThan(name === 'terrain-near' ? 30 : 20);
       const tri = (a: ArrayLike<number>, t: number) => [a[t], a[t + 1], a[t + 2]].join(',');
       const want = new Set<string>(), idx = whole.geometry.index!.array;
       for (let t = 0; t < idx.length; t += 3) want.add(tri(idx, t));
