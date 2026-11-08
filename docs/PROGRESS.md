@@ -1,5 +1,43 @@
 # Progress
 
+## 2026-11-08: firelight washed out near hearths; rooms lit only once you come close; black courtyard door reveals (branch `claude/project-thread-ns4g2v-glow`)
+
+Three defects from Anders' Mac (live, WebGPU), all in the interior light.
+
+**1. Hearths and studies washed out (`?furniture=1`).** Measured on his Mac (Playwright, the scene pass's HDR target read back, read-only; luminance over every second pixel):
+
+| pose | HDR mean | mean log2 | p99 | max | exposure | pixels > 1 after exposure |
+|---|---|---|---|---|---|---|
+| hall N1-2, 1.5 m from the hooded hearth, furnished | 1.06 | −1.28 | 9.8 | 11.2 | 0.72 (floor) | 21 % |
+| same pose, no furniture (one wall torch) | 0.065 | −4.29 | 0.41 | 1.49 | 1.63 | 0.3 % |
+| study N2-0, 1.5 m from the chimneypiece | 1.13 | −0.85 | 6.6 | 249 | 0.72 (floor) | 23 % |
+| study N2-0, room view | 0.30 | −3.31 | 3.6 | 112 | 0.81 | 4.6 % |
+
+Mean colour at the hall hearth (linear) 2.26 / 0.78 / 0.21: the fire colour (1600 K seen as ≈ 2700 K) over everything, clipped. Causes, in order of weight:
+- **The hearth light.** 14 cd per unit: the hooded hearth (3.5) was 49 cd with a 16.8 m range, a chimneypiece (2.2) 31 cd and 13.3 m, against the wall torch the look was tuned for (22.5 cd, 6.9 m). The emitter stands 0.35 m in front of the firebox, so the whole chimneypiece face was ≈ 0.4 m from a 31–49 cd point light (≈ 190–300 candela/m²).
+- **Fires add up, through walls.** A furnished room has 4–9 fires (hearth, candelabra, sconces, lamps). Point lights know no rooms and cast no shadows, so the neighbours' fires came through the walls too: at the study hearth the rig's 8 lights were the room's own hearth (28.8 cd at 1.7 m), N2-1's hearth through the wall (32.4 cd at 4.1 m), a third hearth 10.9 m off, and five candles and lamps. Over the castle a furnished room's fires gave 4–9 × the average light of a torch-lit room.
+- **Exposure could not come down.** Eye adaptation never went below 0.72 (0 stops): at the hall hearth it wanted −1.5 stops and stayed at the floor.
+- Not the tone mapping or grade: the post grade is the outdoor one (saturation 0.88, gentle S-curve); torch rooms under the same grade read grey and warm.
+
+**2. A room seen from afar was dark until you came close.** The rig lit the 8 fires nearest the camera, each only within 1.6 × its range (a wall torch: 11 m), and faded it in over 0.35 s. So a drawn room further off had no firelight, and its torch "switched on" as you walked up. The same doorway walk as the new test, run against the old rig: 33 torch-lit rooms drawn at some pose with none of their torches lit (e.g. gate-0, gate-1, tunnel-1…5 from 15 m off the sally-port grille).
+
+**3. Black reveals of courtyard doors** (eye (10.5, 3.8, −1.5) → (14.6, 3.6, −4.1)). The outer half of an outdoor doorway is interior stone in the `doorways:outdoor` group, on the underground material set (no sun), tagged to the room behind (`court>E0-2` → E0-2). It got that room's daylight through the shut door (nothing) and the 0.145 floor, under the courtyard's 0.72 exposure: black.
+
+Fix (`src/light/roomLight.ts`, `render/interiorShader.ts fireIrradiance`, `render/interiorLight.ts`):
+- **Firelight by room.** Each room's fires go into its row of a fire table (`FireTable`: position, range, colour × candela, soft radius; one flicker value per fire, from the same seeds as the flame sprites). The interior shader sums the fragment's own room's fires, every one, per pixel: candela / (d² + soft²), faded to 0 at the range, × cos, × flicker. It enters the lighting as image-based irradiance (diffuse, and a rough reflection for brass and iron). No point lights indoors any more, so nothing is picked by distance, nothing fades in, and no fire shines through a wall. Rows come and go with the room: wall torches at load, furniture fires when a room streams in (`roomFires.ts`, the rooms the room graph draws).
+- Door leaves have no room tag: they take the room they face from a room grid (`interiorMath.roomGridFor / fillRoomGrid`, 0.5 × 1 × 0.5 m cells, 0.3 m out along the normal).
+- **Caps per room** (`roomFires`): the brightest `MAX_FIRES` = 12 (the busiest room has 9), dimmed together so no point ≥ 0.3 m from a flame gets more than `FIRE_PEAK` = 150 (a wall torch's own hot spot is 147) and the room's surfaces no more than `FIRE_MEAN` = 4.5 on average (4π × candela / surface; the brightest torch-lit room, a tunnel, is 4.4; an undercroft 1–2.4). Torch-lit rooms are never dimmed.
+- **Profiles** (`flicker.ts`): hearth 14 → 6 cd per unit, range 9 → 6 m; candle 3.6 → 2.5 cd; a `soft` radius per kind (candle 0.12, lantern 0.15, torch 0.25, brazier 0.45, hearth 0.9 m), so nothing next to a fire gets more than candela / soft². Range multiplier capped at 1.5 (was 2). Furnished rooms now average 1.5 (max 4.1) against the torch-lit undercrofts' 1–2.4 (was 3–9 with the old profiles).
+- **Exposure** may close one stop below 0.72 indoors (`EXPOSURE.minInside` = −1), next to a fire. Outdoors it still never goes below 0.72.
+- **Outdoor reveals** (`interiorMath.outdoorRevealTest`, `OUTDOOR_TAG` = −2): interior stone from the shut leaf (or the mid plane, with no leaf) out to the courtyard face, and the stop facing out, is tagged to the sky. The shader gives it the courtyard's ambient (`InteriorLight.outdoor`: the hemisphere light plus the sky environment, sky colour up and ground colour down, scaled with the sun's height as the bake does).
+- `setDynamicLights` is gone from the interior materials (no users).
+
+Tests:
+- `tests/light/roomLight.test.ts`: the falloff the shader uses, room samples, one scale per room, the brightest 12 kept, the table packing and flicker in step with the flames. **Whole castle**: every room, furnished and torch-lit, fits the shader (≤ 12 fires) and after `roomFires` stays under both caps; rooms over a cap are exactly the ones dimmed; torch-lit rooms are untouched.
+- `tests/world.test.ts` "lights every drawn room with all its fires, the same from every pose": walking up to and through every doorway from 15 m out (`createVisibility` as main.ts), each drawn room has all its torches at the same candela and the same firelight on its floor at every pose. Against the old rig the same walk finds 33 rooms dark at some pose.
+- `tests/world.test.ts` "lights every outdoor doorway from the sky up to its leaf": over every outdoor door of the castle, the stone between the leaf and the courtyard is `OUTDOOR_TAG` and the stone behind the leaf is its room's. Fails without the fix (`court>N0-4: outer reveal tagged 4`, …).
+- `interiorMath`: room grid, outdoor reveal test (leaf and no leaf, both orientations), indoor exposure floor. `interiorLight`: fire textures sync (rows only when changed, flicker every frame), the bake fills the grid, the lighting node adds to irradiance / radiance / iblIrradiance.
+
 ## 2026-11-07: why the Mac counts 4.6x the draw calls; door instances grouped by geometry (branch `claude/project-thread-ns4g2v-dc`)
 
 Anders' Mac (WebGPU, live a6364bd) shows 1298 draw calls at eye (11.6, 4.3, -1.2) → (14.2, 4.0, -3.3) (doors shut, no furniture, 15 groups shown); headless WebGL2 shows 279. Measured on his Mac (Playwright, the backend's `draw` wrapped for one live frame, read-only):
