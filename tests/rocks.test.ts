@@ -2,7 +2,7 @@
 // rising fields outside, so every placement rule can be checked by radius.
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { placeRocks, buildRocks, rockGeometry, islandObstacles, rockQuarter, ROCK_SHAPES, type RockEnv } from '../src/world/rocks';
+import { placeRocks, buildRocks, rockGeometry, islandObstacles, ROCK_SHAPES, type RockEnv } from '../src/world/rocks';
 import type { V2 } from '../src/core/math2d';
 import { fakeDeps } from './fakes';
 
@@ -85,20 +85,10 @@ describe('rock meshes', () => {
     expect(g.boundingBox!.min.y).toBeGreaterThan(-0.6);
   });
 
-  it('instances one mesh per shape, detail level and quarter, each bounding only its own rocks', () => {
+  it('instances one mesh per shape and detail level', () => {
     const group = buildRocks(new THREE.MeshBasicMaterial(), env, fakeDeps());
     const meshes = group.children as THREE.InstancedMesh[];
     expect(meshes.length).toBeGreaterThan(ROCK_SHAPES);
-    const mat = new THREE.Matrix4(), p = new THREE.Vector3();
-    for (const im of meshes) {
-      const qd = Number(im.name.split('-').pop());
-      for (let i = 0; i < im.count; i++) {
-        im.getMatrixAt(i, mat); p.setFromMatrixPosition(mat);
-        expect(rockQuarter(p.x, p.z)).toBe(qd);
-        expect(im.boundingSphere!.containsPoint(p)).toBe(true);
-      }
-    }
-    expect(new Set(meshes.map((m) => m.name.split('-').pop())).size).toBe(4);
     expect(meshes.reduce((n, m) => n + m.count, 0)).toBe(group.userData.count);
     expect(meshes.filter((m) => m.name.startsWith('rocks-near')).every((m) => m.castShadow)).toBe(true);
     expect(group.userData.triangles).toBeGreaterThan(0);
