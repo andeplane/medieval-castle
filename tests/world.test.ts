@@ -43,6 +43,7 @@ import { buildTerrain } from '../src/world/terrain';
 import { PAVE_Y } from '../src/castle/paving';
 import { WINGS, TOWERS } from '../src/castle/spec';
 import { outerFootprint } from '../src/castle/interior/plan';
+import { caveSpan, caveWalk, CAVE_ZONE } from '../src/castle/interior/caves';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
 import { wallTorches } from '../src/render/interiorFire';
@@ -433,6 +434,7 @@ function shellTriangles(groups: InteriorGroup[]): { p: V3[]; n: V3; c?: V3 }[] {
 function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
   const bad: string[] = [];
   for (const d of P.doors) {
+    if (P.caves?.openings.includes(d.id)) continue; // a natural opening in the caves has no reveal: the rock runs through
     const hw = d.width / 2 + LIP + 0.02, top = bbox(outlineGrown(P, d, LIP)).y1 + 0.02, R = hw + d.wall;
     for (const t of tris) {
       if (t.c && Math.hypot(t.c[0] - d.centre[0], t.c[2] - d.centre[2]) > R + d.wall) continue; // far from this door
@@ -599,15 +601,19 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     for (let x = Math.min(...xs) + 1; x < Math.max(...xs); x += 3) for (let z = Math.min(...zs) + 1; z < Math.max(...zs); z += 3) {
       if (outdoors('courtyard', [x, z])) poses.push({ label: `the courtyard at (${x.toFixed(1)}, ${z.toFixed(1)})`, eye: [x, PAVE_Y + 1.6, z] });
     }
+    // a cave room's floor slopes and dips: stand on it where you are (caves.ts caveSpan), not at its lowest point
+    const floorAt = (r: { id: string; zone: string; y0: number }, q: V2, y: number) => (r.zone === CAVE_ZONE ? caveSpan(P.caves!, r.id, q)!.floor : y);
     for (const r of P.rooms) {
       const c = r.poly.reduce((a, q) => [a[0] + q[0] / r.poly.length, a[1] + q[1] / r.poly.length], [0, 0]);
-      if (pointInPoly(r.poly, c[0], c[1])) poses.push({ label: `the middle of ${r.id}`, eye: [c[0], r.y0 + 1.6, c[1]] });
+      if (pointInPoly(r.poly, c[0], c[1])) poses.push({ label: `the middle of ${r.id}`, eye: [c[0], floorAt(r, c, r.y0) + 1.6, c[1]] });
     }
     const rooms = new Map(P.rooms.map((r) => [r.id, r]));
     for (const d of P.doors) for (const k of [0, 1]) {
       const r = rooms.get(d.spaces[k]), q = on(d, 0, (k === 0 ? -1 : 1) * (d.wall / 2 + 1.5));
-      if (r && r.zone !== 'tunnel' && pointInPoly(r.poly, q[0], q[1])) poses.push({ label: `${r.id}, 1.5 m in front of ${d.id}`, eye: [q[0], d.centre[1] + 1.6, q[1]] });
+      if (r && r.zone !== 'tunnel' && pointInPoly(r.poly, q[0], q[1])) poses.push({ label: `${r.id}, 1.5 m in front of ${d.id}`, eye: [q[0], floorAt(r, q, d.centre[1]) + 1.6, q[1]] });
     }
+    // and along every cave room's walking line, from one end to the other
+    for (const r of P.rooms) if (r.zone === CAVE_ZONE) for (const w of caveWalk(P.caves!, r.id)) poses.push({ label: `${r.id} on its walk at (${w[0].toFixed(1)}, ${w[2].toFixed(1)})`, eye: [w[0], w[1] + 1.6, w[2]] });
     const gm = P.doors.find((d) => d.id === 'gate-main')!, gc = P.doors.find((d) => d.id === 'gate-court')!;
     for (let f = 0; f <= 1 + 1e-9; f += 0.05) {
       const x = gm.centre[0] + (gc.centre[0] - gm.centre[0]) * f, z = gm.centre[2] + (gc.centre[2] - gm.centre[2]) * f;
@@ -664,6 +670,36 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(seen).toBeGreaterThan(600); // 876 measured: a sample of the 6822 openings seen from every pose
     expect([...faults.values()]).toEqual([]);
   }, 300_000);
+
+  // The caves (castle/interior/caves.ts) are rooms of the same graph: from anywhere in them the whole cave
+  // group is drawn (and from the great cavern, deep under the moat, the outdoors is not), and from anywhere in the two cellars that open into
+  // them, near their doorway or across the room, the cave group is drawn too: graph steps, never distance.
+  it('draws the caves by the room graph, from every point of their walks and of the cellars they open into', () => {
+    const vis = makeVis(), caves = new Set(P.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id));
+    const gi = inner.groups.findIndex((g) => g.rooms.some((r) => caves.has(r)));
+    expect(caves.size).toBeGreaterThanOrEqual(12);
+    expect(inner.groups[gi].rooms.every((r) => caves.has(r))).toBe(true);
+    const look = (eye: V3) => { cam.position = { x: eye[0], y: eye[1], z: eye[2] }; return vis.update(); };
+    const bad: string[] = [];
+    let n = 0;
+    for (const id of caves) for (const w of caveWalk(P.caves!, id)) {
+      const v = look([w[0], w[1] + 1.6, w[2]]); n++;
+      if (!v.from.some((s) => caves.has(s))) bad.push(`${id} at (${w[0].toFixed(1)}, ${w[2].toFixed(1)}): camera in ${v.from.join(', ')}`);
+      if (!v.visible[gi]) bad.push(`${id} at (${w[0].toFixed(1)}, ${w[2].toFixed(1)}): the cave group is not drawn`);
+      if (id === 'cave-cavern' && !v.underground) bad.push('the outdoors is drawn from the great cavern');
+      for (const c of caves) if (!v.drawn.has(c)) { bad.push(`${c} not drawn from ${id}`); break; }
+    }
+    for (const id of ['N-c1', 'great-c']) {
+      const r = P.rooms.find((x) => x.id === id)!, xs = r.poly.map((q) => q[0]), zs = r.poly.map((q) => q[1]);
+      for (let x = Math.min(...xs) + 0.4; x < Math.max(...xs); x += 1) for (let z = Math.min(...zs) + 0.4; z < Math.max(...zs); z += 1) {
+        if (!pointInPoly(r.poly, x, z)) continue;
+        const v = look([x, r.y0 + 1.6, z]); n++;
+        if (!v.visible[gi]) bad.push(`caves not drawn from ${id} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
+      }
+    }
+    expect(n).toBeGreaterThan(60);
+    expect(bad).toEqual([]);
+  });
 
   it('draws the same spaces from the same place at every distance (a graph, no distance or facing test)', () => {
     const vis = makeVis();

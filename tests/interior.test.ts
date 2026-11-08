@@ -9,7 +9,7 @@ import { buildShell, OUTDOOR_REVEALS, type ShellResult } from '../src/castle/int
 import { buildInterior } from '../src/castle/interior/index';
 import { interiorViews } from '../src/camera/interiorViews';
 import { buildCastle } from '../src/castle/castle';
-import { Builder, type MatKey } from '../src/castle/builder';
+import { Builder, type MatKey, type BinKey } from '../src/castle/builder';
 import { gatehouseFrame, islandOutline } from '../src/castle/layout';
 import { GATEHOUSE } from '../src/castle/spec';
 import { pointInPoly, add, scale, sub, norm, type V2 } from '../src/core/math2d';
@@ -114,7 +114,7 @@ describe('interior plan', () => {
   it('keeps rooms inside the footprint and apart', () => {
     const foot = outerFootprint(), isl = islandOutline();
     for (const r of P.rooms) {
-      if (r.zone === 'tunnel') continue;
+      if (r.zone === 'tunnel' || r.zone === 'cave') continue; // underground: the moat tunnel and the caves run under the moat
       for (const p of r.poly) {
         expect(foot.some((f) => pointInPoly(f, p[0], p[1]))).toBe(true);
         expect(pointInPoly(isl, p[0], p[1])).toBe(true);
@@ -304,7 +304,7 @@ describe('interior shell', () => {
 
 describe('buildInterior', () => {
   it('makes one mesh per material per group, colliders, and stays inside the budget', () => {
-    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
+    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
     const ext = buildCastle().builder;
     const excl0 = ext.stoneExcl.length;
     const res = buildInterior(mats, ext, { plan: P, heightAt: () => 2.6 });
@@ -314,10 +314,12 @@ describe('buildInterior', () => {
     expect(res.triangles).toBeLessThan(400_000);
     const meshes = res.groups.reduce((s, g) => s + g.object.children.length, 0);
     expect(meshes).toBeLessThan(400);
-    // one soup per group, then one walking ramp per stair
-    expect(res.collision.length).toBe(res.groups.length + P.stairs.length);
+    // one soup per group, then one walking ramp per stair, then one over each flight of the caves' rough steps
+    const caveSteps = P.caves!.passages.filter((p) => p.steps).map((p) => `ramp:${p.id}`);
+    expect(caveSteps.length).toBeGreaterThan(0);
+    expect(res.collision.length).toBe(res.groups.length + P.stairs.length + caveSteps.length);
     expect(res.groups.filter((g) => !g.rooms.length).map((g) => g.key)).toEqual([OUTDOOR_REVEALS]);
-    expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual(P.stairs.map((s) => `ramp:${s.id}`));
+    expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual([...P.stairs.map((s) => `ramp:${s.id}`), ...caveSteps]);
     for (const g of res.groups) {
       const names = g.object.children.map((m) => (m as THREE.Mesh).material);
       expect(new Set(names).size).toBe(names.length);

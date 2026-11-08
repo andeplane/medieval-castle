@@ -83,7 +83,7 @@ export function planCaves(rng: () => number, ent: CaveAnchor, ext: CaveAnchor): 
   const C5 = ch('cave-ledge', 'Ledge', at(27.5, 0.8 + j(0.4)), -6.4, 3.0, 2.7, 3.0, 0.35, 0.4);
   const C7c = at(44, -2.5);
   const C7 = ch('cave-cavern', 'Great cavern', C7c, -10.6, 10.5, 8.0, 6.2, 0.75, 0.15,
-    { c: add(add(C7c, scale(oE, 2.5)), scale(sE, 3.6)), r: 3.3, depth: 0.6 });
+    { c: add(add(C7c, scale(oE, 5.5)), scale(sE, -1.0)), r: 3.3, depth: 0.6 }); // at the far end, off every walk
   const C9 = ch('cave-cache', 'Smugglers\' cache', at(46.5, 15.5), -9.6, 2.6, 2.3, 2.8, 0.3, 1.4);
   const C11 = ch('cave-well', 'Well chamber', at(30.5, -17.5), -8.6, 2.8, 2.5, 3.2, 0.35, -0.5);
   // exit side, along the great tower's outward normal from its cellar

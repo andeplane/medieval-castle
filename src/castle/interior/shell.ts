@@ -180,8 +180,6 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       portals.push({ door: d, clear: doorOutlines(d, P.rise[d.id]).clear, cave: k as 0 | 1 });
     }
     buildCaves(groupOf(cave).B, P.caves, P.seed, portals);
-    // the moat's water plane runs on under the island at y 0: none in a cave room that rises near it
-    for (const r of P.rooms) if (r.zone === CAVE_ZONE && r.y1 > -0.5) groundHoles.water.push(outline.get(r.id)!);
   }
 
   return { groups: [...groups.values()], carve: carveVols, windows: nWin, skipped, droppedHoles: dropped, embrasures, groundHoles };

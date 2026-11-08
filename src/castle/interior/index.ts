@@ -69,10 +69,10 @@ export function buildInterior(materials: Record<MatKey, THREE.Material> & Partia
     if (ramp) { ramp.name = `ramp:${s.id}`; collision.push(ramp); }
   }
   // the caves' rough steps: a walking ramp over their nosings (caveGeom.ts)
-  if (plan.caves) caveRampSoups(plan.caves).forEach((soup, i) => {
+  if (plan.caves) caveRampSoups(plan.caves).forEach(({ id, soup }) => {
     const ramp = new THREE.BufferGeometry();
     ramp.setAttribute('position', new THREE.Float32BufferAttribute(soup, 3));
-    ramp.name = `ramp:cave-${i}`;
+    ramp.name = `ramp:${id}`;
     collision.push(ramp);
   });
   return { plan, groups, collision, triangles, groundHoles: shell.groundHoles, stats: { windows: shell.windows, windowsSkipped: shell.skipped, carved: cut.removed, carveMs: Math.round(carveMs) } };

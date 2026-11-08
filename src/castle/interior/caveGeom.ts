@@ -81,8 +81,11 @@ function passagePrim(p: CavePassage): Prim {
   };
 }
 
-/** Surface nets: one vertex per grid cell the surface crosses, one quad per grid edge it crosses. */
-export function surfaceNets(f: (x: number, y: number, z: number) => number, lo: V3, hi: V3, h: number) {
+/**
+ * Surface nets: one vertex per grid cell the surface crosses, one quad per grid edge it crosses (none where
+ * `skip` holds at the edge's middle).
+ */
+export function surfaceNets(f: (x: number, y: number, z: number) => number, lo: V3, hi: V3, h: number, skip?: (x: number, y: number, z: number) => boolean) {
   const nx = Math.ceil((hi[0] - lo[0]) / h) + 3, ny = Math.ceil((hi[1] - lo[1]) / h) + 3, nz = Math.ceil((hi[2] - lo[2]) / h) + 3;
   const ox = lo[0] - h, oy = lo[1] - h, oz = lo[2] - h;
   const v = new Float32Array(nx * ny * nz);
@@ -118,13 +121,32 @@ export function surfaceNets(f: (x: number, y: number, z: number) => number, lo: 
     if (a < 0 || b < 0 || c < 0 || d < 0) return;
     if (inside) tris.push(a, b, c, a, c, d); else tris.push(a, c, b, a, d, c);
   };
+  const keep = (x: number, y: number, z: number) => !skip || !skip(ox + x * h, oy + y * h, oz + z * h);
   for (let k = 1; k < cz; k++) for (let j = 1; j < cy; j++) for (let i = 1; i < cx; i++) {
     const v0 = v[i + nx * (j + ny * k)] < 0;
-    if (i < cx && (v[i + 1 + nx * (j + ny * k)] < 0) !== v0) quad(C(i, j - 1, k - 1), C(i, j, k - 1), C(i, j, k), C(i, j - 1, k), v0);
-    if (j < cy && (v[i + nx * (j + 1 + ny * k)] < 0) !== v0) quad(C(i - 1, j, k - 1), C(i - 1, j, k), C(i, j, k), C(i, j, k - 1), v0);
-    if (k < cz && (v[i + nx * (j + ny * (k + 1))] < 0) !== v0) quad(C(i - 1, j - 1, k), C(i, j - 1, k), C(i, j, k), C(i - 1, j, k), v0);
+    if (i < cx && (v[i + 1 + nx * (j + ny * k)] < 0) !== v0 && keep(i + 0.5, j, k)) quad(C(i, j - 1, k - 1), C(i, j, k - 1), C(i, j, k), C(i, j - 1, k), v0);
+    if (j < cy && (v[i + nx * (j + 1 + ny * k)] < 0) !== v0 && keep(i, j + 0.5, k)) quad(C(i - 1, j, k - 1), C(i - 1, j, k), C(i, j, k), C(i, j, k - 1), v0);
+    if (k < cz && (v[i + nx * (j + ny * (k + 1))] < 0) !== v0 && keep(i, j, k + 0.5)) quad(C(i - 1, j - 1, k), C(i, j - 1, k), C(i, j, k), C(i - 1, j, k), v0);
   }
   return { pos: P, nor: Nn, tris };
+}
+
+/**
+ * Is a point inside the castle's wall behind a doorway into the caves, more than 0.3 m behind the cave's
+ * face? There the passage's tube is left open (its end would close the doorway); the collar round the
+ * doorway, in the face, hides the open end.
+ */
+export function behindPortal(P: CavePlan) {
+  const ends = P.passages.flatMap((p) => {
+    const { a, u, L } = passageFrame(p), out: { o: V2; u: V2; y: number; p: CavePassage }[] = [];
+    if (p.portal[0]) out.push({ o: a, u, y: p.from[1], p });
+    if (p.portal[1]) out.push({ o: [a[0] + u[0] * L, a[1] + u[1] * L], u: [-u[0], -u[1]], y: p.to[1], p });
+    return out;
+  });
+  return (x: number, y: number, z: number) => ends.some((e) => {
+    const dx = x - e.o[0], dz = z - e.o[1], t = dx * e.u[0] + dz * e.u[1], s = -dx * e.u[1] + dz * e.u[0];
+    return t < -0.3 && t > -2 && Math.abs(s) < e.p.w + 1.2 && y > e.y - 1 && y < e.y + e.p.h + 1.5;
+  });
 }
 
 const cache = new Map<string, ReturnType<typeof surfaceNets>>();
@@ -134,7 +156,7 @@ export function caveRock(P: CavePlan, seed: number) {
   let r = cache.get(key);
   if (!r) {
     const F = caveField(P, seed);
-    r = surfaceNets(F.f, F.lo, F.hi, CAVE_CELL);
+    r = surfaceNets(F.f, F.lo, F.hi, CAVE_CELL, behindPortal(P));
     if (cache.size > 4) cache.clear();
     cache.set(key, r);
   }
@@ -335,13 +357,13 @@ export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[
  * flights), so characters glide down the drop instead of catching on every tread. World-space positions,
  * non-indexed, two triangles per passage, both faces.
  */
-export function caveRampSoups(P: CavePlan): number[][] {
-  const out: number[][] = [];
+export function caveRampSoups(P: CavePlan): { id: string; soup: number[] }[] {
+  const out: { id: string; soup: number[] }[] = [];
   for (const p of P.passages) if (p.steps) {
     const { a, u, L } = passageFrame(p), s: V2 = [-u[1], u[0]], hw = p.w / 2;
     const Q = (t: number, k: number): V3 => [a[0] + u[0] * t + s[0] * k, passageFloor(p, t), a[1] + u[1] * t + s[1] * k];
     const A = Q(0, -hw), Bq = Q(0, hw), C = Q(L, hw), D = Q(L, -hw);
-    out.push([...A, ...C, ...Bq, ...A, ...D, ...C]);
+    out.push({ id: p.id, soup: [...A, ...C, ...Bq, ...A, ...D, ...C] });
   }
   return out;
 }

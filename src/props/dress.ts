@@ -197,7 +197,7 @@ export function grow(p: V2[], d: number): V2[] {
 const AREA = (r: RoomSpec) => { const p = r.poly; let s = 0; for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a[0] * b[1] - b[0] * a[1]; } return Math.abs(s) / 2; };
 
 export function roleOf(r: RoomSpec, rng: Rng): Role {
-  if (r.kind === 'stair' || r.kind === 'wallwalk') return 'empty';
+  if (r.kind === 'stair' || r.kind === 'wallwalk' || r.zone === 'cave') return 'empty'; // the caves bring their own finds (castle/interior/caveGeom.ts)
   if (r.kind === 'hall') return 'hall';
   if (r.kind === 'chapel') return 'chapel';
   if (r.kind === 'gate') return 'gate';
