@@ -12,6 +12,7 @@ import { buildCastle } from './castle/castle';
 import { StoneField, LOD } from './castle/stones/field';
 import { StoneSet } from './castle/stones/set';
 import { layoutStonesOffThread, browserStoneWorker } from './castle/stones/offThread';
+import { caveRockOffThread, browserCaveWorker } from './castle/interior/caveOffThread';
 import { precompile, renderOnce, asyncPipelines, type DeferredPipelines, type PipelineBackendLike } from './render/precompile';
 import { bridgePlan, buildBridge, type BridgePlan } from './castle/bridge';
 import { revetmentPlan, buildRevetment } from './castle/revetment';
@@ -36,7 +37,7 @@ import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility, shadowInView } from './world/visibility';
 import { wallTorches, type FireSources } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
-import { FireTable, roomFires, firesByRoom, toFire } from './light/roomLight';
+import { FireTable, roomFires, firesByRoom } from './light/roomLight';
 import { PROFILES, flicker } from './light/flicker';
 import { makeFlameSprites } from './light/three';
 import { linkFlames, flameBrightness, type FlameInstance } from './light/flames';
@@ -69,7 +70,7 @@ import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 import { CAVE_ZONE } from './castle/interior/caves';
 import { caveFires } from './castle/interior/caveGeom';
-import { CARRIED_LANTERN, lanternAt, lanternLit } from './player/lantern';
+import { lanternFire, lanternAt, lanternLit } from './player/lantern';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
@@ -134,7 +135,7 @@ async function main() {
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
     revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
-  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow };
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow, halo: M.halo };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
   // built by the shell into each room's group, their flames and lights fed to the light rig below
@@ -146,6 +147,8 @@ async function main() {
     const cf = caveFires(iplan.caves, groupKey(iplan.rooms.find((r) => r.zone === CAVE_ZONE)!));
     torches.emitters.push(...cf.emitters); torches.flames.push(...cf.flames); torches.group.push(...cf.group);
   }
+  // the caves' rock is meshed in a worker (castle/interior/caveOffThread.ts) and waits in caveRock's cache
+  if (iplan?.caves) await caveRockOffThread(iplan.caves, iplan.seed, browserCaveWorker());
   const interior = iplan ? buildInterior(mats, builder, { heightAt, plan: iplan, torches: torches?.holders }) : null;
   // every stone of the castle (D.1) is laid out in a worker while the land, trees and floors are made
   // (castle/stones/offThread.ts); the faces are final once the interior has carved its doorways
@@ -483,7 +486,7 @@ async function main() {
     if (caveRooms.size) {
       camera.getWorldDirection(lookDir);
       const at = lanternAt([camera.position.x, camera.position.y, camera.position.z], [lookDir.x, lookDir.y, lookDir.z]);
-      const f = toFire({ ...CARRIED_LANTERN, position: at, seed: 7 }); // one seed: its flicker must not jump as it moves
+      const f = lanternFire(at); // its near field and reach: player/lantern.ts
       setCarried(interiorLight, lanternLit(vis.state.from, caveRooms) ? f : null, flicker(PROFILES.lantern, f.seed, fireT, f.amount).k);
     }
     sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);

@@ -53,11 +53,11 @@ export function buildInterior(materials: Record<MatKey, THREE.Material> & Partia
       geo.computeBoundingSphere();
       const m = new THREE.Mesh(geo, materials[k] ?? materials.old);
       m.name = `interior-${g.key}-${k}`;
-      m.castShadow = k !== 'glass' && k !== 'void' && k !== 'pool' && k !== 'glow';
+      m.castShadow = k !== 'glass' && k !== 'void' && k !== 'pool' && k !== 'glow' && k !== 'halo';
       m.receiveShadow = true;
       object.add(m);
       triangles += b.pos.length / 9;
-      if (k !== 'glass' && k !== 'pool' && k !== 'glow') for (const v of b.pos) all.push(v); // walk on the pool's bed, through the fungi
+      if (k !== 'glass' && k !== 'pool' && k !== 'glow' && k !== 'halo') for (const v of b.pos) all.push(v); // walk on the pool's bed, through the fungi
     }
     const bounds = new THREE.Box3().setFromObject(object);
     groups.push({ key: g.key, zone: g.zone, floor: g.floor, object, bounds, rooms: g.rooms });
