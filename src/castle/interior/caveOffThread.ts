@@ -1,4 +1,4 @@
-// The caves' rock (caveGeom.ts caveRock: the signed field meshed by surface nets, ~0.5 s) off the main
+// The caves' rock (caveGeom.ts caveRock: the signed field meshed by surface nets and its openness baked, ~1 s) off the main
 // thread, as the stones are (castle/stones/offThread.ts), so the loading tunnel keeps answering while it
 // runs. The plan goes in as plain data; the soup comes back in transferable arrays and primes caveRock's
 // cache, so the interior build that follows finds it there. Same pure function either way: without workers
@@ -6,7 +6,7 @@
 import type { CavePlan } from './caves';
 import { caveRock, primeCaveRock, type CaveSoup } from './caveGeom';
 
-export interface PackedSoup { pos: Float64Array; nor: Float64Array; tris: Uint32Array }
+export interface PackedSoup { pos: Float64Array; nor: Float64Array; tris: Uint32Array; open: Float32Array }
 export interface CaveWorker {
   run(plan: CavePlan, seed: number): Promise<PackedSoup>;
   dispose(): void;
@@ -14,7 +14,7 @@ export interface CaveWorker {
 
 /** The soup in transferable arrays (the worker's answer). */
 export function packCaveRock(R: CaveSoup): PackedSoup {
-  return { pos: Float64Array.from(R.pos), nor: Float64Array.from(R.nor), tris: Uint32Array.from(R.tris) };
+  return { pos: Float64Array.from(R.pos), nor: Float64Array.from(R.nor), tris: Uint32Array.from(R.tris), open: Float32Array.from(R.open) };
 }
 
 /** Make the plan's rock (in a worker when `spawn` gives one) and leave it in caveRock's cache. */

@@ -7,12 +7,12 @@ import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { planInterior, validatePlan, type PlanX } from '../src/castle/interior/plan';
 import { buildInterior, type InteriorResult } from '../src/castle/interior/index';
-import { caveSpan, caveWalk, passageFrame, passageFloor, ellipseRadius, poolDepth, isCave, CAVE_ZONE, type CavePlan } from '../src/castle/interior/caves';
-import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
+import { caveSpan, caveWalk, fireSpot, passageFrame, passageFloor, ellipseRadius, poolDepth, isCave, CAVE_ZONE, type CavePlan } from '../src/castle/interior/caves';
+import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, rockOpenness, bakeFungiLight, caveShading, FUNGI_REACH, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
 import { caveRockOffThread, packCaveRock, type CaveWorker } from '../src/castle/interior/caveOffThread';
 import { Builder } from '../src/castle/builder';
 import { interiorViews } from '../src/camera/interiorViews';
-import { navGraph, findPath } from '../src/castle/interior/nav';
+import { navGraph, findPath, doorsOnWayToCaves } from '../src/castle/interior/nav';
 import { roomGraph, drawnSpaces } from '../src/world/visibility';
 import { islandOutline, moatOuter } from '../src/castle/layout';
 import { pointInPoly, type V2 } from '../src/core/math2d';
@@ -77,7 +77,7 @@ describe('cave plan', () => {
     const dead = C.chambers.filter((k) => degree(k.id) === 1).map((k) => k.id).sort();
     expect(dead).toEqual(['cave-cache', 'cave-ossuary']);
     for (const id of dead) expect(C.features.some((f) => f.room === id)).toBe(true);
-    expect(C.features.map((f) => f.kind).sort()).toEqual(['bones', 'bones', 'cache', 'lantern', 'lost-lantern', 'shrine']);
+    expect(C.features.map((f) => f.kind).sort()).toEqual(['bones', 'bones', 'cache', 'fire', 'lantern', 'lost-lantern', 'shrine']);
   });
 
   it('keeps every ceiling under the ground and the moat bed above it', () => {
@@ -114,6 +114,16 @@ describe('cave plan', () => {
     expect(fromCavern.has('N-c1') && fromCavern.has('great-c')).toBe(true);
   });
 
+  it('stands open every door on the way from the courtyard down to the breach, and no other', () => {
+    const ids = doorsOnWayToCaves(P), path = findPath(navGraph(P), 'courtyard', C.entrance)!;
+    expect(ids).toContain('N0-3>N-cellarstair'); // the cellar stair's top door
+    expect(ids).toContain('N-cellarstair>N-c1'); // and its foot
+    expect(ids.length).toBeGreaterThanOrEqual(4);
+    for (const id of ids) { expect(path.doors).toContain(id); expect(P.doors.find((d) => d.id === id)!.leaf).toBe(true); }
+    expect(ids).not.toContain('N-c1>cave-breach'); // the breach has no leaf
+    expect(doorsOnWayToCaves({ ...P, caves: null })).toEqual([]);
+  });
+
   it('is on the nav graph: from the N cellar to the cavern and on to the great tower', () => {
     const G = navGraph(P);
     const a = findPath(G, 'N-c1', 'cave-cavern')!, b = findPath(G, 'cave-cavern', 'great-c')!;
@@ -131,7 +141,7 @@ describe('cave rock', () => {
     const soup: number[] = [];
     g.object.updateMatrixWorld(true);
     const add = (a: ArrayLike<number>) => { for (let i = 0; i < a.length; i++) soup.push(a[i]); };
-    for (const m of g.object.children as THREE.Mesh[]) if (!/pool|glow|halo/.test(m.name)) add(m.geometry.attributes.position.array);
+    for (const m of g.object.children as THREE.Mesh[]) if (!/pool|glow/.test(m.name)) add(m.geometry.attributes.position.array);
     for (const c of res.collision) if (c.name.startsWith('ramp:cave')) add(c.attributes.position.array);
     const geo = new T3.BufferGeometry(); geo.setAttribute('position', new T3.BufferAttribute(new Float32Array(soup), 3));
     bvh = new MeshBVH(geo);
@@ -184,13 +194,13 @@ describe('cave rock', () => {
     expect(open.flat().filter((i) => !(behind(R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]) || closeBehind(R.pos, i)))).toEqual([]);
     const g = res.groups.find((x) => x.key === 'cave:-1')!;
     expect(g.rooms.sort()).toEqual(P.rooms.filter(isCave).map((r) => r.id).sort());
-    expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'halo', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
+    expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
   }, 120_000);
 
   it('shows no gap from any cave view: every ray of a 64 × 36 grid meets a front face (no culled slivers)', () => {
-    // what the renderer draws of the caves, front faces only (the halos are additive glow, not a surface)
+    // what the renderer draws of the caves, front faces only
     const g = res.groups.find((x) => x.key === 'cave:-1')!, soup: number[] = [];
-    for (const m of g.object.children as THREE.Mesh[]) if (!/halo/.test(m.name)) { const a = m.geometry.attributes.position.array; for (let i = 0; i < a.length; i++) soup.push(a[i]); }
+    for (const m of g.object.children as THREE.Mesh[]) { const a = m.geometry.attributes.position.array; for (let i = 0; i < a.length; i++) soup.push(a[i]); }
     const geo = new T3.BufferGeometry(); geo.setAttribute('position', new T3.BufferAttribute(new Float32Array(soup), 3));
     const seen = new MeshBVH(geo), missed: string[] = [];
     for (const v of interiorViews(P).filter((x) => ['caves', 'cave-wall', 'cave-squeeze', 'cave-drop', 'cave-steps', 'cave-ossuary', 'cave-cache', 'cave-pool'].includes(x.name))) {
@@ -260,9 +270,65 @@ describe('cave rock', () => {
     expect(ramps.map((r) => r.id)).toEqual([drop.id]);
     expect(ramps[0].soup).toHaveLength(18);
     const f = caveFires(C, 'cave:-1'), lantern = C.features.find((x) => x.kind === 'lantern')!;
-    expect(f.emitters).toHaveLength(1);
-    expect(f.group).toEqual(['cave:-1']);
+    expect(f.emitters.map((e) => e.kind)).toEqual(['lantern', 'brazier']);
+    expect(f.group).toEqual(['cave:-1', 'cave:-1']);
     expect(f.flames[0].base[1]).toBeGreaterThan(cacheLayout(lantern.at, lantern.dir).lantern[1]);
+  });
+
+  it('lights the great cavern with the smugglers\' fire: by the pool, clear of it, of every walk and of the finds', () => {
+    const k = C.chambers.find((c) => c.id === 'cave-cavern')!, fire = C.features.find((x) => x.kind === 'fire')!;
+    expect(fire.room).toBe(k.id);
+    const q: V2 = [fire.at[0], fire.at[2]], dPool = Math.hypot(q[0] - k.pool!.c[0], q[1] - k.pool!.c[1]);
+    expect(dPool).toBeGreaterThan(k.pool!.r + 1); expect(dPool).toBeLessThan(k.pool!.r + 2);
+    expect(poolDepth(k, q)).toBe(0);
+    for (const p of C.passages) for (const [i, e] of p.ends.entries()) if (e === k.id) {
+      const m = i ? p.to : p.from, a: V2 = [m[0], m[2]], d: V2 = [k.c[0] - a[0], k.c[1] - a[1]], L2 = d[0] ** 2 + d[1] ** 2;
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / L2));
+      expect(Math.hypot(q[0] - a[0] - d[0] * t, q[1] - a[1] - d[1] * t)).toBeGreaterThan(1.5);
+    }
+    for (const o of C.features) if (o !== fire) expect(Math.hypot(o.at[0] - q[0], o.at[2] - q[1])).toBeGreaterThan(2.4);
+    // nothing fallen or grown on it
+    for (const b of fallenBlocks(C, P.seed)) expect(Math.hypot(b.c[0] - q[0], b.c[2] - q[1])).toBeGreaterThan(1.6);
+    for (const s of speleothems(caveRock(C, P.seed), C, P.seed)) if (s.dir === 1) expect(Math.hypot(s.base[0] - q[0], s.base[2] - q[1])).toBeGreaterThan(1.6);
+    // a real fire for src/light (the brazier profile), its light half a metre over the logs
+    const e = caveFires(C, 'g').emitters.find((x) => x.kind === 'brazier')!;
+    expect(e.position).toEqual([fire.at[0], fire.at[1] + 0.5, fire.at[2]]);
+    // and what the shaders know: the pool's water level and the fire
+    const sh = caveShading(C);
+    expect(sh.pool).toEqual([k.pool!.c[0], poolDisc(k).y, k.pool!.c[1], k.pool!.r]);
+    expect(sh.fire).toEqual([...e.position, e.intensity]);
+    const none = caveShading({ ...C, chambers: C.chambers.map((c) => ({ ...c, pool: undefined })), features: [] });
+    expect(none.pool[3]).toBe(0); expect(none.fire[1]).toBeLessThan(-1000);
+    expect(fireSpot({ ...k, pool: undefined }, C.passages, C.features)).toBeNull();
+  });
+
+  it('bakes how open the rock is: 1 on open ground, less in a slot and under a shelf', () => {
+    const floor = (_x: number, y: number) => -y; // air above y = 0
+    const slot = (x: number) => Math.abs(x) - 0.4; // a slot 0.8 m wide
+    const shelf = (x: number, y: number) => Math.max(-y, Math.min(y - 0.6, 1.6 - y, 2 - x)); // and an overhang of rock 0.6 m over it
+    const at = (f: (x: number, y: number, z: number) => number, p: V3, n: V3) => rockOpenness(f, p, n)[0];
+    expect(at(floor, [0, 0, 0], [0, 1, 0])).toBeGreaterThan(0.95);
+    expect(at(slot, [-0.4, 0, 0], [1, 0, 0])).toBeLessThan(0.7); // open only along the slot
+    expect(at(shelf, [0, 0, 0], [0, 1, 0])).toBeLessThan(at(floor, [0, 0, 0], [0, 1, 0]) - 0.3);
+    // the cave's own: all in 0..1, the open floors of the cavern near 1, and some real recesses
+    const R = caveRock(C, P.seed);
+    expect(R.open.length).toBe(R.pos.length / 3);
+    let low = 0;
+    for (let i = 0; i < R.open.length; i++) { expect(R.open[i]).toBeGreaterThanOrEqual(0); expect(R.open[i]).toBeLessThanOrEqual(1); if (R.open[i] < 0.8) low++; }
+    expect(low).toBeGreaterThan(R.open.length * 0.1);
+    const k = C.chambers.find((c) => c.id === 'cave-cavern')!;
+    let best = 0;
+    for (let i = 0; i < R.open.length; i++) if (R.nor[3 * i + 1] > 0.9 && Math.hypot(R.pos[3 * i] - k.c[0], R.pos[3 * i + 2] - k.c[1]) < 2) best = Math.max(best, R.open[i]);
+    expect(best).toBeGreaterThan(0.9);
+  });
+
+  it('bakes the fungi light from nearby clusters only, on faces turned their way', () => {
+    const bin = { pos: [0, 0, 0, 0, 0, 0, 3, 0, 0], nor: [0, 0, 1, 0, 0, -1, 0, 0, 1], uv: [0.5, 0, 0.5, 0, 0.5, 0] };
+    bakeFungiLight(bin, [{ p: [0, 0, 0], n: [0, 0, 1] }, { p: [0.1, 0, 0], n: [0, 0, 1] }]);
+    expect(bin.uv[1]).toBe(1); // two clusters on it: full, clamped
+    expect(bin.uv[3]).toBe(0); // the back of the same point: none
+    expect(bin.uv[5]).toBeLessThan(1e-6); // 3 m away: none
+    expect(bin.uv[0]).toBe(0.5); // the openness is left as it was
   });
 });
 
@@ -322,12 +388,22 @@ describe('cave stone: ledges, fallen blocks, stalactites and stalagmites, fungi'
     }
   });
 
-  it('builds them into the rock, and a soft halo behind every cluster of fungi', () => {
+  it('builds them into the rock, and bakes the fungi\'s light into the rock round every cluster (no quads of its own)', () => {
     const B = new Builder();
     buildCaves(B, C, P.seed, []);
-    const R = caveRock(C, P.seed), spots = fungiSpots(R, C, P.seed);
+    const R = caveRock(C, P.seed), spots = fungiSpots(R, C, P.seed), rk = B.bins.rock;
     expect(spots.length).toBeGreaterThan(20);
-    expect(B.bins.halo.pos.length / 9).toBe(2 * spots.length);
+    // uv: u the openness, v the fungi light, both 0..1
+    for (let i = 0; i < rk.uv.length; i++) { expect(rk.uv[i]).toBeGreaterThanOrEqual(0); expect(rk.uv[i]).toBeLessThanOrEqual(1); }
+    const glowAt = (p: V3, r: number) => { let m = 0; for (let v = 0; v < rk.pos.length / 3; v++) if (Math.hypot(rk.pos[3 * v] - p[0], rk.pos[3 * v + 1] - p[1], rk.pos[3 * v + 2] - p[2]) < r) m = Math.max(m, rk.uv[2 * v + 1]); return m; };
+    for (const s of spots.slice(0, 12)) expect(glowAt(s.p, 0.05)).toBeGreaterThan(0.5); // lit at each cluster
+    // and dark well away from all of them: the light fades to nothing, so nothing has an edge
+    let far = 0;
+    for (let v = 0; v < rk.pos.length / 3; v += 7) {
+      const d = Math.min(...spots.map((s) => Math.hypot(rk.pos[3 * v] - s.p[0], rk.pos[3 * v + 1] - s.p[1], rk.pos[3 * v + 2] - s.p[2])));
+      if (d > 4 * FUNGI_REACH) { far++; expect(rk.uv[2 * v + 1]).toBeLessThan(1e-3); }
+    }
+    expect(far).toBeGreaterThan(1000);
     expect(B.bins.rock.pos.length / 9).toBeGreaterThan(R.tris.length / 3 + 20 * fallenBlocks(C, P.seed).length);
     expect(B.bins.rock.pos.length / 9).toBeLessThan(90_000); // a budget: ~40k of surface, blocks and cones
     for (let i = 0; i < B.bins.glow.uv.length; i += 2) expect(B.bins.glow.uv[i + 1]).toBeGreaterThanOrEqual(0);

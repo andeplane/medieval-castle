@@ -24,13 +24,13 @@ const edge = (v1: Node<'vec3'>, v2: Node<'vec3'>) => {
 
 const row = () => int(attribute('interiorRoom', 'float').add(0.5).floor());
 
-/** Daylight irradiance at the fragment from its room's apertures + bounce + floor. */
-export function interiorIrradiance(light: InteriorLight) {
+/** Daylight irradiance at the fragment from its room's apertures + bounce + floor (× `floorK`). */
+export function interiorIrradiance(light: InteriorLight, floorK = 1) {
   const tex = (x: Node<'int'>, r: Node<'int'>) => textureLoad(light.table, ivec2(x, r));
   return Fn(() => {
     const r = row().toVar();
     const P = positionWorld, N = normalWorld.toVar();
-    const E = vec3(light.floor).toVar();
+    const E = vec3(light.floor).mul(floorK).toVar();
     // the outer half of an outdoor doorway: the courtyard's sky and ground, as on the wall beside it
     If(r.equal(OUTDOOR_TAG), () => { E.assign(mix(light.outdoor.ground, light.outdoor.sky, N.y.mul(0.5).add(0.5))); });
     If(r.greaterThanEqual(0), () => {

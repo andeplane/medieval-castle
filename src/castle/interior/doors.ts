@@ -58,6 +58,8 @@ export interface DoorOptions {
   ajar?: number;
   /** Start every door (and portcullis) at this openness (captures). Portcullises default to raised. */
   initial?: number;
+  /** Doors that start standing wide open (castle/interior/nav.ts doorsOnWayToCaves: the way down is seen). */
+  standOpen?: ReadonlySet<string>;
   portcullis?: PortcullisSpec[];
   sound?: SoundSink;
   /** Everyone besides the player whose body should stop a moving leaf or portcullis (NPCs). */
@@ -228,6 +230,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     // a few ordinary doors left ajar, seeded per door
     const r = rngFor('door-ajar:' + d.id);
     if ((d.kind === 'plank' || d.kind === 'postern') && r() < ajarRate) leaf.angle = pl.maxAngle * (0.12 + r() * 0.5);
+    if (opts.standOpen?.has(d.id)) leaf.angle = pl.maxAngle * 0.9;
     if (opts.initial !== undefined) leaf.angle = pl.maxAngle * opts.initial;
   }
 

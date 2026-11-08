@@ -6,7 +6,7 @@
 import * as THREE from 'three/webgpu';
 import {
   texture, uv, positionWorld, normalWorld, mix, vec2, vec3, vec4, float, int, color, smoothstep, normalMap, clamp, fract, floor, round, abs, min, max, sin, cos, time, fwidth,
-  positionLocal, instanceIndex, positionView, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If, bumpMap, pow,
+  positionLocal, instanceIndex, positionView, cameraPosition, reflect, mx_noise_float, mx_noise_vec3, mx_worley_noise_vec2, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If, bumpMap, pow,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import { LITHS, LITH_DETAIL, DETAIL_TILE, RUBBLE, ASHLAR, DRESSED, COBBLES, FLAGS, type TexSet } from './texgen';
@@ -202,7 +202,9 @@ export interface Materials {
   iron: THREE.MeshStandardNodeMaterial; void: THREE.MeshStandardNodeMaterial; glass: THREE.MeshStandardNodeMaterial;
   pave: THREE.MeshStandardNodeMaterial; terrain: THREE.MeshStandardNodeMaterial; macro: THREE.DataTexture;
   /** The natural caves (castle/interior/caveGeom.ts): bare rock, the pool's still water, glowing fungi. */
-  rock: THREE.MeshStandardNodeMaterial; pool: THREE.MeshStandardNodeMaterial; glow: THREE.MeshStandardNodeMaterial; halo: THREE.MeshBasicNodeMaterial;
+  rock: THREE.MeshStandardNodeMaterial; pool: THREE.MeshStandardNodeMaterial; glow: THREE.MeshStandardNodeMaterial;
+  /** What the cave shaders know of the plan (caveGeom.ts caveShading): the pool (x, level, z, r) and the cavern fire (x, y, z, strength). */
+  caveShade: { pool: THREE.UniformNode<'vec4', THREE.Vector4>; fire: THREE.UniformNode<'vec4', THREE.Vector4> };
 }
 
 export async function makeMaterials(): Promise<Materials> {
@@ -488,41 +490,91 @@ export function windOffset(strength = 0.15) {
 export { abs };
 
 /**
- * The caves' materials. Rock: no masonry, so no uvs: the macro noise and the detail grain projected on
- * the three world planes (triplanar), as a dark, damp grey-brown limestone with strata, iron staining,
- * pale calcite runs down the walls and a bump from the same noise. Pool: still black water that takes
- * only the highlights of the fires. Glow: the fungi's own cold light (emissive; they light nothing).
+ * The caves' materials. Rock: no masonry; the macro noise and the detail grain projected on the three world
+ * planes (triplanar) and 3D noise in world space, as bedded limestone: colour bands by bed (grey, buff, dark
+ * shale, rust), joints and fine cracks (worley cell edges) and bedding lines cut into the bump, grit at arm's
+ * length, darker damp patches, pale flowstone streaks. Its uv carries what the plan baked (caveGeom.ts): u how
+ * open the rock is (recesses darker), v the fungi's light on it. Round the pool: wet, dark stone under the
+ * water, a pale rim of calcite at the waterline, a glossy splash zone that glints with the cavern fire.
+ * Pool: dark still water, a fresnel reflection of the dark roof and the fire's glint broken by slow ripples.
+ * Glow: the fungi's own cold light. `shade`: the pool and the fire (caveGeom.ts caveShading), set by main.
  */
 function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
-  const p = positionWorld, an = abs(normalWorld);
+  const shade = { pool: uniform(new THREE.Vector4(0, -1e4, 0, 0)), fire: uniform(new THREE.Vector4(0, -1e4, 0, 0)) };
+  const p = positionWorld, an = abs(normalWorld), dist = positionView.length();
   const w = pow(an, vec3(4)), wn = w.div(w.x.add(w.y).add(w.z));
-  const tri = (s: number) => texture(macro, p.zy.mul(s)).mul(wn.x).add(texture(macro, p.xz.mul(s)).mul(wn.y)).add(texture(macro, p.xy.mul(s)).mul(wn.z));
-  const big = tri(1 / 9), mid = tri(1 / 2.3), grain = texture(detail, p.xz.mul(1.1)).r.mul(wn.y).add(texture(detail, p.zy.mul(1.1)).r.mul(wn.x)).add(texture(detail, p.xy.mul(1.1)).r.mul(wn.z));
+  const tri = (tx: THREE.Texture, s: number) => texture(tx, p.zy.mul(s)).mul(wn.x).add(texture(tx, p.xz.mul(s)).mul(wn.y)).add(texture(tx, p.xy.mul(s)).mul(wn.z));
+  const big = tri(macro, 1 / 9), mid = tri(macro, 1 / 2.3), grain = tri(detail, 1.1).r;
+  const near = float(1).sub(smoothstep(2.5, 9, dist)), close = float(1).sub(smoothstep(1, 4, dist));
+  const det6 = tri(detail, 5.3), det17 = tri(detail, 17);
   const rock = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
   rock.name = 'cave-rock';
-  // strata: gently wavy beds a few decimetres thick
-  const bed = sin(p.y.mul(5.3).add(big.r.mul(6)).add(mid.g.mul(1.5))).mul(0.5).add(0.5);
-  let col = mix(vec3(0.235, 0.23, 0.22), vec3(0.34, 0.335, 0.315), big.g).mul(float(0.84).add(bed.mul(0.18))).mul(float(0.76).add(mid.r.mul(0.48)));
-  const iron = smoothstep(0.66, 0.84, big.b).mul(0.4);
-  col = mix(col, col.mul(vec3(1.18, 0.95, 0.75)), iron);
-  col = col.mul(float(0.8).add(grain.mul(0.4))); // grit
+
+  // beds ~0.7 m thick, their level warped by the broad noise: each its own stone, with a thin dark parting between
+  const bedC = p.y.mul(1.4).add(big.r.mul(1.6)).add(mid.g.mul(0.35)), bedId = floor(bedC), bedF = fract(bedC);
+  const bedCol = (id: Node<'float'>) => {
+    const h = hash(id.mul(17.31).add(3.7));
+    return select(h.lessThan(0.3), vec3(0.33, 0.32, 0.3), select(h.lessThan(0.5), vec3(0.4, 0.33, 0.24), select(h.lessThan(0.68), vec3(0.17, 0.17, 0.18), select(h.lessThan(0.82), vec3(0.37, 0.25, 0.16), vec3(0.46, 0.45, 0.41)))));
+  };
+  const parting = float(1).sub(smoothstep(0.0, 0.035, bedF)).add(smoothstep(0.975, 1, bedF)).clamp(0, 1);
+  // laminae inside a bed and a gentle, much less cloudy drift
+  const lam = sin(p.y.mul(38).add(mid.r.mul(9))).mul(0.5).add(0.5);
+  let col = mix(bedCol(bedId), bedCol(bedId.add(1)), smoothstep(0.88, 1, bedF)).mul(float(0.9).add(lam.mul(0.12))).mul(float(0.85).add(mid.r.mul(0.3)));
+  col = col.mul(float(1).sub(parting.mul(0.55)));
+  // joints (a few big ones) and fine cracks (many, only in patches), wiggled by a little noise
+  const warp = mx_noise_vec3(p.mul(2.1)).mul(0.07);
+  const J = mx_worley_noise_vec2(p.mul(0.45).add(warp)), j = J.y.sub(J.x);
+  const K = mx_worley_noise_vec2(p.mul(1.7).add(warp.mul(2))), k = K.y.sub(K.x);
+  const patch = smoothstep(0.05, 0.35, mx_noise_float(p.mul(0.6).add(11)));
+  const joint = float(1).sub(smoothstep(0.012, 0.04, j)), crack = float(1).sub(smoothstep(0.01, 0.03, k)).mul(patch).mul(near);
+  col = col.mul(float(1).sub(joint.mul(0.6))).mul(float(1).sub(crack.mul(0.5)));
+  // pale flowstone and dark iron streaks running down the walls (stretched noise; not on floors and roofs)
+  const runU = p.x.mul(wn.z).add(p.z.mul(wn.x)), wall = float(1).sub(wn.y);
+  const run = texture(macro, vec2(runU.mul(0.9), p.y.mul(0.07))), flow = smoothstep(0.7, 0.86, run.r).mul(wall);
+  col = mix(col, vec3(0.5, 0.48, 0.43), flow.mul(0.55));
+  col = mix(col, col.mul(vec3(1.2, 0.9, 0.65)), smoothstep(0.72, 0.88, run.b).mul(wall).mul(0.5));
+  // grit: three octaves, the finer ones only near
+  col = col.mul(float(0.82).add(grain.mul(0.36))).mul(float(1).add(det6.g.sub(0.5).mul(0.35).mul(near))).mul(float(1).add(det17.r.sub(0.5).mul(0.3).mul(close)));
+  // damp patches: darker and glossier
+  const damp = smoothstep(0.52, 0.72, mid.b.mul(0.6).add(big.b.mul(0.4)));
+  col = col.mul(float(1).sub(damp.mul(0.35)));
+  // the pool: dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it
+  const P4 = shade.pool, pd = p.xz.sub(P4.xz).length(), byPool = float(1).sub(smoothstep(P4.w, P4.w.add(1.6), pd)), h = p.y.sub(P4.y);
+  const under = float(1).sub(smoothstep(-0.02, 0.01, h)).mul(byPool);
+  const rim = float(1).sub(smoothstep(0.015, 0.07, abs(h.sub(0.035)))).mul(byPool);
+  const splash = float(1).sub(smoothstep(0.08, 0.7, h)).mul(byPool).mul(float(1).sub(under));
+  col = mix(col, col.mul(0.45), under);
+  col = mix(col, col.mul(0.62), splash.mul(0.8));
+  col = mix(col, vec3(0.62, 0.6, 0.55), rim.mul(0.75));
   rock.colorNode = col;
-  // damp: wetter, shinier low down and on the floors
-  rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).clamp(0.4, 1);
-  // a fine octave too, so the rock still has grit at arm's length
-  const fine = texture(detail, p.zy.mul(3.7)).g.mul(wn.x).add(texture(detail, p.xz.mul(3.7)).g.mul(wn.y)).add(texture(detail, p.xy.mul(3.7)).g.mul(wn.z));
-  rock.normalNode = bumpMap(big.r.mul(0.4).add(mid.g.mul(0.4)).add(grain.mul(0.2)).add(fine.mul(0.08)), float(2.6));
-  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x0b1719, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.62 });
+  const wet = max(damp.mul(0.5), max(splash, under));
+  rock.roughnessNode = float(0.92).sub(wet.mul(0.6)).clamp(0.25, 1);
+  // recesses: the baked openness (shelf undersides, niches, the wall's foot, narrow passages)
+  rock.aoNode = mix(float(0.15), float(1), smoothstep(0.5, 0.98, uv().x));
+  // the fungi's light on the rock round them (baked), broken up a little; and wet rock glinting with the fire
+  const g = uv().y.clamp(0, 1), gl = g.mul(g).mul(float(3).sub(g.mul(2))).mul(float(0.8).add(mx_noise_float(p.mul(4)).mul(0.4)));
+  const F4 = shade.fire, Lf = F4.xyz.sub(p), dF = Lf.length(), V = cameraPosition.sub(p).normalize();
+  const Rr = reflect(V.negate(), normalWorld), spec = max(Rr.dot(Lf.div(dF)), 0);
+  const glint = pow(spec, 24).mul(wet).mul(F4.w.mul(2.5)).div(dF.mul(dF).add(1));
+  rock.emissiveNode = col.mul(vec3(0.15, 0.8, 0.6)).mul(gl.mul(0.45)).add(vec3(1, 0.62, 0.32).mul(glint));
+  // the bump: broad swells, grit, and the fine relief that only shows close: noise, joints, cracks, partings
+  const fineH = mx_noise_float(p.mul(9)).mul(0.004).add(det17.g.mul(0.003)).mul(near).sub(joint.mul(0.012)).sub(crack.mul(0.006)).sub(parting.mul(0.008).mul(near));
+  rock.normalNode = bumpMap(big.r.mul(0.4).add(mid.g.mul(0.4)).add(grain.mul(0.2)).add(det6.g.mul(0.03).mul(near)).add(fineH), float(2.6));
+
+  // the still water: very dark, its reflection the dark roof plus the fire's glint, broken by slow ripples
+  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x050a0b, roughness: 0.05, metalness: 0, transparent: true });
   pool.name = 'cave-pool';
+  const rip = mx_noise_vec3(vec3(p.x.mul(2.2), p.z.mul(2.2), time.mul(0.18))).mul(0.035).add(mx_noise_vec3(vec3(p.x.mul(7), p.z.mul(7), time.mul(0.4))).mul(0.012));
+  const Nw = vec3(rip.x, 1, rip.y).normalize(), cosV = max(V.dot(Nw), 0);
+  const fres = float(0.02).add(float(0.98).mul(pow(float(1).sub(cosV), 5)));
+  const Rw = reflect(V.negate(), Nw), sw = max(Rw.dot(Lf.div(dF)), 0);
+  const fireRefl = pow(sw, 600).mul(6).add(pow(sw, 60).mul(0.5)).add(pow(sw, 8).mul(0.04)).mul(F4.w).mul(float(8).div(dF.mul(dF).add(4)));
+  pool.emissiveNode = vec3(0.012, 0.016, 0.018).mul(fres).add(vec3(1, 0.6, 0.3).mul(fireRefl).mul(fres.mul(0.8).add(0.2)));
+  pool.opacityNode = mix(float(0.72), float(0.97), fres);
+
   const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
   glow.name = 'cave-glow';
   // the caps' crowns (uv v = 1) glow brightest, their rims, gills and stems (v ≈ 0) dimly
   glow.emissiveNode = mix(vec3(0.12, 0.85, 0.62), vec3(0.35, 0.95, 0.4), texture(macro, p.xz.mul(0.7)).r).mul(mix(float(0.18), float(1.1), uv().y));
-  // a soft pool of light on the rock round each cluster: additive, fading from the quad's middle
-  const halo = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
-  halo.name = 'cave-halo';
-  const d = uv().mul(2).sub(1).length();
-  halo.colorNode = vec3(0.1, 0.55, 0.42);
-  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2.5).mul(0.12);
-  return { rock, pool, glow, halo };
+  return { rock, pool, glow, caveShade: shade };
 }

@@ -8,6 +8,7 @@ import { GROUND } from '../spec';
 import { orient } from './geom';
 import { stairNavPath } from './stairs';
 import { stairOpts } from './plan';
+import type { CavePlan } from './caves';
 
 export type NavKind = 'room' | 'door' | 'landing';
 export interface NavNode { id: string; kind: NavKind; space: SpaceId; pos: V3 }
@@ -133,4 +134,14 @@ export function floorPolys(P: InteriorPlan): Map<SpaceId, V2[]> {
     out.set(r.id, p);
   }
   return out;
+}
+
+/**
+ * The doors on the shortest way from the courtyard to the caves' entrance (through the N range's ground floor,
+ * down the cellar stair, into N-c1): they start standing open, so the way down shows as a line of torchlit
+ * doorways (Anders never found the cellars; caves3). Anyone can still shut them.
+ */
+export function doorsOnWayToCaves(plan: InteriorPlan & { caves?: CavePlan | null }): string[] {
+  const C = plan.caves, path = C && findPath(navGraph(plan), 'courtyard', C.entrance);
+  return path ? path.doors.filter((id) => plan.doors.find((d) => d.id === id)?.leaf) : [];
 }

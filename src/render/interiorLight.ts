@@ -32,13 +32,20 @@ const TEX_W = 1 + MAX_AP * AP_TEXELS;
 /** Interior keys the shell bins geometry into (InteriorGroup meshes are one per key). */
 export type InteriorKey = 'old' | 'new' | 'trim' | 'wood' | 'iron' | 'glass';
 export type InteriorMaterials = Record<InteriorKey, THREE.MeshStandardNodeMaterial>;
+/**
+ * The share of the readability floor (InteriorLight.floor) the natural caves get: a quarter, so the caves are
+ * dark away from their fires, the fungi and your lantern, and the lit places stand out (caves3: the floor
+ * was what made the great cavern one flat, foggy grey).
+ */
+export const CAVE_FLOOR = 0.25;
+
 /** The material map plus `adopt` (non-enumerable, so `Object.entries(materials)` still lists only
  * materials). Firelight is not a light here: each room's fires come from the fire table
  * (light/roomLight.ts) through the interior irradiance, so no point light is ever picked or culled. */
 export type InteriorMaterialSet = InteriorMaterials & {
   /** An interior clone of any other standard material (furniture), lit like the rest of this set
    * (daylight and its room's fires). The same source always gives the same clone. */
-  readonly adopt: (src: THREE.MeshStandardNodeMaterial) => THREE.MeshStandardNodeMaterial;
+  readonly adopt: (src: THREE.MeshStandardNodeMaterial, floorK?: number) => THREE.MeshStandardNodeMaterial;
 };
 
 /** The room table the shader reads and the artist knobs (live-tweakable from __game.interiorLight). */
@@ -132,11 +139,12 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
   const base = sun ? [sun] : [];
   const sunOnly = lights(base);
   const irr = interiorIrradiance(light), fire = fireIrradiance(light);
-  const mk = (src: THREE.MeshStandardNodeMaterial, name: string) => {
+  const mk = (src: THREE.MeshStandardNodeMaterial, name: string, floorK = 1) => {
     const m = src.clone() as THREE.MeshStandardNodeMaterial;
     m.name = sun ? `interior-${name}` : `interior-under-${name}`;
     m.lightsNode = sunOnly;
-    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, fire);
+    const day = floorK === 1 ? irr : interiorIrradiance(light, floorK);
+    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(day, fire);
     return m;
   };
   const glass = mk(M.glass, 'glass');
@@ -152,9 +160,9 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
   const adopted = new Map<THREE.Material, THREE.MeshStandardNodeMaterial>();
   Object.defineProperty(set, 'adopt', {
     enumerable: false,
-    value: (src: THREE.MeshStandardNodeMaterial) => {
+    value: (src: THREE.MeshStandardNodeMaterial, floorK = 1) => {
       let m = adopted.get(src);
-      if (!m) { m = mk(src, src.name || 'prop'); adopted.set(src, m); }
+      if (!m) { m = mk(src, src.name || 'prop', floorK); adopted.set(src, m); }
       return m;
     },
   });
