@@ -10,7 +10,7 @@ import { mergePlaced, colliderSoup } from '../src/props/place';
 import { meshFromProp, makePropMaterials } from '../src/props/render';
 import { tagGroups } from '../src/render/interiorLight';
 import { PROP_MATS } from '../src/props/geom';
-import { createFurnisher, sphereOf, unionSphere, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
+import { createFurnisher, roomFireLists, sphereOf, unionSphere, colliderBoxes, transferables, BOX_FLOATS, type RoomFurniture } from '../src/props/roomFurniture';
 import { serveFurnish, workerJobs, inlineJobs, poolSize, type FurnishScope, type WorkerPort, type ToFurnisher, type FromFurnisher, type FurnitureJobs } from '../src/props/furnishWorker';
 import { createFurnitureStreamer, type RoomSink } from '../src/props/streamer';
 import { meshesFromBins, mergeBins, startMerge, stepMerge, createRoomSink } from '../src/props/roomMeshes';
@@ -140,6 +140,29 @@ describe('furnish worker protocol', () => {
     expect(ports.every((p) => p.terminated)).toBe(true);
   });
 
+  // Every room's fires are lit before the first frame (main.ts, light/roomLight.ts lightCastle), not as its
+  // furniture streams in: listed by dressing the room without building it, the same fires and flames as its
+  // furniture brings, through the worker as inline.
+  it('lists rooms\' fires without their furniture, equal to the furnished rooms\' fires, through the worker too', async () => {
+    const furnish = createFurnisher(plan, { maxRooms: MAX_ROOMS });
+    const ids = [...new Set([plan.rooms.find((r) => r.kind === 'hall')!.id, ...plan.rooms.filter((_, i) => i % 12 === 0).map((r) => r.id)])];
+    const lists = roomFireLists(plan, {}, ids);
+    const full = ids.map((id) => furnish(id)).filter((f) => f.emitters.length || f.flames.length);
+    expect(lists.map((l) => l.room)).toEqual(full.map((f) => f.room)); // rooms with no fire are left out
+    expect(lists.length).toBeGreaterThan(8);
+    lists.forEach((l, i) => { expect(l.emitters).toEqual(full[i].emitters); expect(l.flames).toEqual(full[i].flames); });
+    expect(lists.some((l) => l.flames.length > 1)).toBe(true);
+    expect(() => roomFireLists(plan, {}, ['no-such-room'])).toThrow(/no room/);
+    // the worker's 'fires' job: the whole plan's list (here the sample), its own prop pool shared with its rooms
+    const port = (() => { const sent: ToFurnisher[] = []; const scope: FurnishScope = { onmessage: null, postMessage: (m) => { const c = structuredClone(m); queueMicrotask(() => p.onmessage?.({ data: c })); } };
+      const p: WorkerPort = { onmessage: null, onerror: null, postMessage(m) { sent.push(m); const c = structuredClone(m); queueMicrotask(() => scope.onmessage?.({ data: c })); }, terminate() {} };
+      serveFurnish(scope, createFurnisher, tinyTex, (pl, o) => roomFireLists(pl, o, ids)); return p; })();
+    const jobs = workerJobs(() => port, 1, { plan, maxRooms: MAX_ROOMS });
+    expect(await jobs.fires()).toEqual(lists);
+    expect(await inlineJobs(furnish, tinyTex, () => lists).fires()).toBe(lists);
+    expect(await inlineJobs(furnish).fires()).toEqual([]);
+  });
+
   it('rejects a job the worker fails, and everything a crashed worker held', async () => {
     const ports: ReturnType<typeof fakeWorker>[] = [];
     const jobs = workerJobs(() => { const p = fakeWorker(); ports.push(p); return p; }, 1, { plan, maxRooms: MAX_ROOMS });
@@ -164,6 +187,10 @@ describe('furnish worker protocol', () => {
     scope.onmessage!({ data: { t: 'init', plan, maxRooms: 4 } });
     scope.onmessage!({ data: { t: 'room', job: 2, room: 'x' } });
     expect(out).toEqual([{ t: 'error', job: 1, message: 'furnisher not initialised' }, { t: 'error', job: 2, message: 'bad' }]);
+    const early: FromFurnisher[] = [], s2: FurnishScope = { onmessage: null, postMessage: (m) => { early.push(m); } };
+    serveFurnish(s2);
+    s2.onmessage!({ data: { t: 'fires', job: 3 } });
+    expect(early).toEqual([{ t: 'error', job: 3, message: 'furnisher not initialised' }]);
   });
 
   it('makes the real prop textures inline', async () => {
@@ -193,6 +220,7 @@ function manualJobs() {
   let disposed = false;
   const jobs: FurnitureJobs = {
     run: (id) => new Promise((res, rej) => calls.push({ room: id, resolve: () => res(room(id, 1)), reject: rej })),
+    fires: async () => [],
     textures: async () => tinyTex(),
     dispose: () => { disposed = true; },
   };
@@ -365,20 +393,18 @@ describe('room meshes', () => {
     tagGroups([{ key, rooms: ids, object: ref } as unknown as InteriorGroup], rooms, index, 4.5);
     const furnish = createFurnisher(plan, { maxRooms: MAX_ROOMS });
     const order = new Map(plan.rooms.map((r, i) => [r.id, i]));
-    const parent = new THREE.Group(), boxes: { n: number; tag?: string; removed: boolean }[] = [], fire: string[] = [];
+    const parent = new THREE.Group(), boxes: { n: number; tag?: string; removed: boolean }[] = [];
     const sink = createRoomSink({
       parentOf: (k) => (k === key ? parent : undefined),
       matsFor: () => mats,
       order: (id) => order.get(id)!,
       physics: { addStaticBoxes: (b, tag) => { const e = { n: b.length / BOX_FLOATS, tag, removed: false }; boxes.push(e); return { remove: () => { e.removed = true; } }; } },
-      fire: { set: (id, e) => fire.push(`+${id}:${e.length}`), clear: (id) => fire.push(`-${id}`) },
     });
-    // rooms arrive in any order; colliders and fires go in at once, meshes on flush
+    // rooms arrive in any order; colliders go in at once, meshes on flush
     const furnished = [...ids].reverse().map((id) => furnish(id));
     const handles = furnished.map((r) => sink.add(r));
     expect(parent.children).toHaveLength(0);
     expect(boxes).toHaveLength(ids.length);
-    expect(fire.length).toBe(furnished.filter((r) => r.emitters.length || r.flames.length).length);
     // no budget: one step per flush (start, one room per step, swap), so a big group spans frames
     let steps = 0;
     while (sink.flush(() => true)) { steps++; expect(parent.children).toHaveLength(0); }
@@ -406,7 +432,6 @@ describe('room meshes', () => {
     const bigTris = furnished[handles.indexOf(big)].triangles;
     sink.remove(big);
     expect(boxes[handles.indexOf(big)].removed).toBe(true);
-    expect(fire.at(-1)).toBe(`-${big.room}`);
     // while the rebuild runs, step by step, the old mesh stays drawn: nothing vanishes in between
     for (let i = 0; i < 3; i++) { expect(sink.flush(() => true)).toBe(true); expect(parent.children).toEqual([g]); expect(disposed).toBe(0); }
     // a room arriving mid-rebuild restarts it; the old mesh is still there

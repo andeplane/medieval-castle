@@ -1,4 +1,5 @@
-// three.js side of streamed furniture. A room's colliders and fires go in (and out) at once; its
+// three.js side of streamed furniture. A room's colliders go in (and out) at once (its fires are not
+// streamed: every room's are lit from the first frame, render/interiorFire.ts furnitureFires); its
 // arrays (roomFurniture.ts) join its visibility group, whose loaded rooms are merged into one mesh per
 // material (one draw call per material per group, as the castle's Builder bins), parented under the
 // group so it shows and hides with its rooms. A group whose rooms changed is rebuilt in flush(), which
@@ -9,7 +10,6 @@
 // whose rooms it cannot see. Thin glue: shapes, tags and colliders come from the worker.
 import * as THREE from 'three/webgpu';
 import type { PhysicsApi, SpaceId } from '../castle/interior/types';
-import type { Flame, LightEmitter } from '../light/types';
 import { PROP_MATS, type PropMat } from './geom';
 import { unionSphere, type RoomFurniture, type BinArrays, type Sphere } from './roomFurniture';
 import type { RoomSink } from './streamer';
@@ -105,9 +105,6 @@ export function meshesFromBins(name: string, bins: Partial<Record<PropMat, BinAr
   return group;
 }
 
-/** Fires per room for the light system (src/light/roomFires.ts). */
-export interface RoomFireSink { set(room: SpaceId, emitters: LightEmitter[], flames: Flame[]): void; clear(room: SpaceId): void }
-
 export interface RoomSinkDeps {
   /** The visibility group's object for a group key; groups without one are not drawn. */
   parentOf(key: string): THREE.Object3D | undefined;
@@ -116,7 +113,6 @@ export interface RoomSinkDeps {
   /** A room's place in the plan: merged meshes list their rooms in this order. */
   order(room: SpaceId): number;
   physics: Pick<PhysicsApi, 'addStaticBoxes'>;
-  fire: RoomFireSink;
 }
 
 export interface RoomHandle { room: SpaceId; key: string; colliders: { remove(): void } }
@@ -150,14 +146,12 @@ export function createRoomSink(d: RoomSinkDeps): GroupSink {
       groups.get(r.key)!.rooms.set(r.room, r);
       changed(r.key);
       const colliders = d.physics.addStaticBoxes(r.boxes, `furniture:${r.room}`);
-      if (r.emitters.length || r.flames.length) d.fire.set(r.room, r.emitters, r.flames);
       return { room: r.room, key: r.key, colliders };
     },
     remove(h) {
       groups.get(h.key)!.rooms.delete(h.room);
       changed(h.key);
       h.colliders.remove();
-      d.fire.clear(h.room);
     },
     flush(over) {
       do { const key = dirty.values().next().value; if (key === undefined) break; step(key); } while (!over());
