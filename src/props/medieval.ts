@@ -6,8 +6,8 @@
 // front +z, metres.
 import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } from './geom';
 import { range, pick, type Rng } from '../core/rng';
-import { WOOD, CLOTH, IRON, jitterTint, woodTint, boxCollider, hull, none, planks, leg, jug, bowl, candle, type PropKind, type PropMeta, type Emitter } from './parts';
-import { hoodedHearth } from './period';
+import { WOOD, CLOTH, IRON, jitterTint, woodTint, boxCollider, hull, none, planks, leg, jug, bowl, book, candle, type PropKind, type PropMeta, type Emitter } from './parts';
+import { hoodedHearth, PALETTES, tone } from './period';
 
 const PEWTER: RGB = [0.62, 0.62, 0.6];
 const STONE_GREY: RGB = [0.82, 0.8, 0.76];
@@ -521,5 +521,136 @@ export const brazier: PropKind = {
   },
 };
 
+// ---------- wall dressing and clutter (dress.ts: a room's palette, its tier, its empty corners) ----------
+const WICKER: RGB = [0.95, 0.78, 0.5];
+
+/** A round wicker basket: open, a rim, perhaps a handle, holding linen, apples or balls of wool, or empty. */
+export const basket: PropKind = {
+  name: 'basket', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.2, 0.3), H = range(r, 0.22, 0.4), ph = r() * 6;
+    m.tinted(jitterTint(r, WICKER, 0.1), () => {
+      m.lathe('straw', [[R * 0.78, 0.004], [R * 0.95, H * 0.5], [R, H]], 10, { capBottom: true, wobble: (th, y) => 1 + Math.sin(th * 5 + ph + y * 8) * 0.02 });
+      m.tube('straw', Array.from({ length: 11 }, (_, i) => { const a = (i / 10) * Math.PI * 2; return [Math.cos(a) * R, H, Math.sin(a) * R] as V3; }), 0.014, 4, [false, false]);
+      if (r() < 0.4) m.tube('straw', Array.from({ length: 7 }, (_, i) => { const a = (i / 6) * Math.PI; return [Math.cos(a) * R * 0.95, H + Math.sin(a) * R * 0.9, 0] as V3; }), 0.012, 4, [false, false]);
+    });
+    const what = r();
+    if (what < 0.35) m.tinted(jitterTint(r, pick(r, [CLOTH.linen, CLOTH.undyed]), 0.05), () => m.lathe('cloth', [[R * 0.9, H * 0.82], [R * 0.6, H * 0.95], [0.001, H * 1.02]], 10));
+    else if (what < 0.7) {
+      const c = pick(r, [[0.55, 0.12, 0.06], [0.45, 0.5, 0.12], [0.42, 0.3, 0.2]] as RGB[]);
+      for (let i = 0; i < 5; i++) {
+        const a = i * 1.26 + ph, d = i ? R * 0.5 : 0, rr = R * range(r, 0.24, 0.3);
+        m.tinted(jitterTint(r, c, 0.12), () => m.with(translate(Math.cos(a) * d, H * 0.82 + (i ? 0 : rr * 0.6), Math.sin(a) * d), () => m.lathe(what < 0.55 ? 'ceramic' : 'cloth', [[0.001, -rr], [rr * 0.75, -rr * 0.7], [rr, 0], [rr * 0.75, rr * 0.7], [0.001, rr]], 7)));
+      }
+    }
+    return none(m);
+  },
+};
+
+/**
+ * A peg rail on the wall: a board with turned pegs, a cloak (in the room's palette, or plain wool) or two,
+ * a hood or a leather bag hung from them.
+ */
+export const pegRail: PropKind = {
+  name: 'peg-rail', placement: 'wall', mount: 1.75, blocksNav: false,
+  build(m, r, v) {
+    const n = 3 + Math.floor(r() * 3), L = n * range(r, 0.24, 0.3), main = PALETTES[tone(v)].main;
+    m.tinted(woodTint(r), () => {
+      m.box('wood', [0, 0, 0.013], [L, 0.1, 0.024], { bevel: 0.006, grain: 0 });
+      for (let i = 0; i < n; i++) m.tube('wood', [[(i + 0.5 - n / 2) * (L / n), 0, 0.02], [(i + 0.5 - n / 2) * (L / n), 0.03, 0.11]], [0.013, 0.01], 5, [false, true]);
+    });
+    let hung = 0;
+    for (let i = 0; i < n; i++) {
+      const x = (i + 0.5 - n / 2) * (L / n), what = r();
+      if (what < 0.45 && hung < 2) {
+        // a cloak: gathered at the peg, falling in folds and widening towards the hem
+        hung++;
+        const len = range(r, 0.8, 1.05), w = range(r, 0.34, 0.46), ph = r() * 6, c = jitterTint(r, r() < 0.6 ? main : pick(r, [CLOTH.brown, CLOTH.undyed, CLOTH.black, CLOTH.green]), 0.06);
+        m.tinted(c, () => m.sheet('cloth', (s, t) => {
+          const spread = 0.25 + 0.75 * Math.min(1, t * 2.2);
+          return [x + (s - 0.5) * w * spread, 0.02 - t * len, 0.06 + Math.sin(s * Math.PI) * 0.05 * spread + Math.sin(s * Math.PI * 5 + ph) * 0.018 * t + t * 0.02];
+        }, 6, 5, [w, len]));
+      } else if (what < 0.65) {
+        // a leather bag on its strap
+        m.tinted(jitterTint(r, CLOTH.leather, 0.1), () => {
+          m.tube('cloth', [[x, 0.025, 0.1], [x - 0.04, -0.2, 0.1], [x + 0.04, -0.2, 0.1], [x, 0.025, 0.1]], 0.006, 3, [false, false]);
+          m.with(translate(x, -0.36, 0.11), () => m.lathe('cloth', [[0.001, 0], [0.08, 0.03], [0.09, 0.12], [0.055, 0.17], [0.001, 0.18]], 7));
+        });
+      } else if (what < 0.8) {
+        // a felt hat or a hood
+        m.tinted(jitterTint(r, pick(r, [CLOTH.black, CLOTH.brown, main]), 0.08), () => m.with(compose(translate(x, -0.05, 0.2), rotX(-0.25)), () => m.lathe('cloth', [[0.15, 0], [0.1, 0.015], [0.09, 0.09], [0.055, 0.13], [0.001, 0.14]], 9, { capBottom: true })));
+      }
+    }
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A shelf on iron brackets on the wall with jugs, bowls and books on it. */
+export const wallShelf: PropKind = {
+  name: 'wall-shelf', placement: 'wall', mount: 1.5, blocksNav: false,
+  build(m, r) {
+    const L = range(r, 0.7, 1.2), D = range(r, 0.18, 0.24), t = 0.03;
+    m.tinted(woodTint(r), () => m.box('wood', [0, -t / 2, D / 2 + 0.002], [L, t, D], { bevel: 0.005, grain: 0 }));
+    m.tinted(IRON, () => { for (const sx of [-1, 1]) m.tube('iron', [[sx * L * 0.35, -0.22, 0.006], [sx * L * 0.35, -t - 0.004, D * 0.85]], 0.008, 4); });
+    let x = -L / 2 + 0.06;
+    while (x < L / 2 - 0.12) {
+      // everything stands within the shelf's depth, clear of the wall
+      const k = r(), at = (w: number) => translate(x + w / 2, 0, D / 2 + 0.004), room = D / 2 - 0.014;
+      if (k < 0.4) { const h = Math.min(range(r, 0.14, 0.24), room / 0.38), w = h * 0.75; m.with(at(w), () => jug(m, r, h)); x += w + 0.04; }
+      else if (k < 0.65) { const R = Math.min(range(r, 0.06, 0.09), room); m.with(at(R * 2), () => bowl(m, r, R)); x += R * 2 + 0.04; }
+      else { const n = 1 + Math.floor(r() * 3), w = range(r, 0.16, 0.22); m.with(at(w), () => { let y = 0; for (let i = 0; i < n; i++) { const th = range(r, 0.03, 0.06); m.with(compose(translate(0, y, 0), rotY(range(r, -0.08, 0.08))), () => book(m, r, w, D - 0.06, th)); y += th; } }); x += w + 0.06; }
+    }
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A painted heater shield on the wall, in the room's colours: a plain field with a chevron, a bend, a
+ * cross, a pale or a fess, and a dark rim. */
+export const shield: PropKind = {
+  name: 'shield', placement: 'wall', mount: 2.1, blocksNav: false,
+  build(m, r, v) {
+    const pal = PALETTES[tone(v)], W = range(r, 0.48, 0.6), H = W * range(r, 1.15, 1.3);
+    const swap = r() < 0.5, field = jitterTint(r, swap ? pal.accent : pal.main, 0.05), charge = jitterTint(r, swap ? pal.main : pal.accent, 0.05);
+    const kind = Math.floor(r() * 5);
+    const hw = (t: number) => (t < 0.4 ? W / 2 : (W / 2) * Math.cos(((t - 0.4) / 0.6) * Math.PI / 2) + 0.004);
+    const at = (s: number, t: number): V3 => { const x = (s - 0.5) * 2 * hw(t); return [x, -t * H, 0.025 + (1 - (2 * s - 1) ** 2) * 0.03]; };
+    const on = (s: number, t: number) => {
+      const x = (s - 0.5) * 2, y = t * 2 - 1;
+      if (kind === 0) return Math.abs(y + 0.1 - Math.abs(x) * 0.9) < 0.18; // chevron, its point up
+      if (kind === 1) return Math.abs(x + y) < 0.3; // bend
+      if (kind === 2) return Math.abs(x) < 0.17 || Math.abs(y + 0.15) < 0.14; // cross
+      if (kind === 3) return Math.abs(x) < 0.3; // pale
+      return Math.abs(y + 0.2) < 0.2; // fess
+    };
+    const nu = 8, nv = 9;
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const s0 = i / nu, t0 = j / nv;
+      m.tinted(on(s0 + 0.5 / nu, t0 + 0.5 / nv) ? charge : field, () => m.sheet('wood', (s, t) => at(s0 + s / nu, t0 + t / nv), 1, 1, [W / nu, H / nv], true)); // facing out (wood is drawn front side only)
+    }
+    m.tinted([0.12, 0.1, 0.08], () => m.tube('wood', Array.from({ length: 17 }, (_, k) => { const u = k / 16, t = u < 0.5 ? u * 2 : (1 - u) * 2, s = u < 0.5 ? 0 : 1; return at(s, Math.min(1, t)); }).concat([at(0, 0)]), 0.008, 3, [false, false]));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A plain wall hanging: dyed wool in the room's colour on a rod, banded at its edges in the accent. The
+ * plain household's tapestry (a tenth of its triangles). */
+export const hanging: PropKind = {
+  name: 'hanging', placement: 'wall', mount: 2.6, blocksNav: false,
+  build(m, r, v) {
+    const pal = PALETTES[tone(v)], W = range(r, 0.9, 1.7), H = range(r, 1.1, 1.6), ph = r() * 6;
+    const main = jitterTint(r, pal.main, 0.06), band = jitterTint(r, pal.accent, 0.06), nu = 6, nv = 4;
+    m.tinted(jitterTint(r, WOOD.dark), () => m.tube('wood', [[-W / 2 - 0.06, 0, 0.04], [W / 2 + 0.06, 0, 0.04]], 0.018, 6));
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const s0 = i / nu, t0 = j / nv, edge = j === nv - 1 || ((i === 0 || i === nu - 1) && r() < 0.5);
+      m.tinted(edge ? band : main, () => m.sheet('cloth', (s, t) => {
+        const S = s0 + s / nu, T = t0 + t / nv;
+        return [(S - 0.5) * W, -0.02 - T * H + Math.sin(S * 7 + ph) * 0.012 * T, 0.03 + Math.sin(S * Math.PI * 6 + ph) * 0.01 * (1 - T * 0.5) + T * 0.008];
+      }, 2, 2, [W / nu, H / nv]));
+    }
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
 export const MEDIEVAL: readonly PropKind[] = [shutter, refectoryTable, boxChair, dresser, stoneAltar, prieDieu, spitHearth, workTable,
-  caskRack, mashTun, breadOven, washTub, dryingRack, grindstone, wellHead, shackles, privy, cradle, writingDesk, countingTable, loom, perch, brazier];
+  caskRack, mashTun, breadOven, washTub, dryingRack, grindstone, wellHead, shackles, privy, cradle, writingDesk, countingTable, loom, perch, brazier,
+  basket, pegRail, wallShelf, shield, hanging];

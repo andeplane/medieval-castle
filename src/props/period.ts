@@ -19,11 +19,25 @@ export const METAL: Record<string, RGB> = {
   brass: [0.95, 0.7, 0.36], gilt: [0.85, 0.62, 0.26], copper: [0.9, 0.46, 0.26], steel: [0.66, 0.67, 0.7], mirror: [0.5, 0.52, 0.55],
 };
 export const STONE: Record<string, RGB> = { lime: [1, 0.98, 0.94], grey: [0.86, 0.85, 0.82], sand: [1.02, 0.86, 0.72], marble: [0.4, 0.38, 0.38] }; // warm greys, never blue
-/** One dominant textile per room (style guide §2): the variant seed picks it, v % 3. */
-export const TONES: readonly RGB[] = [PCLOTH.crimson, PCLOTH.green, PCLOTH.blue];
-/** Upholstery: velvet in the room's tone, or oxblood leather for tone 2 (libraries and studies). */
-export const UPHOLSTERY: readonly RGB[] = [PCLOTH.crimson, PCLOTH.green, PCLOTH.oxblood];
-export const tone = (v: number) => ((v % 3) + 3) % 3;
+/**
+ * A room's palette (dress.ts deals one to every room): its main textile (hangings, bed curtains, covers,
+ * cloaks), the upholstery of its seats and an accent for borders, bands and charges. Medieval dyes: madder
+ * red, weld-and-woad green, woad blue, murrey, tawny and saffron.
+ */
+export interface Palette { name: string; main: RGB; upholstery: RGB; accent: RGB; /** multiplier over the atlas carpets */ carpet: RGB }
+export const PALETTES: readonly Palette[] = [
+  { name: 'crimson', main: PCLOTH.crimson, upholstery: PCLOTH.crimson, accent: PCLOTH.gold, carpet: [1, 1, 1] },
+  { name: 'green', main: PCLOTH.green, upholstery: PCLOTH.green, accent: PCLOTH.gold, carpet: [0.82, 1.04, 0.86] },
+  { name: 'blue', main: PCLOTH.blue, upholstery: PCLOTH.oxblood, accent: PCLOTH.ivory, carpet: [0.86, 0.9, 1.1] },
+  { name: 'murrey', main: [0.27, 0.07, 0.15], upholstery: [0.27, 0.07, 0.15], accent: PCLOTH.gold, carpet: [0.95, 0.8, 0.95] },
+  { name: 'tawny', main: [0.48, 0.25, 0.09], upholstery: [0.3, 0.15, 0.07], accent: PCLOTH.green, carpet: [1.06, 0.92, 0.74] },
+  { name: 'saffron', main: [0.6, 0.43, 0.11], upholstery: PCLOTH.blue, accent: PCLOTH.blue, carpet: [1.08, 1.0, 0.76] },
+];
+/** One dominant textile per room (style guide §2): the variant seed picks it, v % PALETTES.length. */
+export const TONES: readonly RGB[] = PALETTES.map((p) => p.main);
+/** Upholstery: velvet in the room's tone, or leather (the blue room's oxblood, the tawny room's brown). */
+export const UPHOLSTERY: readonly RGB[] = PALETTES.map((p) => p.upholstery);
+export const tone = (v: number) => ((v % PALETTES.length) + PALETTES.length) % PALETTES.length;
 const SOOT: RGB = [0.07, 0.06, 0.055];
 const EMBER: RGB = [1.5, 1.07, 1.0]; // wax tint above 1 glows (render.ts): the ember bed
 
@@ -571,10 +585,10 @@ export const bookcase: PropKind = {
 };
 
 // ---------- floor textiles ----------
-/** Turkey carpet from the paint atlas: border, field and medallion; v % 3 = 2 is a tartan carpet. */
-function carpetSheet(m: PropMesh, r: Rng, W: number, L: number, tartan: boolean) {
+/** Turkey carpet from the paint atlas: border, field and medallion, tinted to the room's palette; the blue room's carpet may be a tartan. */
+function carpetSheet(m: PropMesh, r: Rng, W: number, L: number, tartan: boolean, tint: RGB = [1, 1, 1]) {
   const ph = r() * 6, rect = tartan ? ATLAS.tartan : ATLAS.carpet;
-  m.tinted(jitterTint(r, [1, 1, 1], 0.05), () => m.atlasSheet((s, t) => {
+  m.tinted(jitterTint(r, tint, 0.05), () => m.atlasSheet((s, t) => {
     const e = Math.min(s, 1 - s, t, 1 - t), lift = Math.min(1, e * 30);
     return [(s - 0.5) * W, 0.003 + 0.007 * lift + Math.max(0, Math.sin(s * 5 + t * 3 + ph)) * 0.006 * lift, (t - 0.5) * L];
   }, 6, 8, rect));
@@ -586,8 +600,8 @@ function carpetSheet(m: PropMesh, r: Rng, W: number, L: number, tartan: boolean)
 /** Hearth or bedside rug: a smaller Turkey carpet. */
 export const rug: PropKind = {
   name: 'rug', placement: 'floor', blocksNav: false,
-  build(m, r) {
-    carpetSheet(m, r, range(r, 1.3, 1.9), range(r, 1.9, 2.8), false);
+  build(m, r, v) {
+    carpetSheet(m, r, range(r, 1.3, 1.9), range(r, 1.9, 2.8), false, PALETTES[tone(v)].carpet);
     return { colliders: [hull(m)], emitters: [] };
   },
 };
@@ -596,7 +610,7 @@ export const carpet: PropKind = {
   name: 'carpet', placement: 'floor', blocksNav: false,
   build(m, r, v) {
     const W = range(r, 2.8, 3.6), L = range(r, 3.6, 4.6);
-    carpetSheet(m, r, W, L, tone(v) === 2 && r() < 0.5);
+    carpetSheet(m, r, W, L, tone(v) === 2 && r() < 0.5, PALETTES[tone(v)].carpet);
     return { colliders: [hull(m)], emitters: [] };
   },
 };
