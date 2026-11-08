@@ -16,6 +16,7 @@ import { islandOutline, moatOuter, footprints, courtyard, castleCentre, gatehous
 import { offsetPoly } from '../castle/builder';
 import { fieldLayout, fieldIndexAt, segDist, LANE_HALF, CROPS, FIELD_EXTENT, type Crop, type FieldLayout } from './fields';
 import { buildRocks } from './rocks';
+import { VIEW_LAYER, MIRROR_LAYER, UNDRAWN_LAYER } from '../render/passLayers';
 import { makeRelief0, erodeRelief, RN, RX0, RZ0, RSIZE, RCELL } from './relief';
 import { seededDeps, type GenDeps, type Noise2D } from './deps';
 
@@ -571,14 +572,55 @@ function buildGrid(T: Terrain, size: number, seg: number, holes: V2[][] = []) {
   const samples: Sample[] = new Array(p.count);
   for (let i = 0; i < p.count; i++) { const s = T.sample(p.getX(i), p.getZ(i)); samples[i] = s; p.setY(i, s.h); }
   // no ground where groundHole says so (PlaneGeometry: 6 indices per cell, a b d / b c d; a and c are opposite corners)
-  const src = g.index!.array, keep: number[] = [];
+  const src = g.index!.array, keep: number[] = [], cells = new Uint8Array(seg * seg);
   for (let o = 0; o < src.length; o += 6) {
     const a = src[o], c = src[o + 4];
     const x = (p.getX(a) + p.getX(c)) / 2, z = (p.getZ(a) + p.getZ(c)) / 2;
-    if (!groundHole(x, z) && !extra(x, z)) for (let k = 0; k < 6; k++) keep.push(src[o + k]);
+    if (!groundHole(x, z) && !extra(x, z)) { cells[o / 6] = 1; for (let k = 0; k < 6; k++) keep.push(src[o + k]); }
   }
   g.setIndex(keep);
+  g.userData.grid = { seg, cells }; // which cells have ground (mirrorIndex)
   return finish(T, g, samples);
+}
+
+/**
+ * The water reflection's stand-in for a grid from buildGrid (render/passLayers.ts): every `step`-th row and
+ * column of the same vertices, so `step`² times fewer triangles on the same ground. A coarse cell is kept
+ * where any of its fine cells has ground, so the stand-in covers all of it (and no more than a cell beyond,
+ * inside a building's walls).
+ */
+export function mirrorIndex(g: THREE.BufferGeometry, step = 2): number[] {
+  const { seg, cells } = g.userData.grid as { seg: number; cells: Uint8Array }, W = seg + 1, out: number[] = [];
+  for (let iy = 0; iy + step <= seg; iy += step) for (let ix = 0; ix + step <= seg; ix += step) {
+    let any = false;
+    for (let j = 0; j < step && !any; j++) for (let i = 0; i < step && !any; i++) any = cells[(iy + j) * seg + ix + i] === 1;
+    if (!any) continue;
+    // PlaneGeometry's cell winding: a b d / b c d
+    const a = iy * W + ix, b = (iy + step) * W + ix, c = b + step, d = a + step;
+    out.push(a, b, d, b, c, d);
+  }
+  return out;
+}
+
+/** The reflection's stand-in for buildFar's polar mesh: every `step`-th ring and spoke of the same vertices. */
+export function polarMirrorIndex(rings: number, segs: number, step = 2): number[] {
+  const W = segs + 1, out: number[] = [];
+  for (let i = 0; i + step <= rings; i += step) for (let j = 0; j + step <= segs; j += step) {
+    // buildFar's cell winding: a b c / b d c
+    const a = i * W + j, b = a + step, c = a + step * W, d = c + step;
+    out.push(a, b, c, b, d, c);
+  }
+  return out;
+}
+
+/** The index of `g` without the triangles whose three corners are all `hidden`. */
+export function underNear(g: THREE.BufferGeometry, hidden: (x: number, z: number) => boolean): number[] {
+  const p = g.attributes.position as THREE.BufferAttribute, idx = g.index!.array, out: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    if ([idx[t], idx[t + 1], idx[t + 2]].every((i) => hidden(p.getX(i), p.getZ(i)))) continue;
+    out.push(idx[t], idx[t + 1], idx[t + 2]);
+  }
+  return out;
 }
 
 /** Polar far terrain: rings with growing spacing out to the horizon. */
@@ -639,8 +681,7 @@ function buildStream(T: Terrain, waterMat: THREE.Material | null) {
 }
 
 const NEAR_TILES = 6, FAR_SECTORS = 8, FAR_BANDS = 3; // 6 x 6 and 8 x 3: as few draws as cull nearly as well (finer tiles saved < 10%)
-/** A layer no camera renders: the whole near and far meshes sit on it, kept for whoever reads them by name. */
-export const UNDRAWN_LAYER = 31;
+export { UNDRAWN_LAYER }; // (render/passLayers.ts)
 
 /**
  * Split a mesh's triangles into tiles (by `key` of each triangle's centre) that share its vertex
@@ -693,18 +734,40 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const tNear = performance.now();
   const far = new THREE.Mesh(buildFar(T, 150, 16000, o.farRings ?? 200, o.farSegs ?? 560, (x, z, s) => 4 * smoothstep(0, 25, inside(x, z)) + (s.stream !== undefined ? 9 * (1 - smoothstep(CORRIDOR - 14, CORRIDOR - 2, s.stream)) : 0)), material);
   far.receiveShadow = false; far.name = 'terrain-far';
+  // the polar mesh starts at 150 m, inside the near grid's square, where it is dropped (4 m from 25 m in)
+  // under the near ground: its triangles 10 m and more inside (dropped 1.4 m or more) are never seen
+  const buried = (x: number, z: number) => inside(x, z) > 10;
+  far.geometry.setIndex(underNear(far.geometry, buried));
   const tFar = performance.now();
   const ud = (material as THREE.Material & { userData: { stream?: THREE.Material; rock?: THREE.Material; reliefTex?: THREE.DataTexture } }).userData;
   if (ud.reliefTex) { (ud.reliefTex.image.data as Uint8Array).set(T.reliefTexture(ud.reliefTex.image.width)); ud.reliefTex.needsUpdate = true; }
   // drawn as tiles that three's frustum culling can drop (cullTiles); the whole meshes stay, undrawn, for
   // the height grid, physics and ground cover that read them by name
-  const tiles = [
-    ...cullTiles(near, (x, z) => { const c = (v: number) => Math.min(NEAR_TILES - 1, Math.max(0, Math.floor((v / NEAR + 0.5) * NEAR_TILES))); return c(x) * NEAR_TILES + c(z); }),
-    ...cullTiles(far, (x, z) => {
-      const a = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * FAR_SECTORS), band = Math.min(FAR_BANDS - 1, Math.floor((Math.log(Math.hypot(x, z) / 150) / Math.log(16000 / 150)) * FAR_BANDS));
-      return band * FAR_SECTORS + a;
-    }),
-  ];
+  const nearKey = (x: number, z: number) => { const c = (v: number) => Math.min(NEAR_TILES - 1, Math.max(0, Math.floor((v / NEAR + 0.5) * NEAR_TILES))); return c(x) * NEAR_TILES + c(z); };
+  const nearTiles = cullTiles(near, nearKey);
+  // the water's reflection draws the near grid at half the resolution (render/passLayers.ts): 0.9 m cells
+  // were a quarter of a million triangles a frame in a half-size, rippled image
+  const mg = new THREE.BufferGeometry();
+  for (const [n, a] of Object.entries(near.geometry.attributes)) mg.setAttribute(n, a); // the same vertices
+  const mirror = new THREE.Mesh(mg.setIndex(mirrorIndex(near.geometry)), material);
+  mirror.name = 'terrain-mirror'; mirror.receiveShadow = true;
+  const mirrorTiles = cullTiles(mirror, nearKey);
+  const farKey = (x: number, z: number) => {
+    const a = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * FAR_SECTORS), band = Math.min(FAR_BANDS - 1, Math.floor((Math.log(Math.hypot(x, z) / 150) / Math.log(16000 / 150)) * FAR_BANDS));
+    return band * FAR_SECTORS + a;
+  };
+  const farTiles = cullTiles(far, farKey);
+  // and the far mesh with every other ring and spoke (its rings are 2.4 % of their radius apart)
+  const fg = new THREE.BufferGeometry();
+  for (const [n, a] of Object.entries(far.geometry.attributes)) fg.setAttribute(n, a);
+  fg.setIndex(polarMirrorIndex(o.farRings ?? 200, o.farSegs ?? 560));
+  fg.setIndex(underNear(fg, buried));
+  const farMirror = new THREE.Mesh(fg, material);
+  farMirror.name = 'terrain-farmirror';
+  const farMirrorTiles = cullTiles(farMirror, farKey);
+  for (const t of [...nearTiles, ...farTiles]) t.layers.set(VIEW_LAYER);
+  for (const t of [...mirrorTiles, ...farMirrorTiles]) { t.layers.set(MIRROR_LAYER); t.castShadow = false; }
+  const tiles = [...nearTiles, ...mirrorTiles, ...farTiles, ...farMirrorTiles];
   near.layers.set(UNDRAWN_LAYER); far.layers.set(UNDRAWN_LAYER);
   const st = buildStream(T, ud.stream ?? null);
   const corridor = new THREE.Mesh(st.ground, material);
@@ -717,7 +780,7 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const tRocks = performance.now();
   Object.assign(T.timings, { nearMs: Math.round(tNear - t0), farMs: Math.round(tFar - tNear), streamMeshMs: Math.round(tStream - tFar), rocksMs: Math.round(tRocks - tStream) });
   let tris = 0;
-  group.traverse((m) => { const g = (m as THREE.Mesh).geometry; if (g && !m.layers.isEnabled(UNDRAWN_LAYER)) tris += ((g.index?.count ?? g.attributes.position.count) / 3) * ((m as THREE.InstancedMesh).count ?? 1); });
+  group.traverse((m) => { const g = (m as THREE.Mesh).geometry; if (g && !m.layers.isEnabled(UNDRAWN_LAYER) && !m.layers.isEnabled(MIRROR_LAYER)) tris += ((g.index?.count ?? g.attributes.position.count) / 3) * ((m as THREE.InstancedMesh).count ?? 1); });
   // island rock footprints (x, z, r) for collision / navmesh: group.getObjectByName('rocks').userData.obstacles
   group.userData = { triangles: Math.round(tris), rocks: rocks.userData.count, islandObstacles: rocks.userData.obstacles.length, timings: { ...T.timings } };
   return group;

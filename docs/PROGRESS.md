@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-11-08: every bookmark under 3 M triangles, with and without furniture (branch `claude/project-thread-ns4g2v-tris`)
+
+Anders' Mac (WebGPU, `?furniture=1`) counted 3.50 M triangles at the hero view and 3.3 M at the gate without furniture. The brief's budget is 1–3 M, shadow passes included.
+
+**Cause.** The frame draws the scene up to four times: the AO pre-pass, the scene, the water's reflection and the sun's near shadow map. The 0.9 m near terrain grid (~0.7 M triangles in view) dominated the first three. The reflection drew everything at full detail into a half-size, rippled target. The AO pre-pass drew out to the horizon, although the scene uses no AO beyond 260 m. Every rock was drawn at full detail however far away, and every door leaf kept its chamfers and nail heads at any distance.
+
+Changes (only how things are drawn, never whether; everything in the view is still drawn, and everything that can be seen in the water is still in the reflection):
+- **Pass layers** (`render/passLayers.ts`). The view, the AO pre-pass and the shadow maps draw `VIEW_LAYER`. The reflection's camera draws `MIRROR_LAYER`, which holds cheaper stand-ins over the same ground. The terrain's near grid and far mesh are at every other vertex (`terrain.ts mirrorIndex`, `polarMirrorIndex`), indices only on the same vertices. Grass, far grass and reeds have straight blades, and the far grass keeps half of its blades (`grass.ts`). The water's reflector renders once a frame, keyed to the view camera (`water.ts`).
+- **AO pre-pass to its fade** (`render/aoCamera.ts`). Its camera is the view's, with the far plane at 275 m (AO fades out by 260 m). Flame sprites are on `FX_LAYER` and stay out of it: they write no depth, and their normals only smeared the AO input.
+- **Rocks by size on screen** (`rocks.ts ROCK_LOD`). Each rock is drawn at detail 2, 1 or 0 by its projected size, re-bucketed when the eye moves 1 m. The near rocks' physics set is kept undrawn.
+- **Far terrain** under the near grid is dropped where it lies more than 10 m inside the near grid (`underNear`). It was buried.
+- **Door leaves beyond 40 m** (`doors.ts DOOR_FAR`, 4 m band) use the same boards, ledges, braces, straps and handles, but with square edges, no nail heads, six-sided round iron and the head in 15 cm chords (`doorParts.ts leafGeometry(…, far)`). That is 0.6 k triangles a leaf instead of 1.3 k.
+
+Numbers (headless WebGL2 with SwiftShader, frozen time, `renderer.info` per draw over all passes; main f98c864 → this branch after #82/#83). Furniture off: hero 3.37 → 2.23 M, gate 3.41 → 2.49, courtyard 2.50 → 2.16, hall 2.32 → 1.98, top 3.67 → 2.56, aerial 3.39 → 2.17. Furniture on: hero 3.70 → 2.66, gate 3.47 → 2.66, courtyard 2.73 → 2.42, hall 2.45 → 2.16, top 2.99, aerial 2.55. The furniture baseline was taken before #82. Draw calls did not change (hero 777 with furniture). `tests/drawBudget.test.ts` adds a triangle budget per bookmark over every view and interior view: 2.7 M for the part it builds (castle, interior, doors, terrain, rocks, ground cover). It also checks that the reflection's ground covers the view's with about a quarter of the triangles.
+
+Look: before and after captures are in `castle-plan/fix-tris/` (`base`, `baseF`, `fin`, `finF`, `diff/`). Courtyard and hall are pixel-identical. Gate differs in 0.02% of pixels. Hero (0.45%), top and aerial differ only in single shoreline rocks at a lower level, and that cannot be seen at 3× zoom (`diff/final-zoom-hero.png`).
+
+Not done or checked:
+- **`top` with furniture is at 2.99 M, with no margin.** What is left there: the view's terrain grid (0.54 M in each of AO and scene), the rooms that the room graph draws from 260 m up (23 of them, 171 k a pass with furniture), and the flame sprites (51 k a pass, every flame in the castle, `light/three.ts`, not frustum culled).
+- Not measured on the Mac.
+- Tree shadow-only casters (layer 1) are not in any pass's mask. This was true before this branch too.
+
 ## 2026-11-08: chimneypieces and hoods in tone with the walls (branch `claude/project-thread-ns4g2v-chimney`)
 
 From Anders' Mac (WebGPU, live 9006baa and later, `?furniture=1`, bookmark `hall`): the hall's hooded chimneypiece read near-white, white shafts and a pale bluish-grey hood against the warm rubble; the same hearth in the kitchen read dark.

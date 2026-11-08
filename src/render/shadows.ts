@@ -7,6 +7,7 @@
 // stays fixed on the castle instead of following the view, so distant views keep sharp shadows.
 import * as THREE from 'three/webgpu';
 import { ShadowBaseNode } from 'three/webgpu';
+import { VIEW_MASK } from './passLayers';
 import { Fn, If, vec4, uniform, positionWorld, max, abs, smoothstep, shadow, renderGroup } from 'three/tsl';
 
 class ProxyLight extends THREE.Object3D { target = new THREE.Object3D(); castShadow = true; shadow!: THREE.DirectionalLightShadow }
@@ -40,6 +41,9 @@ export class NearFarShadowNode extends ShadowBaseNode {
     const mk = (half: number, map: number, radius: number, auto: boolean) => {
       const s = light.shadow.clone() as THREE.DirectionalLightShadow;
       s.mapSize.set(map, map); s.radius = radius; s.autoUpdate = auto;
+      // the full-detail casters, whichever pass renders the map first (three takes the frame camera's
+      // layers otherwise, and the water's mirrored camera draws stand-ins: render/passLayers.ts)
+      s.camera.layers.mask = VIEW_MASK;
       const c = s.camera; c.left = -half; c.right = half; c.top = half; c.bottom = -half; c.near = 1; c.far = PULL + 500; c.updateProjectionMatrix();
       return s;
     };

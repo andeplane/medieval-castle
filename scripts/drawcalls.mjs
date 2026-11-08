@@ -31,10 +31,11 @@ await page.evaluate(() => {
   be.draw = (ro, info) => {
     if (window.__calls) {
       const rt = renderer.getRenderTarget(), cam = window.__game.render.camera;
-      // the AO pre-pass draws at half size, the scene pass at full size, both with the game camera;
+      // the AO pre-pass draws at half size, the scene pass at full size, both from the game camera's eye;
       // the water's reflection with its own virtual camera; shadow maps with an orthographic one
       const pass = ro.camera.isOrthographicCamera ? (rt && rt.width === rt.height && rt.width >= 1024 ? `shadow ${rt.width}` : 'post')
-        : ro.camera !== cam ? 'reflection' : rt && rt.width < renderer.domElement.width ? 'AO pre-pass' : 'scene';
+        // (the AO pre-pass has a camera of its own with a nearer far plane, render/aoCamera.ts)
+        : ro.camera !== cam && ro.camera.far === cam.far ? 'reflection' : rt && rt.width < renderer.domElement.width ? 'AO pre-pass' : 'scene';
       let o = ro.object, top = o.name || o.type;
       while (o.parent && o.parent.parent) { o = o.parent; }
       top = o.name || o.type;

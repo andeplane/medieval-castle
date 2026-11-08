@@ -15,6 +15,7 @@ import { mulberry32, hashSeed, type Rng } from '../core/rng';
 import { sample, ISLAND, MOAT_OUTER } from './terrain';
 import { gatehouseFrame, castleCentre } from '../castle/layout';
 import { pointInPoly, type V2 } from '../core/math2d';
+import { VIEW_LAYER, MIRROR_LAYER } from '../render/passLayers';
 
 const CELL = 12;
 
@@ -116,8 +117,9 @@ function grassClump(seed: string, o: BladeOpts) {
   return b;
 }
 
-function reedClump() {
-  const r = mulberry32(hashSeed('reeds')), b = grassClump('reeds-blades', { blades: 11, radius: 0.32, width: 0.022, lean: [0.03, 0.16], hMin: 0.55, segs: 2, upright: 0.6 });
+/** `segs`: segments per blade (1: straight blades, the reflection's stand-in). */
+function reedClump(segs = 2) {
+  const r = mulberry32(hashSeed('reeds')), b = grassClump('reeds-blades', { blades: 11, radius: 0.32, width: 0.022, lean: [0.03, 0.16], hMin: 0.55, segs, upright: 0.6 });
   // two cattail stalks with brown heads
   for (let i = 0; i < 2; i++) {
     const a = r() * 6.28, d = 0.1 + r() * 0.15, root = new THREE.Vector3(Math.cos(a) * d, 0, Math.sin(a) * d), h = 0.85 + r() * 0.15;
@@ -218,12 +220,14 @@ interface ChunkData { a: Float32Array; b: Float32Array; n: number; box: THREE.Bo
 
 class ScatterLayer {
   mesh: THREE.Mesh;
+  /** The water reflection's stand-in (render/passLayers.ts): the same tufts, drawn with straight blades. */
+  mirror: THREE.Mesh | null = null;
   private chunks = new Map<number, ChunkData | null>();
   private A: THREE.InstancedBufferAttribute; private B: THREE.InstancedBufferAttribute;
   private geo: THREE.InstancedBufferGeometry;
   rMax: number;
   count = 0;
-  constructor(public name: string, b: ClumpBuilder, mat: THREE.Material, public fade: Fade, public cap: number, private gen: (ci: number, cj: number) => ChunkData | null, public trisPer = b.tris) {
+  constructor(public name: string, b: ClumpBuilder, mat: THREE.Material, public fade: Fade, public cap: number, private gen: (ci: number, cj: number) => ChunkData | null, mirrorB: ClumpBuilder | null = null, public trisPer = b.tris) {
     this.geo = b.build();
     this.A = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4); this.A.setUsage(THREE.DynamicDrawUsage);
     this.B = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4); this.B.setUsage(THREE.DynamicDrawUsage);
@@ -234,6 +238,14 @@ class ScatterLayer {
     this.mesh.visible = false;
     this.rMax = fade.d;
     this.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+    if (mirrorB) {
+      const g = mirrorB.build();
+      g.setAttribute('gA', this.A); g.setAttribute('gB', this.B); // the same instances
+      g.instanceCount = 0; g.boundingSphere = this.geo.boundingSphere;
+      this.mirror = new THREE.Mesh(g, mat);
+      this.mirror.name = name + '-mirror'; this.mirror.castShadow = false; this.mirror.receiveShadow = true; this.mirror.visible = false;
+      this.mesh.layers.set(VIEW_LAYER); this.mirror.layers.set(MIRROR_LAYER);
+    }
   }
   private key(i: number, j: number) { return (i + 2048) * 4096 + (j + 2048); }
   private chunk(i: number, j: number) {
@@ -275,6 +287,10 @@ class ScatterLayer {
       this.B.clearUpdateRanges(); this.B.addUpdateRange(0, n * 4); this.B.needsUpdate = true;
       // bounds: everything packed lies within rMax of the camera
       this.geo.boundingSphere = new THREE.Sphere(cam.clone(), R + 4);
+    }
+    if (this.mirror) {
+      const g = this.mirror.geometry as THREE.InstancedBufferGeometry;
+      g.instanceCount = n; g.boundingSphere = this.geo.boundingSphere; this.mirror.visible = n > 0;
     }
   }
 }
@@ -337,8 +353,13 @@ export function buildGroundCover(terrain: THREE.Mesh, macro: THREE.Texture): Gro
 
   const nearB = grassClump('grass-near', { blades: 10, radius: 0.2, width: 0.04, lean: [0.08, 0.5], hMin: 0.45 });
   const farB = grassClump('grass-far', { blades: 8, radius: 0.24, width: 0.07, lean: [0.1, 0.45], hMin: 0.5, segs: 1 });
-  const near = new ScatterLayer('grass-near', nearB, vegMaterial('grass', fNear, macro), fNear, 9000, tufts('gn', 7.0, grassAccept(1)));
-  const far = new ScatterLayer('grass-far', farB, vegMaterial('grass', fFar, macro), fFar, 16000, tufts('gf', 2.8, grassAccept(1.1)));
+  // the reflection's near tufts: the same blades (same seed and draws), one segment each instead of two
+  const nearMirror = grassClump('grass-near', { blades: 10, radius: 0.2, width: 0.04, lean: [0.08, 0.5], hMin: 0.45, segs: 1 });
+  const near = new ScatterLayer('grass-near', nearB, vegMaterial('grass', fNear, macro), fNear, 9000, tufts('gn', 7.0, grassAccept(1)), nearMirror);
+  // the reflection's far tufts (9 m and more away, one segment a blade already): the first half of the
+  // same blades (the clump draws them in turn from one seed)
+  const farMirror = grassClump('grass-far', { blades: 4, radius: 0.24, width: 0.07, lean: [0.1, 0.45], hMin: 0.5, segs: 1 });
+  const far = new ScatterLayer('grass-far', farB, vegMaterial('grass', fFar, macro), fFar, 16000, tufts('gf', 2.8, grassAccept(1.1)), farMirror);
   const flowers = new ScatterLayer('flowers', flowerClump(), vegMaterial('flowers', fFlower, macro), fFlower, 3000,
     tufts('fl', 1.6, (x, z, w, r) => {
       const n = flowerN(x / 16, z / 16) + 0.25 * flowerN(x / 4, z / 4);
@@ -383,12 +404,12 @@ export function buildGroundCover(terrain: THREE.Mesh, macro: THREE.Texture): Gro
     for (let k = 0; k < c.n; k++) c.b[k * 4 + 2] = 0;
     return c;
   };
-  const reeds = new ScatterLayer('reeds', reedClump(), vegMaterial('reeds', fReed, macro), fReed, 4000, reedChunk);
+  const reeds = new ScatterLayer('reeds', reedClump(), vegMaterial('reeds', fReed, macro), fReed, 4000, reedChunk, reedClump(1));
 
   const layers = [near, far, flowers, reeds];
   const group = new THREE.Group();
   group.name = 'ground-cover';
-  for (const l of layers) group.add(l.mesh);
+  for (const l of layers) group.add(l.mesh, ...(l.mirror ? [l.mirror] : []));
   const frustum = new THREE.Frustum(), pm = new THREE.Matrix4();
   const last = new THREE.Vector3(1e9, 0, 0), lastQ = new THREE.Quaternion();
   return {
