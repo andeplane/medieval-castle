@@ -281,7 +281,7 @@ export class PropMesh {
 
   /** Append another mesh (already in its own local space) under the current transform. */
   append(other: PropMesh) {
-    for (const f of other.flames) this.addFlameWorld(f);
+    this.appendFlames(other);
     for (const k of PROP_MATS) {
       const b = other.bins[k];
       for (let i = 0; i < b.pos.length; i += 9) {
@@ -298,11 +298,13 @@ export class PropMesh {
     }
   }
 
-  /** Axis-aligned bounds of everything emitted so far (world of this mesh). */
-  private addFlameWorld(f: Flame) {
-    const m = this.xf, up = f.up ?? [0, 1, 0];
-    this.flames.push({ kind: f.kind, base: applyP(m, f.base), height: f.height, up: v3.norm(applyD(m, up)) });
+  /** Another mesh's flames only, under the current transform (append without the triangles). */
+  appendFlames(other: PropMesh) {
+    const m = this.xf;
+    for (const f of other.flames) this.flames.push({ kind: f.kind, base: applyP(m, f.base), height: f.height, up: v3.norm(applyD(m, f.up ?? [0, 1, 0])) });
   }
+
+  /** Axis-aligned bounds of everything emitted so far (world of this mesh). */
   bounds(): { min: V3; max: V3 } {
     const min: V3 = [Infinity, Infinity, Infinity], max: V3 = [-Infinity, -Infinity, -Infinity];
     for (const k of PROP_MATS) {
