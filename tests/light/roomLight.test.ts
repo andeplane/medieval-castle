@@ -6,6 +6,8 @@ import type { LightEmitter, V3 } from '../../src/light/types';
 import { planInterior } from '../../src/castle/interior/plan';
 import { createFurnisher } from '../../src/props/roomFurniture';
 import { wallTorches } from '../../src/render/interiorFire';
+import { dressRoom, variantPool } from '../../src/props/dress';
+import { mergePlaced, yawXZ } from '../../src/props/place';
 import { caveFires } from '../../src/castle/interior/caveGeom';
 import { CAVE_ZONE } from '../../src/castle/interior/caves';
 import { CARRIED_LANTERN, lanternAt } from '../../src/player/lantern';
@@ -174,4 +176,49 @@ describe('the carried lantern in the caves', () => {
     }
     expect(faults).toEqual([]);
   });
+});
+
+// Anders, 2026-11-08 (live, ?furniture=1, the 'hall' bookmark): the hall's hooded hearth rendered near-white
+// (202 sRGB beside 120 on the wall). Its light stood 0.4 m in front of the opening, out in the room, so the
+// lintel, cheeks and hood a fire sits behind were lit head-on from a hand's breadth away. Over every
+// fireplace in the castle: the stone of its own front (the faces looking into the room, above the hearth
+// slab, in front of the fire) gets no more of its fire's light than 1.5 × the room's wall beside it.
+describe('fireplaces in the castle', () => {
+  const plan = planInterior(), make = variantPool();
+  it('light the room, not their own fronts', () => {
+    const faults: string[] = [];
+    let hearths = 0;
+    for (const r of plan.rooms) {
+      const d = dressRoom(r, plan, { make });
+      const all = mergePlaced(d.placed);
+      if (!all.emitters.some((e) => e.kind === 'hearth')) continue;
+      const fires = roomFires(r, all.emitters);
+      for (const p of d.placed) {
+        if (!p.prop.meta.emitters.some((e) => e.kind === 'hearth')) continue;
+        hearths++;
+        const [fx, fz] = yawXZ(0, 1, p.yaw), fwd: V3 = [fx, 0, fz];
+        const world = (x: number, y: number, z: number): V3 => { const [wx, wz] = yawXZ(x, z, p.yaw); return [p.at[0] + wx, p.at[1] + y, p.at[2] + wz]; };
+        const { min, max } = p.prop.bounds;
+        // its own fire (the candles on a mantel light the mantel, as they should)
+        const own = fires.filter((f) => f.kind === 'hearth' && Math.hypot(f.position[0] - p.at[0], f.position[2] - p.at[2]) < 2);
+        // the wall it stands against, 0.8 m clear of it on either side, at eye height
+        const wall = [-1, 1].map((sx) => fireAt(own, world(sx > 0 ? max[0] + 0.8 : min[0] - 0.8, 1.6, min[2] + 0.01), fwd));
+        const ref = (wall[0] + wall[1]) / 2;
+        const b = mergePlaced([p]).mesh.bins.stone, fireDepth = Math.max(...p.prop.mesh.flames.filter((f) => f.kind === 'hearth').map((f) => f.base[2])); // where its flames burn
+        let worst = 0;
+        for (let t = 0; t * 9 < b.pos.length; t++) {
+          const c: V3 = [0, 1, 2].map((j) => (b.pos[t * 9 + j] + b.pos[t * 9 + 3 + j] + b.pos[t * 9 + 6 + j]) / 3) as V3;
+          const n: V3 = [0, 1, 2].map((j) => b.nor[t * 9 + j]) as V3;
+          // facing the room square on, in front of the fire (the fireback and soot behind it glow, as they
+          // should, and so do the flanks of the shafts that turn toward it)
+          const depth = (c[0] - p.at[0]) * fwd[0] + (c[2] - p.at[2]) * fwd[2];
+          if (n[0] * fwd[0] + n[2] * fwd[2] < 0.9 || c[1] < p.at[1] + 0.3 || depth < fireDepth + 0.05) continue;
+          worst = Math.max(worst, fireAt(own, c, n));
+        }
+        if (worst > 1.5 * ref) faults.push(`${r.id} ${p.prop.kind.name}: front ${worst.toFixed(2)} against the wall's ${ref.toFixed(2)}`);
+      }
+    }
+    expect(hearths).toBeGreaterThan(10);
+    expect(faults).toEqual([]);
+  }, 60_000);
 });
