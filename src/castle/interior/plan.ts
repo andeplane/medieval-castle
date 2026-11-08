@@ -719,7 +719,7 @@ function inSweep(q: V3, L: LeafPlace): boolean {
   return sector(L.pivot, 0, L.maxAngle) || (L.backAngle > 0 && sector(leafAt(L, 0, [0, 0, L.backAxis]), -L.backAngle, 0));
 }
 /** Do two leaves' sweeps cross (one leaf, somewhere in its swing either way, inside the other's)? */
-function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
+export function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
   if (Math.hypot(a.pivot[0] - b.pivot[0], a.pivot[2] - b.pivot[2]) > a.width + b.width + 0.2 || Math.abs(a.pivot[1] - b.pivot[1]) > Math.max(a.height, b.height)) return false;
   for (const [p, q] of [[a, b], [b, a]]) for (let i = -12; i <= 12; i++) for (let k = 1; k <= 4; k++) for (const y of [0.1, p.height / 2]) {
     const ang = i < 0 ? (p.backAngle * i) / 12 : (p.maxAngle * i) / 12;
@@ -734,16 +734,48 @@ function sweepsCross(a: LeafPlace, b: LeafPlace): boolean {
 const SWING_OUT = new Set<SpaceId>(['courtyard']);
 
 /**
+ * Does a leaf swung back stay clear of a stair's steps: a spiral's newel and steps (each a stone from its tread
+ * down to its soffit, or to the floor when built solid), a straight flight's steps (solid from the tread down)?
+ */
+function clearOfSteps(P: Partial<Pick<PlanX, 'stairs'>> & Pick<InteriorPlan, 'rooms'>, id: SpaceId, pl: LeafPlace): boolean {
+  const s = P.stairs?.find((x) => x.id === id);
+  if (!s) return false;
+  const plan = planStair(s, stairOpts(P as InteriorPlan, s)), T = Math.PI * 2, { zBack } = leafDepth(pl.kind);
+  for (let i = 0; i <= 24; i++) for (let k = 0; k <= 8; k++) for (const y of [0, pl.height / 4, pl.height / 2, (3 * pl.height) / 4, pl.height - 0.02]) for (const z of [zBack, 0]) {
+    const q = leafAt(pl, (-pl.backAngle * i) / 24, [(pl.width * k) / 8, y, z]);
+    if (plan.kind === 'straight') {
+      // a flight: each step solid from its tread down (the leaf's bottom must clear every tread it passes over)
+      const dx = q[0] - plan.o[0], dz = q[2] - plan.o[2], sa = dx * plan.d[0] + dz * plan.d[1], across = dx * plan.side[0] + dz * plan.side[1];
+      if (Math.abs(across) > plan.width / 2 + 0.05) continue;
+      if (plan.steps.some((st) => sa > st.s0 - st.nosing - 0.02 && sa < st.s1 + 0.02 && q[1] < st.y + 0.02)) return false;
+      continue;
+    }
+    const sp = plan;
+    const ex = q[0] - sp.c[0], ez = q[2] - sp.c[1], rr = Math.hypot(ex, ez);
+    if (rr > sp.R) continue;
+    if (rr < sp.rn + 0.02) return false;
+    const prog0 = (Math.atan2(ez, ex) - sp.theta0) * sp.dir;
+    for (const st of sp.steps) {
+      const prog = prog0 + Math.round((st.a0 - prog0) / T) * T;
+      if (prog < st.a0 || prog > st.a1) continue;
+      const under = st.solid ? sp.yFloor - 1 : spiralNosingY(sp, prog) - sp.T;
+      if (q[1] < st.y + 0.02 && q[1] > under - 0.02) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Can a door's leaf (with swingsBack set) swing back: its sweep stays in the recess cut for it in the wall, or
  * it reaches through into a room (not a stair: its steps lie beyond the door) or the courtyard, where the
  * whole arc fits, the leaf stands under the ceiling and the recess's square head does too.
  */
-export function backSwingFits(P: Pick<InteriorPlan, 'rooms'> & Partial<Pick<PlanX, 'vault' | 'phase'>>, d: DoorSpec): boolean {
+export function backSwingFits(P: Pick<InteriorPlan, 'rooms'> & Partial<Pick<PlanX, 'vault' | 'phase' | 'stairs'>>, d: DoorSpec): boolean {
   if (!backReach(d).through) return true;
   const into = d.spaces[1 - d.swingInto], r = P.rooms.find((x) => x.id === into);
   if (!r) return SWING_OUT.has(into);
-  if (r.kind === 'stair') return false;
   const [pl] = placeLeaves(d);
+  if (r.kind === 'stair' && !clearOfSteps(P, r.id, pl)) return false;
   if (pl.pivot[1] + pl.height > r.y1 - 0.02) return false;
   // the recess's head at the far face and a little into the room, under the ceiling there
   const ceil = P.vault && P.phase ? ceilingAt({ vault: P.vault, phase: P.phase }, r) : () => r.y1;
@@ -781,12 +813,17 @@ export function fitHinges(P: Pick<InteriorPlan, 'rooms' | 'doors'> & Partial<Pic
     if (!fixed) { Object.assign(d, was); leaf.set(d, placeLeaves(d)[0]); }
   }
   // back swings, each checked against every sweep taken so far (so the result holds pairwise)
+  // (on its other jamb if only that way both swings fit)
+  const clear = (pl: LeafPlace) => ![...leaf.values()].some((o) => o && o.door !== pl.door && sweepsCross(pl, o));
   for (const d of P.doors) {
     if (!leaf.get(d) || d.kind === 'grille') continue;
-    d.swingsBack = true;
-    const both = placeLeaves(d)[0];
-    if (backSwingFits(P, d) && ![...leaf.values()].some((o) => o && o.door !== d.id && sweepsCross(both, o))) leaf.set(d, both);
-    else delete d.swingsBack;
+    const was = d.hinge;
+    for (const hinge of [was, was === 'left' ? 'right' : 'left'] as const) {
+      d.hinge = hinge; d.swingsBack = true;
+      const both = placeLeaves(d)[0];
+      if (leafSwingFits(P, d) && backSwingFits(P, d) && clear(both)) { leaf.set(d, both); break; }
+      delete d.swingsBack; d.hinge = was;
+    }
   }
 }
 
