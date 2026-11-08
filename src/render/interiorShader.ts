@@ -126,15 +126,15 @@ export function fireLights(light: InteriorLight, add: (L: Node<'vec3'>, c: Node<
     const w = clamp(float(1).sub(d.div(range).pow(4)), 0, 1);
     add(L.div(d), colour.mul(w.mul(w).div(d2.add(soft2))));
   };
-  If(r.greaterThanEqual(0), () => {
-    const count = int(tex(int(0), r).x);
-    Loop(MAX_FIRES, ({ i }: { i: Node<'int'> }) => {
-      If(i.greaterThanEqual(count), () => { Break(); });
-      const x = i.mul(FIRE_TEXELS).add(1);
-      const a = tex(x, r), b = tex(x.add(1), r);
-      point(a.xyz, a.w, b.xyz.mul(textureLoad(light.flick, ivec2(i, r)).x), b.w);
-    });
-  });
+  // every fire slot unrolled, each an unconditional light weighted 0 past the row's count: three's lighting
+  // model emits nothing from a direct light added inside a TSL Loop or If (seen in WebGL2: every room fire
+  // lit nothing, only the carried light below did)
+  const rr = select(r.greaterThanEqual(0), r, int(0)), count = select(r.greaterThanEqual(0), int(tex(int(0), rr).x), int(0));
+  for (let i = 0; i < MAX_FIRES; i++) {
+    const x = int(i * FIRE_TEXELS + 1), a = tex(x, rr), b = tex(x.add(1), rr);
+    const on = select(count.greaterThan(i), float(1), float(0));
+    point(a.xyz, a.w.max(1e-3), b.xyz.mul(textureLoad(light.flick, ivec2(int(i), rr)).x).mul(on), b.w);
+  }
   const c = light.carried;
   point(c.pos, c.range, c.light.xyz, c.light.w);
 }
