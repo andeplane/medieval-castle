@@ -1,25 +1,28 @@
-name: CI
-
-# One fast job on pull requests: typecheck, tests with coverage thresholds, production build.
-# Keep the whole run under ~1-2 minutes: one OS, one Node version, no browser matrix.
+name: CI A/B
+# Experiment: the same branch's coverage run under different V8 / vitest settings, one after the other on one runner.
 on:
-  pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
+  ab:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: nproc; grep -m1 'model name' /proc/cpuinfo; free -g | head -2
       - run: npm ci --no-audit --no-fund
-      - run: npm run coverage
-      - run: npm run build
+      - name: base
+        run: s=$(date +%s); npx vitest run --coverage > /tmp/a.log 2>&1; echo "rc=$? base $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/a.log
+      - name: semi 32
+        run: s=$(date +%s); NODE_OPTIONS=--max-semi-space-size=32 npx vitest run --coverage > /tmp/b.log 2>&1; echo "rc=$? semi32 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b.log
+      - name: semi 64
+        run: s=$(date +%s); NODE_OPTIONS=--max-semi-space-size=64 npx vitest run --coverage > /tmp/c.log 2>&1; echo "rc=$? semi64 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/c.log
+      - name: base again
+        run: s=$(date +%s); npx vitest run --coverage > /tmp/d.log 2>&1; echo "rc=$? base2 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/d.log
+      - name: semi 64, no isolate
+        run: s=$(date +%s); NODE_OPTIONS=--max-semi-space-size=64 npx vitest run --coverage --no-isolate > /tmp/e.log 2>&1; echo "rc=$? semi64-noiso $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/e.log
+      - name: per-file (base)
+        run: sed "s/\x1b\[[0-9;]*m//g" /tmp/a.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n
