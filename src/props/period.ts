@@ -67,9 +67,10 @@ function fire(m: PropMesh, r: Rng, w: number, z: number, big: boolean, dogs: RGB
   });
   const logs = big ? 4 : 3;
   for (let i = 0; i < logs; i++) {
-    const y = i < 3 ? 0.12 * s + 0.05 : 0.24 * s, x = i < 3 ? (i - 1) * 0.11 * s : 0, rr = range(r, 0.045, 0.065) * s;
-    m.tinted(jitterTint(r, [0.28, 0.22, 0.17], 0.2), () => m.tube('wood', [[x + range(r, -0.03, 0.03) - w * 0.3, y, z + range(r, -0.04, 0.04)], [x + w * 0.3, y + range(r, -0.02, 0.03), z + range(r, -0.05, 0.05)]], rr, 6));
-    m.tinted(EMBER, () => m.tube('wax', [[x - w * 0.18, y - rr * 0.75, z], [x + w * 0.18, y - rr * 0.75, z]], rr * 0.35, 3, [false, false])); // glowing underside
+    // the bottom three side by side across the dogs (they lay inside one another along one line), one on top
+    const y = i < 3 ? 0.12 * s + 0.05 : 0.24 * s, x = i < 3 ? (i - 1) * 0.11 * s : 0, rr = range(r, 0.045, 0.065) * s, lz = z + (i < 3 ? (i - 1) * 0.09 * s : 0);
+    m.tinted(jitterTint(r, [0.28, 0.22, 0.17], 0.2), () => m.tube('wood', [[x + range(r, -0.07, -0.02) - w * 0.3, y, lz + range(r, -0.02, 0.02)], [x + w * 0.3 + i * 0.015, y + range(r, -0.02, 0.03), lz + range(r, -0.025, 0.025)]], rr, i < 3 ? 6 : 7));
+    m.tinted(EMBER, () => m.tube('wax', [[x - w * 0.18, y - rr * 0.75, lz], [x + w * 0.18, y - rr * 0.75, lz]], rr * 0.35, 3, [false, false])); // glowing underside
   }
   const top = 0.32 * s;
   m.addFlame('hearth', [0, top - 0.06, z], 0.42 * s);
@@ -95,17 +96,17 @@ export const chimneypiece: PropKind = {
         const x = sx * (Wo / 2 + jw / 2);
         m.box('stone', [x, 0.1, zb + D / 2 + 0.02], [jw + 0.05, 0.2, D + 0.04], { noBottom: true }); // plinth
         m.box('stone', [x, (Ho + 0.2) / 2, zb + D / 2], [jw, Ho - 0.2, D], { bevel: 0.015 });                       // jamb
-        m.box('stone', [x + sx * 0.005, Ho - 0.03, zb + D / 2 + 0.015], [jw + 0.04, 0.08, D + 0.03]); // capital
+        m.box('stone', [x + sx * 0.005, Ho - 0.03, zb + D / 2 + 0.0175], [jw + 0.04, 0.08, D + 0.025]); // capital, its back 5 mm off the jamb's
       }
       m.box('stone', [0, (Ho + H - 0.1) / 2, zb + D / 2], [W, H - 0.1 - Ho, D], { bevel: 0.012 });                 // frieze
       for (const sx of [-1, 1]) { // four-centred (Tudor) arch: a spandrel in each top corner of the opening
-        const x0 = sx * Wo / 2, rise = Ho * 0.22, pts: [number, number][] = [[x0, Ho]];
+        const x0 = sx * (Wo / 2 + 0.01), rise = Ho * 0.22, pts: [number, number][] = [[x0, Ho]]; // starts 1 cm inside the jamb
         for (let i = 0; i <= 8; i++) { const a = (i / 8) * Math.PI / 2; pts.push([x0 - sx * (Wo / 2) * (1 - Math.cos(a)) * 0.98, Ho - rise * (1 - Math.sin(a)) - 0.001]); }
-        m.with(translate(0, 0.001, 0), () => prismZ(m, 'stone', sx > 0 ? pts : [pts[0], ...pts.slice(1).reverse()], zb + 0.02, zf - 0.005));
+        m.with(translate(0, 0.006, 0), () => prismZ(m, 'stone', sx > 0 ? pts : [pts[0], ...pts.slice(1).reverse()], zb + 0.025, zf - 0.005)); // top 6 mm up inside the frieze, back off the soffit's
       }
       m.box('stone', [0, H - 0.075, zf - 0.21], [W + 0.08, 0.05, 0.47]);                                            // bed mould
       m.box('stone', [0, H - 0.025, zf - 0.19], [W + 0.2, 0.06, 0.56], { bevel: 0.015 });                          // shelf
-      m.box('stone', [0, (H + top) / 2, zb + 0.15], [W - 0.12, top - H, 0.3], { noBottom: true });                 // breast
+      m.box('stone', [0, (H + top - 0.005) / 2, zb + 0.15], [W - 0.12, top - H - 0.005, 0.3], { noBottom: true });                 // breast, its top inside the cornice
       m.box('stone', [0, top - 0.04, zb + 0.17], [W - 0.02, 0.08, 0.36]);                                           // cornice
     });
     // frieze panels and a carved boss, a shade darker
@@ -118,12 +119,12 @@ export const chimneypiece: PropKind = {
     m.tinted(SOOT, () => {
       m.box('stone', [0, Ho / 2, zb + 0.02], [Wo, Ho, 0.04]);
       for (const sx of [-1, 1]) m.with(compose(translate(sx * (Wo / 2 - 0.09), Ho / 2, zb + D / 2 - 0.01), rotY(sx * 0.35)), () => m.box('stone', [0, 0, 0], [0.04, Ho, D - 0.04]));
-      m.box('stone', [0, Ho - 0.02, zb + D / 2], [Wo, 0.04, D - 0.04]);
+      m.box('stone', [0, Ho - 0.025, zb + D / 2], [Wo, 0.04, D - 0.04]); // soffit 5 mm under the frieze
       m.box('stone', [0, 0.085, zb + D / 2], [Wo, 0.01, D - 0.04]);
     });
     m.tinted(IRON, () => {
       m.box('iron', [0, Ho * 0.38, zb + 0.05], [Wo * 0.7, Ho * 0.62, 0.02]);
-      m.with(compose(translate(0, Ho * 0.69, zb + 0.05), rotX(Math.PI / 2)), () => m.lathe('iron', [[Wo * 0.35, -0.01], [Wo * 0.35, 0.01]], 12, { capTop: true, capBottom: true }));
+      m.with(compose(translate(0, Ho * 0.69, zb + 0.05), rotX(Math.PI / 2)), () => m.lathe('iron', [[Wo * 0.35, -0.008], [Wo * 0.35, 0.008]], 12, { capTop: true, capBottom: true })); // arched head, 2 mm thinner than the plate
     });
     m.with(translate(0, 0.09, 0), () => fire(m, r, Wo * 0.8, fz, false, r() < 0.7 ? METAL.brass : IRON));
     // brass fender round the hearth and a stand of fire irons
@@ -136,7 +137,7 @@ export const chimneypiece: PropKind = {
       const ix = W / 2 + 0.05;
       m.with(translate(ix, 0.08, zf + 0.2), () => {
         m.lathe('brass', [[0.08, 0], [0.02, 0.03], [0.015, 0.6], [0.03, 0.62], [0.001, 0.66]], 8);
-        for (const a of [-0.25, 0, 0.25]) m.tube('iron', [[Math.sin(a) * 0.03, 0.05, Math.cos(a) * 0.03], [Math.sin(a) * 0.06, 0.62, Math.cos(a) * 0.05]], 0.007, 4);
+        for (const a of [-0.25, 0, 0.25]) m.tube('iron', [[Math.sin(a) * 0.03, 0.05 + a * 0.04, Math.cos(a) * 0.03], [Math.sin(a) * 0.06, 0.62, Math.cos(a) * 0.05]], 0.007, 4);
       });
     });
     emit.push({ kind: 'hearth', position: [0, 0.6, zf + 0.35], colour: FLAME, intensity: 2.2, flicker: 0.2 });
@@ -167,10 +168,10 @@ export const hoodedHearth: PropKind = {
     });
     m.tinted(SOOT, () => {
       m.box('stone', [0, Ho / 2, zb + 0.02], [Wo, Ho, 0.04]);
-      m.box('stone', [0, Ho + 0.02, zb + hood / 2], [Wo, 0.04, hood - 0.04]);
+      m.box('stone', [0, Ho + 0.015, zb + hood / 2], [Wo, 0.04, hood - 0.04]); // soffit 5 mm under the lintel
       m.box('stone', [0, 0.085, zb + hood / 2], [Wo, 0.01, hood - 0.04]);
     });
-    m.tinted(IRON, () => m.box('iron', [0, Ho * 0.4, zb + 0.05], [Wo * 0.55, Ho * 0.7, 0.025], { bevel: 0.008 }));
+    m.tinted(IRON, () => m.box('iron', [0, 0.085 + Ho * 0.35, zb + 0.05], [Wo * 0.55, Ho * 0.7, 0.025], { bevel: 0.008 })); // foot 5 mm into the hearth floor
     m.with(translate(0, 0.09, 0), () => fire(m, r, Wo * 0.75, zb + 0.4, true, IRON));
     emit.push({ kind: 'hearth', position: [0, 0.75, zf + 0.4], colour: FLAME, intensity: 3.5, flicker: 0.22 });
     const b = m.bounds();
@@ -253,8 +254,9 @@ function giltFrame(m: PropMesh, r: Rng, w: number, h: number, rail: number, dept
   m.tinted(jitterTint(r, METAL.gilt, 0.06), () => {
     for (const sy of [-1, 1]) m.box('brass', [0, sy * (h / 2 + rail / 2), depth / 2], [w + 2 * rail, rail, depth], { bevel: rail * 0.25 });
     for (const sx of [-1, 1]) m.box('brass', [sx * (w / 2 + rail / 2), 0, depth / 2], [rail, h, depth], { bevel: rail * 0.25 });
-    for (const sy of [-1, 1]) m.box('brass', [0, sy * (h / 2 + 0.01), depth * 0.55], [w + 0.02, 0.02, depth * 0.5]);
-    for (const sx of [-1, 1]) m.box('brass', [sx * (w / 2 + 0.01), 0, depth * 0.55], [0.02, h, depth * 0.5]);
+    // sight-edge mouldings lap 5 mm over the canvas, so their inner faces never lie on the rails' inner faces
+    for (const sy of [-1, 1]) m.box('brass', [0, sy * (h / 2 + 0.005), depth * 0.55], [w + 0.01, 0.02, depth * 0.5]);
+    for (const sx of [-1, 1]) m.box('brass', [sx * (w / 2 + 0.005), 0, depth * 0.55], [0.02, h, depth * 0.5]);
     if (rail > 0.08) for (const sx of [-1, 1]) for (const sy of [-1, 1]) m.with(compose(translate(sx * (w / 2 + rail / 2), sy * (h / 2 + rail / 2), depth), rotX(Math.PI / 2)), () => m.lathe('brass', [[rail * 0.45, 0], [rail * 0.35, 0.015], [0.001, 0.025]], 8));
   });
 }
@@ -272,7 +274,7 @@ export const portrait: PropKind = {
     m.with(compose(translate(0, -H / 2, 0), compose(rotX(tilt), translate(0, H / 2, 0))), () => {
       giltFrame(m, r, w, h, rail, depth);
       m.tinted(jitterTint(r, [1, 1, 1], 0.05), () => m.atlasSheet((s, t) => [(s - 0.5) * w, (t - 0.5) * h, depth * 0.35], 1, 1, rect));
-      m.tinted([0.1, 0.08, 0.06], () => m.box('wood', [0, 0, 0.012], [w + rail, h + rail, 0.02], { noBottom: true })); // stretcher behind
+      m.tinted([0.1, 0.08, 0.06], () => m.box('wood', [0, 0, 0.01], [w + rail, h + rail, 0.016], { noBottom: true })); // stretcher behind, its face 3 mm or more behind the canvas
     });
     // cords from the frame's top corners up to a rosette on the rail
     const topZ = Math.sin(tilt) * H + depth * 0.5, topY = H / 2;
@@ -320,8 +322,8 @@ export const testerBed: PropKind = {
       m.box('wood', [0, 0.3, L / 2 - 0.05], [W - 0.08, 0.2, 0.05]);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) m.with(translate(sx * (W / 2 - 0.05), 0, sz * (L / 2 - 0.05)), () => (sz > 0 ? turned(m, 'wood', H - 0.12, 0.05, 10) : m.box('wood', [0, (H - 0.12) / 2, 0], [0.08, H - 0.12, 0.08], { bevel: 0.01, noBottom: true })));
       for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.02), H - 0.06, 0], [0.08, 0.14, L + 0.04], { bevel: 0.015, grain: 2 }); // cornice
-      for (const sz of [-1, 1]) m.box('wood', [0, H - 0.06, sz * (L / 2 + 0.01)], [W + 0.04, 0.14, 0.08], { bevel: 0.015 });
-      m.box('wood', [0, 1.05, -L / 2 + 0.03], [W - 0.1, 0.55, 0.04], { bevel: 0.01, grain: 1 }); // headboard
+      for (const sz of [-1, 1]) m.box('wood', [0, H - 0.06, sz * (L / 2 + 0.01)], [W + 0.05, 0.14, 0.08], { bevel: 0.015 }); // 5 mm past the side cornices
+      m.box('wood', [0, 1.05, -L / 2 + 0.035], [W - 0.1, 0.55, 0.04], { bevel: 0.01, grain: 1 }); // headboard, 5 mm in from the posts' backs
     });
     m.tinted(PCLOTH.white, () => {
       m.box('cloth', [0, 0.47, 0.02], [W - 0.12, 0.2, L - 0.12], { bevel: 0.06 });                                   // mattress
@@ -341,7 +343,7 @@ export const testerBed: PropKind = {
       for (const sx of [-1, 1]) m.sheet('cloth', (s, t) => [sx * (W / 2 + 0.005) + sx * Math.abs(Math.sin(s * 40)) * 0.012, 0.4 - t * 0.38, (s - 0.5) * (L - 0.16)], 16, 1, [L, 0.4]);
       m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.1), 0.4 - t * 0.38, L / 2 + 0.005 + Math.abs(Math.sin(s * 30)) * 0.012], 12, 1, [W, 0.4]);
       // tester: ceiling cloth, pleated valance round three sides and the headcloth
-      m.sheet('cloth', (s, t) => [(s - 0.5) * W, H - 0.13, (t - 0.5) * L], 2, 2, [W, L], true);
+      m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.12), H - 0.13, (t - 0.5) * (L - 0.06)], 2, 2, [W, L], true); // between the cornices, not under them (it z-fought with their soffits)
       const val = 0.3;
       for (const sx of [-1, 1]) m.sheet('cloth', (s, t) => [sx * (W / 2 + 0.035 + Math.abs(Math.sin(s * 44)) * 0.015), H - 0.02 - t * val, (s - 0.5) * (L + 0.08)], 18, 1, [L, val]);
       m.sheet('cloth', (s, t) => [(s - 0.5) * (W + 0.08), H - 0.02 - t * val, L / 2 + 0.035 + Math.abs(Math.sin(s * 34)) * 0.015], 14, 1, [W, val]);
@@ -408,10 +410,10 @@ export const sofa: PropKind = {
     bunFeet(m, r, W / 2 - 0.08, D / 2 - 0.08, 0.1, wood, false);
     m.tinted(cloth, () => {
       m.box('cloth', [0, 0.25, 0], [W, 0.3, D], { bevel: 0.035 });
-      m.box('cloth', [0, (H + 0.1) / 2, -D / 2 + 0.11], [W, H - 0.1, 0.22], { bevel: 0.05 });
+      m.box('cloth', [0, (H + 0.11) / 2, -D / 2 + 0.115], [W - 0.01, H - 0.11, 0.22], { bevel: 0.05 }); // back: ends inside the arms, 5 mm in from the base's back and bottom
       m.tube('cloth', [[-W / 2 + 0.05, H - 0.04, -D / 2 + 0.11], [W / 2 - 0.05, H - 0.04, -D / 2 + 0.11]], 0.1, 10);
       for (const sx of [-1, 1]) {
-        m.box('cloth', [sx * (W / 2 - 0.1), (H - 0.06) / 2 + 0.05, 0.02], [0.2, H - 0.16, D - 0.04], { bevel: 0.04 });
+        m.box('cloth', [sx * (W / 2 - 0.095), (H - 0.06) / 2 + 0.06, 0.025], [0.2, H - 0.16, D - 0.03], { bevel: 0.04 }); // arms: 5 mm proud of the base's sides, 10 mm of its front, 10 mm above its bottom
         m.tube('cloth', [[sx * (W / 2 - 0.1), H - 0.06, -D / 2 + 0.1], [sx * (W / 2 - 0.1), H - 0.06, D / 2 - 0.02]], 0.12, 12);
       }
       const n = 3, cw = (W - 0.4) / n;
@@ -444,12 +446,12 @@ export const hallChair: PropKind = {
     const W = range(r, 0.44, 0.5), D = range(r, 0.42, 0.48), seat = 0.46, H = range(r, 1.05, 1.2), wood = jitterTint(r, PWOOD.bog, 0.08);
     m.tinted(wood, () => {
       for (const sx of [-1, 1]) {
-        m.box('wood', [sx * (W / 2 - 0.025), seat / 2, D / 2 - 0.03], [0.045, seat, 0.045], { bevel: 0.008, grain: 1, noBottom: true });
+        m.box('wood', [sx * (W / 2 - 0.025), (seat - 0.008) / 2, D / 2 - 0.03], [0.045, seat - 0.008, 0.045], { bevel: 0.008, grain: 1, noBottom: true }); // top inside the seat
         m.box('wood', [sx * (W / 2 - 0.025), H / 2, -D / 2 + 0.03], [0.05, H, 0.05], { bevel: 0.008, grain: 1, noBottom: true });
         m.with(translate(sx * (W / 2 - 0.025), H, -D / 2 + 0.03), () => m.lathe('wood', [[0.026, 0], [0.03, 0.02], [0.012, 0.05], [0.02, 0.07], [0.001, 0.12]], 8));
       }
-      m.box('wood', [0, seat - 0.02, 0], [W, 0.04, D], { bevel: 0.01 });
-      m.box('wood', [0, seat - 0.08, D / 2 - 0.02], [W - 0.04, 0.08, 0.025], { bevel: 0.005 });
+      m.box('wood', [0, seat - 0.02, 0.0075], [W + 0.01, 0.04, D - 0.009], { bevel: 0.01 }); // overhangs the legs' sides and front, back edge inside the back posts
+      m.box('wood', [0, seat - 0.08, D / 2 - 0.024], [W - 0.04, 0.08, 0.025], { bevel: 0.005 }); // rail set back from the legs' faces
       for (const sz of [-1, 1]) m.box('wood', [0, 0.12, sz * (D / 2 - 0.03)], [W - 0.05, 0.04, 0.03], { bevel: 0.004 });
       m.box('wood', [0, (seat + H) / 2, -D / 2 + 0.03], [W - 0.05, H - seat - 0.06, 0.02], { bevel: 0.004, grain: 1 });
       m.box('wood', [0, H - 0.05, -D / 2 + 0.03], [W - 0.04, 0.08, 0.04], { bevel: 0.008 });
@@ -484,7 +486,7 @@ export const roundTable: PropKind = {
       const fold = over > 0 ? Math.sin(a * 11) * 0.025 * (over / drop) : 0;
       return [Math.cos(a) * (Math.min(rr, R) + fold + over * 0.08), H + 0.005 - over, Math.sin(a) * (Math.min(rr, R) + fold + over * 0.08)];
     }, 24, 5, [R * 6.3, R + drop], true));
-    m.with(translate(0, H + 0.005, 0), () => m.lathe('cloth', [[0.001, 0], [0.031, 0]], 8, { capTop: true }));
+    m.with(translate(0, H + 0.007, 0), () => m.lathe('cloth', [[0.034, 0], [0, 0]], 8)); // a button over the hole in the cloth's centre: one disc facing up (a ring facing down under a cap facing up z-fought)
     m.tinted(PCLOTH.gold, () => m.tube('cloth', Array.from({ length: 25 }, (_, i) => { const a = (i / 24) * Math.PI * 2; return [Math.cos(a) * (R + drop * 0.08 + Math.sin(a * 11) * 0.025), H + 0.005 - drop, Math.sin(a) * (R + drop * 0.08 + Math.sin(a * 11) * 0.025)] as V3; }), 0.012, 4, [false, false]));
     return { colliders: [boxCollider([-R - 0.05, 0, -R - 0.05], [R + 0.05, H, R + 0.05])], emitters: [] };
   },
@@ -537,21 +539,25 @@ export const bookcase: PropKind = {
     const W = range(r, 1.15, 1.45), D = 0.4, H = range(r, 2.15, 2.4), n = H > 2.3 ? 6 : 5, wood = jitterTint(r, pick(r, [PWOOD.walnut, PWOOD.oak, PWOOD.mahogany]), 0.05);
     const y0 = 0.14, gap = (H - 0.14 - y0) / n;
     m.tinted(wood, () => {
-      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.02), H / 2, 0], [0.04, H, D], { bevel: 0.006, grain: 1, noBottom: true });
-      m.box('wood', [0, y0 / 2, 0.01], [W, y0, D], { bevel: 0.008, noBottom: true });
+      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.02), (H - 0.004) / 2, 0], [0.04, H - 0.004, D], { bevel: 0.006, grain: 1, noBottom: true }); // tops inside the cornice
+      m.box('wood', [0, y0 / 2, 0.01], [W + 0.01, y0, D], { bevel: 0.008, noBottom: true }); // plinth 5 mm proud of the sides
       m.box('wood', [0, H - 0.06, 0.015], [W + 0.08, 0.12, D + 0.05], { bevel: 0.015 });
-      m.box('wood', [0, H / 2, -D / 2 + 0.01], [W - 0.04, H - 0.1, 0.02], { grain: 1 });
+      m.box('wood', [0, H / 2, -D / 2 + 0.012], [W - 0.08, H - 0.1, 0.02], { grain: 1 }); // between the sides, 2 mm in from their backs
       for (let i = 1; i < n; i++) m.box('wood', [0, y0 + i * gap - 0.01, 0], [W - 0.08, 0.025, D - 0.03], { bevel: 0.004 });
     });
     const bind: RGB[] = [PCLOTH.oxblood, [0.36, 0.2, 0.1], [0.14, 0.09, 0.06], PCLOTH.green, [0.3, 0.22, 0.12], [0.1, 0.12, 0.2], [0.42, 0.3, 0.16]];
     for (let i = 0; i < n; i++) {
       const y = y0 + i * gap + (i ? 0.0025 : 0);
-      let x = -W / 2 + 0.045 + range(r, 0, 0.04);
+      let x = -W / 2 + 0.045 + range(r, 0, 0.04), leanBack = NaN;
       const hmax = gap - 0.05;
       while (x < W / 2 - 0.08) {
         if (r() < 0.06) { x += range(r, 0.08, 0.2); continue; }
-        const t = range(r, 0.03, 0.065), h = Math.min(hmax, range(r, 0.19, 0.34)), d = Math.min(D - 0.08, h * range(r, 0.6, 0.75)), lean = r() < 0.08 ? range(r, 0.1, 0.25) : 0;
-        const c = jitterTint(r, pick(r, bind), 0.15), front = D / 2 - 0.03;
+        const t = range(r, 0.03, 0.065), h = Math.min(hmax, range(r, 0.19, 0.34)), d0 = Math.min(D - 0.08, h * range(r, 0.6, 0.75)), lean = r() < 0.08 ? range(r, 0.1, 0.25) : 0;
+        // a leaning book rests on the next one: it is set back so their fronts never share a plane, and the
+        // next one is made shallower when their backs would
+        const c = jitterTint(r, pick(r, bind), 0.15), front = D / 2 - 0.03 - (lean ? 0.012 : 0);
+        const d = !lean && Math.abs(front - d0 - leanBack) < 0.004 ? d0 - 0.008 : d0;
+        leanBack = lean ? front - d : NaN;
         const at = lean ? compose(translate(x + t / 2 + Math.sin(lean) * h, y, front - d / 2), rotZ(-lean)) : translate(x + t / 2, y, front - d / 2);
         m.with(at, () => {
           m.tinted(c, () => m.box('cloth', [0, h / 2, 0], [t, h, d], { noBottom: true }));
@@ -668,7 +674,7 @@ export const weaponTrophy: PropKind = {
     for (const sx of [-1, 1]) {
       const a = sx * 0.75, c = Math.cos(a), s = Math.sin(a), L = range(r, 1.6, 1.9);
       m.tinted(jitterTint(r, PWOOD.oak, 0.08), () => m.tube('wood', [[-s * L / 2, -c * L / 2, 0.03], [s * L / 2, c * L / 2, 0.03]], 0.014, 5));
-      m.tinted(steel, () => m.with(compose(translate(s * L / 2, c * L / 2, 0.03), rotZ(-a)), () => { m.box('brass', [0, 0.12, 0], [0.02, 0.24, 0.006]); m.box('brass', [0.06, 0.02, 0], [0.14, 0.12, 0.006], { bevel: 0.002 }); }));
+      m.tinted(steel, () => m.with(compose(translate(s * L / 2, c * L / 2, 0.03), rotZ(-a)), () => { m.box('brass', [0, 0.12, 0], [0.02, 0.24, 0.006]); m.box('brass', [0.065, 0.02, 0], [0.14, 0.12, 0.01], { bevel: 0.002 }); })); // thicker than the blade and starting inside it: no shared faces
     }
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + Math.PI / n, c = Math.cos(a), s = Math.sin(a), L = range(r, 0.75, 0.9);
