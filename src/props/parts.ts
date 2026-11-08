@@ -78,14 +78,14 @@ export const flame = (m: PropMesh, kind: Emitter['kind'], at: V3, size: number) 
 export function jug(m: PropMesh, r: Rng, h: number) {
   const R = h * range(r, 0.3, 0.38), ph = r() * 6;
   m.tinted(jitterTint(r, pick(r, [[0.62, 0.42, 0.3], [0.5, 0.48, 0.42], [0.35, 0.4, 0.3]] as RGB[])), () => {
-    m.lathe('ceramic', [[0, 0], [R * 0.7, 0], [R, h * 0.35], [R * 0.9, h * 0.6], [R * 0.45, h * 0.85], [R * 0.5, h], [R * 0.42, h]], 12,
+    m.lathe('ceramic', [[R * 0.7, 0], [R, h * 0.35], [R * 0.9, h * 0.6], [R * 0.45, h * 0.85], [R * 0.5, h], [R * 0.42, h]], 10, // no foot disc: it stands on it
       { wobble: (th, y) => 1 + Math.sin(th * 3 + ph + y * 9) * 0.02 });
     m.tube('ceramic', Array.from({ length: 6 }, (_, i) => { const a = (i / 5) * Math.PI; return [-R * 0.55 - Math.sin(a) * R * 0.45, h * 0.88 - (i / 5) * h * 0.45, 0] as V3; }), h * 0.035, 5, [false, false]);
   });
 }
 export function bowl(m: PropMesh, r: Rng, R: number) {
   m.tinted(jitterTint(r, pick(r, [[0.6, 0.45, 0.32], [0.7, 0.66, 0.6]] as RGB[])), () =>
-    m.lathe('ceramic', [[0, 0], [R * 0.5, 0], [R, R * 0.45], [R * 0.93, R * 0.47], [R * 0.45, R * 0.06], [0, R * 0.06]], 12));
+    m.lathe('ceramic', [[R * 0.5, 0], [R, R * 0.45], [R * 0.93, R * 0.47], [R * 0.45, R * 0.06], [0, R * 0.06]], 10)); // no foot disc
 }
 /** A bound book lying flat, spine on -x: two boards and a spine standing out, the page block set back
  * 3 mm between them. No face of the pages lies on a face of the cover (they z-fought when the page
