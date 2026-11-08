@@ -43,13 +43,16 @@ export function woodTex(N = 512): PropTex {
   return bake(N, (u, v) => {
     let w = 0;
     for (const [ku, kv] of knots) { const du = ((u - ku + 1.5) % 1) - 0.5, dv = ((v - kv + 1.5) % 1) - 0.5; w += Math.exp(-(du * du * 400 + dv * dv * 3000)); }
+    // soft, wide growth rings (about 2 cm apart on a quarter-sawn board) and fine pores, low contrast:
+    // scrubbed oak at walking distance, not stripes (Anders, WebGPU 2026-11-08: the old 48 rings/m at
+    // high contrast and a stepped pore height read as black-and-white zebra on table tops)
     const warp = n.fbm(u, v, 4, 3) * 0.6 + w * 0.8;
-    const ring = Math.sin((v * 48 + warp * 3) * Math.PI * 2) * 0.5 + 0.5;
-    const lane = (Math.floor(v * 256) + 0.5) / 256, pores = n.n(u, lane, 32) * 0.5 + 0.5; // streaks along the grain
+    const ring = Math.sin((v * 22 + warp * 0.8) * Math.PI * 2) * 0.5 + 0.5; // nearly straight: quarter-sawn boards
+    const lane = (Math.floor(v * 256) + 0.5) / 256, pores = n.n(u, lane, 32) * 0.5 + 0.5; // fine streaks along the grain
     const blot = n.fbm(u + 0.3, v + 0.7, 2, 3) * 0.5 + 0.5;
-    const k = (0.72 + 0.22 * Math.pow(ring, 3) + 0.08 * pores) * (0.8 + 0.35 * blot) * (1 - w * 0.5);
-    return { c: [0.26 * k, 0.18 * k, 0.11 * k], h: 0.5 + ring * 0.25 - (pores < 0.25 ? 0.2 : 0) - w * 0.2, r: 0.62 + 0.25 * blot + (pores < 0.25 ? 0.1 : 0) };
-  }, 2.5);
+    const k = (0.84 + 0.1 * ring * ring + 0.06 * pores) * (0.88 + 0.22 * blot) * (1 - w * 0.4);
+    return { c: [0.26 * k, 0.18 * k, 0.11 * k], h: 0.5 + ring * 0.08 + pores * 0.05 - w * 0.15, r: 0.66 + 0.2 * blot + 0.04 * (1 - pores) };
+  }, 1.5);
 }
 
 /** Wrought iron: near-black with hammer dents and rust in blotches (0.5 m tile). */
@@ -111,8 +114,8 @@ export function brassTex(N = 256): PropTex {
   }, 1.5);
 }
 
-/** Dressed sandstone (1 m tile): fine grain, bedding, claw-tool striations, soot and wear; pale and
- * warm so tints give grey limestone, sandstone or a dark polished marble. */
+/** Dressed stone (1 m tile), as dark as the castle's own walls (linear albedo ≈ 0.3, texgen LITH_COL) so hearths and altars sit in them: fine grain, bedding, claw-tool striations, soot and wear; warm
+ * so tints give grey limestone, sandstone or a dark polished marble. */
 export function stoneTex(N = 512): PropTex {
   const n = new TileNoise(hashSeed('prop-stone'));
   return bake(N, (u, v) => {
@@ -123,7 +126,7 @@ export function stoneTex(N = 512): PropTex {
     const grain = n.n(u, v, 256) * 0.5 + 0.5, mottle = n.fbm(u, v, 4, 4) * 0.5 + 0.5;
     const claw = Math.sin((u * 3 + v * 2) * 160 + n.n(u, v, 32) * 4) * 0.5 + 0.5; // diagonal tooling
     const k = joint ? 0.5 + 0.1 * grain : (0.6 + 0.1 * mottle + 0.1 * block) * (0.9 + 0.1 * grain) * (0.97 + 0.03 * claw);
-    return { c: [k * 0.95, k * 0.9, k * 0.82], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
+    return { c: [k * 0.48, k * 0.46, k * 0.42], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
   }, 2.2);
 }
 

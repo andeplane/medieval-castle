@@ -46,6 +46,69 @@ Tests:
 - The whole-cave ray grid (no gaps from any cave view) now includes everything drawn, because there are no halos to leave out.
 - `npm test`, coverage and build pass.
 
+## 2026-11-08: door batches one draw again; a WebGPU draw-call budget in vitest (branch `claude/project-thread-ns4g2v-drawcalls`)
+
+Anders, on his Mac (WebGPU, live b097e26): hero 1180, courtyard 1279, gate 728, hall 853 draw calls, against 426 / 468 / 358 / 327 after #65.
+
+**Cause: #66 undid #65.** #66 (async pipelines) was squash-merged from a branch cut before #65 and carried the old `castle/interior/doorBatch.ts` (door `BatchedMesh`es), the old `doors.ts` comment and flush, and deleted `tests/doorBatch.test.ts`. WebGPU in three r187 has no multi-draw, so each door BatchedMesh costs one `drawIndexed` per run of shown leaf classes: ~195 a pass at the hero, in the AO pre-pass, the scene and the reflection. WebGL2 counts each batch once, so the headless captures of #66–#73 did not see it. Nothing in #67–#72 added a measurable number; #73's terrain tiles add ~50 a pass (terrain 14 → 63 at the hero), its deliberate trade for ~1 M fewer triangles.
+
+Bisect (headless Chromium, WebGPU on SwiftShader: `WEBGPU=1 node scripts/drawcalls.mjs`, `?view=<pose>`, 640×360, one frame, `__game.state().drawCalls`):
+
+| Commit | hero | courtyard |
+|---|---|---|
+| 27f725c #65 | 437 | 498 |
+| a9b1712 #66 | **999** | **1033** |
+| 098f747 #67 | 999 | 1033 |
+| 613d090 #69 | 1052 | 1033 |
+| b7af20c #70 | 1052 | 1033 |
+| 4805ede #71 | 1052 | 1033 |
+| 6f0c391 #72 | 1060 | 1033 |
+| b097e26 #73 | 1209 | 1121 |
+
+**Fix:** #65's `doorBatch.ts` (one merged mesh per door batch, one draw per pass), its `doors.ts` flush and `tests/doorBatch.test.ts` restored as they were; the doors.test check of "one merged mesh per batch" back. Same leaves, same visibility, same triangles (the whole-castle equivalence test is back too).
+
+Same harness, main b097e26 → branch: hero 1209 → 618, courtyard 1121 → 566, gate 680 → 494, hall 755 → 407. Doors per pass 192–204 → 7.
+
+**Guard** (`render/drawCount.ts`, `tests/drawBudget.test.ts`, ~15 s): counts the draws three's WebGPU backend issues from the scene graph (its `StandardDrawingPipeline.project` rules; a BatchedMesh by its runs). The castle, interior, every door (shown by the room graph as main.ts does) and the terrain tiles are built and counted at the hero, courtyard and hall poses for the AO pre-pass, scene, reflection (view mirrored in y = 0) and shadow (every caster, uncut). Budget 750 for that part (stones, vegetation, flames, water not built: ≈ 150–300 measured), doors ≤ 8 a pass. Branch: hero 427, courtyard 262, hall 210; with the BatchedMeshes of b097e26 the doors alone are ~600 at the hero. `scripts/drawcalls.mjs`: `WEBGPU=1` and GPU draws per render object (a BatchedMesh's runs).
+
+Not checked: the Mac (SwiftShader counts match his within ~3 % at the hero on main: 1209 vs 1180); live mode (the counts are `?view=` loads with the sun's static shadow map not re-rendered in that frame); `?furniture=1`. Seen, not changed: the cave group (`interior:cave:-1`, 7 draws a pass) is drawn from the hero view (caves3's area).
+
+## 2026-11-08: CI coverage run about 40 % faster (branch `claude/project-thread-ns4g2v-ci`)
+
+PR CI had grown to 4:12-5:29 (#71, #72), almost all of it `npm run coverage` (in #72: 316 s, of which `world.test.ts` 312 s; `npm ci` ~3 s, build 2-3 s). GitHub's runners differ a lot in speed (EPYC 9V74 fast, EPYC 7763 slow), so before/after was measured on the same runner in one job (main, then this branch). Coverage step: EPYC 9V74 main 239 / 239 s, branch 144 / 141 s; EPYC 7763 main 317 s, branch 194 / 189 s. Without coverage the branch runs in 83 s (9V74) / 113 s (7763). Whole job ~2:30 on a fast runner, ~3:15 on a slow one: still over the 2 min target.
+
+What changed (no test skipped, weakened or narrowed, no threshold lowered; whole-castle checks still check the whole castle):
+- `tests/helpers/rays.ts`: a flat BVH any-hit ray query that tests each candidate with three's own `Ray.intersectTriangle`, the same answer as three-mesh-bvh's `raycastFirst !== null` (v8 coverage slows the library's many small calls ~3×). Used by `world`, `sunLeak` and `groundInRooms`; `tests/rays.test.ts` checks it against brute force (all sides, edge/vertex/axis rays) and against three-mesh-bvh.
+- `tests/helpers/triGrid.ts`: an xz grid over triangle boxes, so per-door/per-point scans in `world.test.ts` (openings, hidden faces, door floors, reveals) look at nearby triangles instead of every triangle; the same filters run after. Castle solid and group triangles cached once per file; the cull test's world vertices precomputed. `doors.test.ts` "no light through a leaf" filters triangles per column.
+- `src/physics/world.ts`: steps rapier's pipeline directly, calling the full `world.step()` (which walks every body handle in JS each step) only after a body was removed. `physics.test.ts` checks the collider set stays consistent across a removal.
+- `src/castle/interior/doorGeom.ts` (`m4mul` unrolled) and `plan.ts` (`leafSwingFits` builds the leaf matrix once per angle): output checked bit-identical (hash of the generated plan and door geometry).
+- `vitest.config.ts`: threads on all 4 cores, longest files first (~5 %).
+
+Tried and dropped: istanbul (not faster, ignores `v8 ignore`, misses workers); `--no-isolate` (another ~11 %, all tests pass, but shares module state between files; left as an option).
+
+
+## 2026-11-08: no zebra grain, darker prop stone, terrain drawn in culling tiles (branch `claude/project-thread-ns4g2v-furn3`)
+
+Anders, on his Mac (WebGPU, `?furniture=1`) after #70/#71: the hall's tables and benches showed harsh black-and-white grain; the hall's hooded chimneypiece read as white plaster with a grey-blue hood; frame triangles 4.10 M (hall), 3.76 M (chamber), 3.93 M (tower room) against the brief's 1–3 M.
+
+**Wood** (`props/textures.ts woodTex`, the one wood texture of every prop): growth rings 48 → 22 per metre, nearly straight (quarter-sawn), ring contrast 0.22·ring³ → 0.1·ring², ring relief 0.25 → 0.08, pores smooth instead of a stepped −0.2 height (the step drew a hard line every few pixels in the normal map), normal strength 2.5 → 1.5. Scrubbed oak at walking distance; the close capture (`hall-table-close`, about 1 m from the top) shows soft straight grain and the knots.
+
+**Stone** (`props/textures.ts stoneTex`, every prop's stone: hearths, chimneypieces, altar, well, oven): albedo halved to the castle walls' own (linear ≈ 0.3, `texgen.ts LITH_COL`); the `grey` tint warm instead of blue. The hall hood measured 254 → 202 (sRGB, clipped before), the stone wall beside it 120. It is still about 2.5× the wall's light: the hood and the armour standing by the hearth (iron, near black) both read near white in the hall, the same hood in the kitchen is dark. That is light on those props, not their albedo; not changed here (src/light, #71).
+
+**Triangles: where they go.** `scripts/drawcalls.mjs` now also counts triangles per pass, group and mesh. Hall on main (headless WebGL2, `?furniture=1`): AO pre-pass 1.36 M, scene 1.36 M, water reflection 1.15 M, sun shadow 0.36 M. By group over all passes: terrain 2.47 M (the near grid 352k and the far mesh 224k per pass, each one mesh, so three's frustum culling never dropped any of it), castle 0.50 M, 3D stones 0.38 M, vegetation 0.33 M, doors 0.30 M, interior shell and furniture 0.17 M. All furniture together is under 5% of the frame (hall furniture 62k triangles), so cutting props could not reach 3 M; the props with the most triangles are shelves (3.5k each), bookcases (1.7k) and candle sconces (0.45k). Jugs and bowls lost their hidden foot discs and two segments (12 → 10); nothing else on props.
+
+**Terrain tiles** (`world/terrain.ts cullTiles`): the near grid is drawn as 6 × 6 tiles and the far mesh as 8 sectors × 3 bands, sharing the whole meshes' vertex buffers (no copy), each tile bounded by its own vertices. The whole meshes stay, on a layer no camera draws (`UNDRAWN_LAYER`), for the height grid, physics and ground cover that read them by name. Culling only: the same ground is drawn wherever any camera can see it. Tried and dropped: rocks in quarters round the castle (−80k triangles at the hall for +70 draw calls); finer tiles (8 × 8, 10 × 10, 16 far sectors: under 10% fewer triangles, many more draws).
+
+Furniture shadows: at the hall the sun shadow pass draws 363k triangles, of which the interior (shell and furniture together) is 40k; the rest is rocks, castle and doors. Turning off small pieces' `castShadow` would save at most part of that 40k, so it is not changed (no before/after capture).
+
+`__game.state()` (headless WebGL2, 1280×720, `?furniture=1`), main → branch: hall 4.24 M / 398 draws → 3.28 M / 473; chamber 3.81 M / 295 → 2.78 M / 361; tower room 3.95 M / 346 → 2.91 M / 412; kitchen (`great-0`, close to its hearth) 3.10 M / 510.
+
+Tests: `terrain.test.ts` (every triangle of the near and far meshes in exactly one tile; tiles share the vertex buffers, are bounded by their own vertices and keep receiveShadow; the whole meshes undrawn; a camera looking away culls most near tiles and keeps some).
+
+Captures (`castle-plan/furnishing/captures/furn3/`, `before-*` main 4805ede, `after-*` branch): hall, chamber, tower room, hall-table-close, hall-hearth, kitchen.
+
+Not checked: WebGPU and the Mac (headless WebGL2 only; the Mac counted 4.10 M where headless counts 4.24 M at the hall); the hall is still 3.28 M: what is left there is outdoor geometry seen through the hall's windows and drawn three times (AO pre-pass, scene, reflection): castle trim 0.38 M, 3D stones 0.38 M, vegetation 0.33 M, doors 0.30 M, terrain 1.43 M. Cutting those means changing their meshes or the reflection pass, which this branch does not do.
+
 ## 2026-11-08: the caves read as broken stone; the lantern no longer burns out the near wall (branch `claude/project-thread-ns4g2v-caves2`)
 
 Follow-up to #69, from my own captures there: the lantern washed the near walls flat orange, the cavern read as smooth rock, the fungi were pale flakes, the great tower cellar was black at the way out, the rock was meshed on the main thread, and there were no captures of the finds.

@@ -638,6 +638,39 @@ function buildStream(T: Terrain, waterMat: THREE.Material | null) {
   return { ground: g, water };
 }
 
+const NEAR_TILES = 6, FAR_SECTORS = 8, FAR_BANDS = 3; // 6 x 6 and 8 x 3: as few draws as cull nearly as well (finer tiles saved < 10%)
+/** A layer no camera renders: the whole near and far meshes sit on it, kept for whoever reads them by name. */
+export const UNDRAWN_LAYER = 31;
+
+/**
+ * Split a mesh's triangles into tiles (by `key` of each triangle's centre) that share its vertex
+ * attributes, each with bounds of its own vertices, so frustum culling drops the tiles out of view. The
+ * same ground is drawn wherever it can be seen; only what lies outside every camera's frustum is skipped.
+ */
+export function cullTiles(mesh: THREE.Mesh, key: (x: number, z: number) => number): THREE.Mesh[] {
+  const g = mesh.geometry, p = g.attributes.position as THREE.BufferAttribute, idx = g.index!.array, buckets = new Map<number, number[]>();
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    const k = key((p.getX(a) + p.getX(b) + p.getX(c)) / 3, (p.getZ(a) + p.getZ(b) + p.getZ(c)) / 3);
+    let ids = buckets.get(k);
+    if (!ids) buckets.set(k, ids = []);
+    ids.push(a, b, c);
+  }
+  const v = new THREE.Vector3();
+  return [...buckets].sort((a, b) => a[0] - b[0]).map(([k, ids]) => {
+    const tg = new THREE.BufferGeometry();
+    for (const [n, attr] of Object.entries(g.attributes)) tg.setAttribute(n, attr);
+    tg.setIndex(new THREE.BufferAttribute(Uint32Array.from(ids), 1));
+    // three would bound the tile by every vertex of the shared attribute
+    const box = new THREE.Box3();
+    for (const i of ids) box.expandByPoint(v.fromBufferAttribute(p, i));
+    tg.boundingBox = box; tg.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+    const m = new THREE.Mesh(tg, mesh.material);
+    m.name = `${mesh.name}-${k}`; m.receiveShadow = mesh.receiveShadow; m.castShadow = mesh.castShadow;
+    return m;
+  });
+}
+
 export interface TerrainMeshOptions {
   near?: number; nearSeg?: number; farRings?: number; farSegs?: number;
   /** More holes in the near grid besides groundHole (the interior's groundHoles.terrain). */
@@ -660,10 +693,20 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const tFar = performance.now();
   const ud = (material as THREE.Material & { userData: { stream?: THREE.Material; rock?: THREE.Material; reliefTex?: THREE.DataTexture } }).userData;
   if (ud.reliefTex) { (ud.reliefTex.image.data as Uint8Array).set(T.reliefTexture(ud.reliefTex.image.width)); ud.reliefTex.needsUpdate = true; }
+  // drawn as tiles that three's frustum culling can drop (cullTiles); the whole meshes stay, undrawn, for
+  // the height grid, physics and ground cover that read them by name
+  const tiles = [
+    ...cullTiles(near, (x, z) => { const c = (v: number) => Math.min(NEAR_TILES - 1, Math.max(0, Math.floor((v / NEAR + 0.5) * NEAR_TILES))); return c(x) * NEAR_TILES + c(z); }),
+    ...cullTiles(far, (x, z) => {
+      const a = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * FAR_SECTORS), band = Math.min(FAR_BANDS - 1, Math.floor((Math.log(Math.hypot(x, z) / 150) / Math.log(16000 / 150)) * FAR_BANDS));
+      return band * FAR_SECTORS + a;
+    }),
+  ];
+  near.layers.set(UNDRAWN_LAYER); far.layers.set(UNDRAWN_LAYER);
   const st = buildStream(T, ud.stream ?? null);
   const corridor = new THREE.Mesh(st.ground, material);
   corridor.name = 'terrain-stream';
-  group.add(near, far, corridor);
+  group.add(near, far, ...tiles, corridor);
   if (st.water) group.add(st.water);
   const tStream = performance.now();
   const rocks = buildRocks(ud.rock ?? material, { sample: T.sample, moatOuter: MOAT_OUTER, footDist, hedges: T.hedgerowLines(), fieldAt: T.fieldAt, farmland: T.farmland }, T.deps);
@@ -671,7 +714,7 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const tRocks = performance.now();
   Object.assign(T.timings, { nearMs: Math.round(tNear - t0), farMs: Math.round(tFar - tNear), streamMeshMs: Math.round(tStream - tFar), rocksMs: Math.round(tRocks - tStream) });
   let tris = 0;
-  group.traverse((m) => { const g = (m as THREE.Mesh).geometry; if (g) tris += ((g.index?.count ?? g.attributes.position.count) / 3) * ((m as THREE.InstancedMesh).count ?? 1); });
+  group.traverse((m) => { const g = (m as THREE.Mesh).geometry; if (g && !m.layers.isEnabled(UNDRAWN_LAYER)) tris += ((g.index?.count ?? g.attributes.position.count) / 3) * ((m as THREE.InstancedMesh).count ?? 1); });
   // island rock footprints (x, z, r) for collision / navmesh: group.getObjectByName('rocks').userData.obstacles
   group.userData = { triangles: Math.round(tris), rocks: rocks.userData.count, islandObstacles: rocks.userData.obstacles.length, timings: { ...T.timings } };
   return group;

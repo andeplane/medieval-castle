@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
+  UNDRAWN_LAYER,
   createTerrain, defaultTerrain, buildTerrain, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
   ISLAND, MOAT_OUTER, BRIDGE_END, sample, heightAt, hedgerowLines, fieldAt, streamLine, farmland,
   islandWalkable, footDist, moatSigned, COURT_BED, type Terrain,
@@ -221,6 +222,41 @@ describe('meshes', () => {
     let up = 0, tot = 0; const n = corridor.geometry.attributes.normal;
     for (let i = 0; i < n.count; i++) { const col = i % 29; if (col < 2 || col > 26) continue; tot++; if (n.getY(i) > 0.3) up++; }
     expect(up / tot).toBeGreaterThan(0.99);
+  });
+
+  // The near and far meshes are drawn as tiles so frustum culling can skip ground out of view: the same
+  // triangles, each in exactly one tile, each tile bounded by its own vertices; the whole meshes undrawn.
+  it('draws the near and far ground as culling tiles holding every triangle once', () => {
+    const g = buildTerrain(new THREE.MeshBasicMaterial(), T, { nearSeg: 40, farRings: 12, farSegs: 48 });
+    for (const name of ['terrain-near', 'terrain-far']) {
+      const whole = g.getObjectByName(name) as THREE.Mesh;
+      expect(whole.layers.isEnabled(0)).toBe(false);
+      expect(whole.layers.isEnabled(UNDRAWN_LAYER)).toBe(true);
+      const tiles = g.children.filter((c) => c.name.startsWith(name + '-')) as THREE.Mesh[];
+      expect(tiles.length).toBeGreaterThan(name === 'terrain-near' ? 30 : 20);
+      const tri = (a: ArrayLike<number>, t: number) => [a[t], a[t + 1], a[t + 2]].join(',');
+      const want = new Set<string>(), idx = whole.geometry.index!.array;
+      for (let t = 0; t < idx.length; t += 3) want.add(tri(idx, t));
+      const got: string[] = [], v = new THREE.Vector3();
+      for (const m of tiles) {
+        expect(m.layers.isEnabled(0)).toBe(true);
+        expect(m.geometry.attributes.position).toBe(whole.geometry.attributes.position); // shared, not copied
+        expect(m.receiveShadow).toBe(whole.receiveShadow);
+        const ti = m.geometry.index!.array, box = m.geometry.boundingBox!.clone().expandByScalar(1e-3);
+        for (let t = 0; t < ti.length; t += 3) got.push(tri(ti, t));
+        for (let i = 0; i < ti.length; i++) expect(box.containsPoint(v.fromBufferAttribute(m.geometry.attributes.position as THREE.BufferAttribute, ti[i]))).toBe(true);
+        expect(m.geometry.boundingSphere!.containsPoint(m.geometry.boundingBox!.getCenter(v))).toBe(true);
+      }
+      expect(got.length).toBe(want.size);
+      expect(new Set(got)).toEqual(want);
+    }
+    // a camera looking away from most of the island culls most near tiles, and none it looks at
+    const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 20000); cam.position.set(0, 10, 0); cam.lookAt(100, 10, 0); cam.updateMatrixWorld();
+    const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const near = g.children.filter((c) => c.name.startsWith('terrain-near-')) as THREE.Mesh[];
+    const shown = near.filter((m) => fr.intersectsSphere(m.geometry.boundingSphere!));
+    expect(shown.length).toBeLessThan(near.length * 0.6);
+    expect(shown.length).toBeGreaterThan(0);
   });
 });
 

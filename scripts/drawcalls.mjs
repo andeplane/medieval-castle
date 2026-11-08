@@ -11,12 +11,15 @@ const QUERY = process.env.QUERY ?? '';
 // poses separated by ';' (or ',' between bookmark names)
 const POSES = (process.env.POSES ?? 'hero,gate,courtyard,hall,chamber,towerroom;eye:11.6,4.3,-1.2>14.2,4.0,-3.3').split(';').flatMap((s) => s.startsWith('eye:') ? [s] : s.split(','));
 
-const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+// WEBGPU=1: three's WebGPU backend on Chromium's SwiftShader adapter (draws as on a Mac: no multi-draw)
+const WEBGPU = process.env.WEBGPU === '1';
+const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...(WEBGPU ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan,WebGPU', '--use-webgpu-adapter=swiftshader', '--disable-gpu-watchdog', '--disable-dawn-features=timestamp_quantization'] : [])] });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 // LIVE=1: the game's own loop (no ?shot); one whole animation frame is counted, from one info.reset() to the next
 const LIVE = process.env.LIVE === '1';
-await page.goto(`${URL}?webgl${LIVE ? '' : '&shot'}${QUERY ? '&' + QUERY : ''}`);
+const q = [WEBGPU ? '' : 'webgl', LIVE ? '' : 'shot', QUERY].filter(Boolean).join('&');
+await page.goto(`${URL}${q ? '?' + q : ''}`);
 await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 3_600_000, polling: 1000 });
 await page.evaluate(() => {
   const { renderer } = window.__game.render;
@@ -36,7 +39,11 @@ await page.evaluate(() => {
       while (o.parent && o.parent.parent) { o = o.parent; }
       top = o.name || o.type;
       const g = top.startsWith('interior:') ? 'interior' : top;
-      window.__calls.push([pass, g, ro.object.name || ro.object.type, ro.object.castShadow, top]);
+      const t0 = renderer.info.render.triangles, d0 = renderer.info.render.drawCalls;
+      const res = draw(ro, info);
+      // the GPU draws behind one render object (WebGPU has no multi-draw: a BatchedMesh is one per run)
+      window.__calls.push([pass, g, ro.object.name || ro.object.type, ro.object.castShadow, top, renderer.info.render.triangles - t0, renderer.info.render.drawCalls - d0]);
+      return res;
     }
     return draw(ro, info);
   };
@@ -65,6 +72,15 @@ for (const p of POSES) {
   console.log(`\n== ${p}: drawCalls ${r.st.drawCalls} (hooked ${r.c.length}), triangles ${(r.st.frameTriangles / 1e6).toFixed(2)} M, groups shown ${r.st.light?.groupsShown}/${r.st.light?.groups}, room ${r.st.light?.room}, camera ${r.st.camera.mode} (${r.st.camera.x}, ${r.st.camera.y}, ${r.st.camera.z})`);
   console.log('  by pass:', by((x) => x[0]).map(([k, v]) => `${k} ${v}`).join(', '));
   console.log('  by pass+group:', by((x) => `${x[0]}|${x[1]}`).slice(0, 25).map(([k, v]) => `${k} ${v}`).join(', '));
+  const dby = (f) => { const m = {}; for (const x of r.c) { const k = f(x); m[k] = (m[k] ?? 0) + (x[6] ?? 1); } return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  console.log('  GPU draws by pass:', dby((x) => x[0]).map(([k, v]) => `${k} ${v}`).join(', '));
+  console.log('  GPU draws by pass+group:', dby((x) => `${x[0]}|${x[1]}`).slice(0, 25).map(([k, v]) => `${k} ${v}`).join(', '));
+  console.log('  GPU draws by mesh (all passes):', dby((x) => `${x[1]}/${x[2]}`).slice(0, 30).map(([k, v]) => `${k} ${v}`).join(', '));
+  const tby = (f) => { const m = {}; for (const x of r.c) { const k = f(x); m[k] = (m[k] ?? 0) + (x[5] ?? 0); } return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  console.log('  tris by pass:', tby((x) => x[0]).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by pass+group:', tby((x) => `${x[0]}|${x[1]}`).slice(0, 40).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by group (all passes):', tby((x) => x[1]).slice(0, 30).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by mesh (all passes):', tby((x) => `${x[1]}/${x[2]}`).slice(0, 40).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
   if (process.env.DETAIL) console.log('  interior groups (scene+shadow):', by((x) => `${x[0]}|${x[4]}`).filter(([k]) => k.includes('interior:')).slice(0, 40).map(([k, v]) => `${k} ${v}`).join(', '));
 }
 await browser.close();

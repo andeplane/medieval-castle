@@ -1,16 +1,33 @@
 import { defineConfig } from 'vitest/config';
+import { BaseSequencer, type TestSpecification } from 'vitest/node';
+
+// The longest files (CI, 4 workers, under coverage: 35-120 s each, most others under 25 s) start first, so none
+// of them is left running alone at the end. Only the order changes; a stale name just sorts as before.
+const LONGEST = ['world', 'doorswing', 'interior', 'stairwalk', 'props-stream', 'doors'].map((n) => `/tests/${n}.test.ts`);
+class LongestFirst extends BaseSequencer {
+  async sort(files: TestSpecification[]) {
+    const rank = (f: TestSpecification) => { const i = LONGEST.findIndex((n) => f.moduleId.endsWith(n)); return i < 0 ? LONGEST.length : i; };
+    return (await super.sort(files)).map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map(({ f }) => f);
+  }
+}
+
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     // generation tests build real terrain and vegetation; give them room on a loaded machine
     testTimeout: 30000,
+    // worker threads on all four cores of the CI runner, longest files first (vitest's default is forks on
+    // three): about 5 % faster on the same runner (141-144 s against 149 s under coverage)
+    pool: 'threads',
+    maxWorkers: '100%',
+    sequence: { sequencer: LongestFirst },
     coverage: {
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
       // Browser entry points (page boot, UI) are checked by captures instead.
       include: ['src/loading/**/*.ts', 'src/props/**/*.ts', 'src/light/**/*.ts', 'src/world/{terrain,fields,rocks,relief,deps}.ts', 'src/castle/{builder,castle,layout,spec,openings,paving}.ts', 'src/castle/{bridge,revetment,turf,rubble}.ts', 'src/castle/stones/**/*.ts', 'src/castle/interior/*.ts', 'src/camera/interiorViews.ts', 'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts', 'src/game/{interact,doorAudio}.ts', 'src/ui/**/*.ts', 'src/render/texgen.ts',
         'src/physics/**/*.ts', 'src/character/**/*.ts', 'src/player/**/*.ts', 'src/camera/controls.ts', 'src/debug/{hooks,testcourse}.ts', 'src/core/clock.ts',
-        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts'],
+        'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts', 'src/world/visibility.ts', 'src/debug/roomtest.ts', 'src/render/perf.ts', 'src/render/resolution.ts', 'src/debug/bench.ts', 'src/render/drawCount.ts'],
       exclude: ['src/loading/entry.ts', 'src/loading/tunnel.worker.ts', 'src/castle/stones/layout.worker.ts', 'src/props/furnish.worker.ts', 'src/props/preview.ts', 'src/light/preview.ts', 'src/castle/interior/types.ts'],
       thresholds: {
         'src/loading/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
@@ -18,6 +35,7 @@ export default defineConfig({
         'src/light/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         // interior light + visibility; the TSL shader (render/interiorShader.ts) is checked by ?test=room captures
         'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
+        'src/render/drawCount.ts': { lines: 100, functions: 100, branches: 95, statements: 100 },
         'src/world/visibility.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
         'src/render/texgen.ts': { lines: 95, functions: 95, branches: 85, statements: 95 },
         // measured 99.8 / 100 / 89.6 / 98.0

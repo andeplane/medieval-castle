@@ -8,7 +8,7 @@
 // caves' (castle/interior/caves.ts caveSpan: a chamber's dome, a passage's floor line), which run under the moat.
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { MeshBVH } from 'three-mesh-bvh';
+import { rayIndex, soupTris } from './helpers/rays';
 import * as T3 from 'three';
 import { buildTerrain, heightAt, ISLAND } from '../src/world/terrain';
 import { waterGeometry } from '../src/world/water';
@@ -19,13 +19,11 @@ import { floorAlong } from '../src/render/interiorFire';
 import { caveSpan } from '../src/castle/interior/caves';
 import { mats } from './world';
 
-/** World-space triangle soup of a mesh as a BVH (position only). */
+/** World-space triangle soup of a mesh as a BVH (position only; helpers/rays.ts, as three-mesh-bvh's raycastFirst). */
 function bvhOf(mesh: THREE.Mesh) {
   mesh.updateMatrixWorld(true);
   const g = (mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone()).applyMatrix4(mesh.matrixWorld);
-  const geo = new T3.BufferGeometry();
-  geo.setAttribute('position', new T3.BufferAttribute(g.attributes.position.array as Float32Array, 3));
-  return new MeshBVH(geo);
+  return rayIndex(soupTris(g.attributes.position.array));
 }
 
 /** Points on a `step` grid inside the polygon, at least `inset` from its edges. */
@@ -46,7 +44,7 @@ describe('outdoor surfaces stay out of the rooms', () => {
     const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: groundHoles.terrain });
     const water = new THREE.Mesh(waterGeometry(9000, ISLAND, groundHoles.water), new THREE.MeshBasicMaterial());
     water.rotation.x = -Math.PI / 2;
-    const surfaces: [string, MeshBVH][] = [
+    const surfaces: [string, ReturnType<typeof bvhOf>][] = [
       ['terrain', bvhOf(terrain.getObjectByName('terrain-near') as THREE.Mesh)],
       ['water', bvhOf(water)],
       ['paving', bvhOf(castle.children.find((c) => (c as THREE.Mesh).isMesh && c.name === 'castle-pave') as THREE.Mesh)],
@@ -63,7 +61,7 @@ describe('outdoor surfaces stay out of the rooms', () => {
         const y0 = tunnel ? floorAlong(tunnel.path, [x, z]) : cave ? cave.floor : r.y0, y1 = tunnel ? y0 + tunnel.crown : cave ? cave.ceil : r.y1;
         ray.origin.set(x, y1 - 0.02, z); ray.direction.copy(down);
         for (const [name, bvh] of surfaces) {
-          const h = bvh.raycastFirst(ray, T3.DoubleSide, 0, y1 - y0 - 0.04);
+          const h = bvh.hits(ray, 0, y1 - y0 - 0.04);
           if (h) hits.set(name, (hits.get(name) ?? 0) + 1);
         }
       }

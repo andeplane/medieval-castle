@@ -37,7 +37,6 @@ import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
 import { createVisibility, drawnSpaces, roomGraph } from '../src/world/visibility';
-import { MeshBVH } from 'three-mesh-bvh';
 import * as T3 from 'three';
 import { buildTerrain } from '../src/world/terrain';
 import { PAVE_Y } from '../src/castle/paving';
@@ -50,6 +49,8 @@ import { wallTorches } from '../src/render/interiorFire';
 import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
 import { OUTDOOR_TAG } from '../src/render/interiorMath';
 import type { LightEmitter } from '../src/light/types';
+import { triGrid } from './helpers/triGrid';
+import { rayIndex } from './helpers/rays';
 
 type V3 = [number, number, number];
 const OUTDOOR = new Set(['courtyard', 'outside']);
@@ -68,14 +69,8 @@ function trianglesOf(B: Builder): Tri[] {
   return out;
 }
 const mkTri = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
-/** A BVH over triangles, for rays (three-mesh-bvh). */
-function bvhOf(tris: Tri[]): MeshBVH {
-  const list = tris.length ? tris : [mkTri([0, -1e4, 0], [1e-3, -1e4, 0], [0, -1e4, 1e-3])];
-  const a = new Float32Array(list.length * 9);
-  list.forEach((t, i) => { a.set(t.a, i * 9); a.set(t.b, i * 9 + 3); a.set(t.c, i * 9 + 6); });
-  const g = new T3.BufferGeometry(); g.setAttribute('position', new T3.BufferAttribute(a, 3));
-  return new MeshBVH(g);
-}
+/** A BVH over triangles, for rays: `hits(ray, near, far)` as three-mesh-bvh's raycastFirst (helpers/rays.ts, ~4× faster under coverage). */
+const bvhOf = (tris: Tri[]) => rayIndex(tris);
 /** World positions of every mesh under an object, as one non-indexed soup. */
 function meshPositions(root: THREE.Object3D): number[] {
   const out: number[] = [];
@@ -163,7 +158,7 @@ function cutAt(d: DoorSpec, t: number, g = 0, P?: PlanX): V2[] {
 
 function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): string[] {
   const bad: string[] = [];
-  const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+  const rooms = new Map(P.rooms.map((r) => [r.id, r])), grid = triGrid(tris);
   // 1. no two of the castle's holes in a face overlap
   walls.forEach((w, i) => w.openings.forEach((a, j) => w.openings.slice(j + 1).forEach((b) => {
     const A = bbox(a.pts), B = bbox(b.pts);
@@ -184,7 +179,8 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
   }));
   for (const d of P.doors) {
     const yMid = d.centre[1] + Math.min(1.2, d.height / 2);
-    const near = tris.filter((t) => t.hi[1] > d.centre[1] && t.lo[1] < d.centre[1] + d.height + d.width && Math.hypot((t.lo[0] + t.hi[0]) / 2 - d.centre[0], (t.lo[2] + t.hi[2]) / 2 - d.centre[2]) < d.width + d.wall + Math.hypot(t.hi[0] - t.lo[0], t.hi[2] - t.lo[2]) / 2 + 1);
+    const R0 = d.width + d.wall + 1;
+    const near = grid.near(d.centre[0] - R0, d.centre[2] - R0, d.centre[0] + R0, d.centre[2] + R0).filter((t) => t.hi[1] > d.centre[1] && t.lo[1] < d.centre[1] + d.height + d.width && Math.hypot((t.lo[0] + t.hi[0]) / 2 - d.centre[0], (t.lo[2] + t.hi[2]) / 2 - d.centre[2]) < d.width + d.wall + Math.hypot(t.hi[0] - t.lo[0], t.hi[2] - t.lo[2]) / 2 + 1);
     const ray = (u: number, y: number, t0: number, t1: number) => {
       const p = on(d, u, t0), q = on(d, u, t1), o: V3 = [p[0], y, p[1]], dir: V3 = [q[0] - p[0], 0, q[1] - p[1]];
       return near.some((t) => t.hi[1] >= y && t.lo[1] <= y && crosses(o, dir, t));
@@ -247,7 +243,7 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
       if (!r && !inDoor) {
         // out into the courtyard: no building in the way, and the ground (paving or terrain) under its bottom edge
         if (M.some((m) => m !== own && m.top > q[1] && pointInPoly(m.poly, q[0], q[2]))) faults.add(`${d.id}: leaf swings into a building in the ${into}`);
-        if (y === 0 && Math.max(heightAt(q[0], q[2]), floorUnder(tris, q[0], q[2], q[1] + 0.3, 0.6)) > q[1] - 0.005) faults.add(`${d.id}: leaf scrapes the ground of the ${into}`);
+        if (y === 0 && Math.max(heightAt(q[0], q[2]), floorUnder(grid.near(q[0], q[2], q[0], q[2]), q[0], q[2], q[1] + 0.3, 0.6)) > q[1] - 0.005) faults.add(`${d.id}: leaf scrapes the ground of the ${into}`);
       }
       for (const sp of spirals) {
         const ex = q[0] - sp.c[0], ez = q[2] - sp.c[1], rr = Math.hypot(ex, ez);
@@ -275,7 +271,7 @@ function openingFaults(walls: WallRecord[], P: PlanX, M: Mass[], tris: Tri[]): s
  * every 0.2 m over every wall of every room cell (tunnels are carved and drawn on their own).
  */
 function hiddenFaceFaults(P: PlanX, tris: Tri[], depth: number): string[] {
-  const out = new Map<string, number>();
+  const out = new Map<string, number>(), grid = triGrid(tris);
   for (const r of P.rooms) {
     if (r.zone === 'tunnel') continue;
     const p = orient(r.poly);
@@ -284,7 +280,7 @@ function hiddenFaceFaults(P: PlanX, tris: Tri[], depth: number): string[] {
       if (L < 0.2) continue;
       const e: V2 = [(b[0] - a[0]) / L, (b[1] - a[1]) / L], n: V2 = [e[1], -e[0]]; // outward of a CCW outline
       const lo = [Math.min(a[0], b[0]) - 0.2, r.y0, Math.min(a[1], b[1]) - 0.2], hi = [Math.max(a[0], b[0]) + 0.2, r.y1, Math.max(a[1], b[1]) + 0.2];
-      const near = tris.filter((t) => t.hi[0] > lo[0] && t.lo[0] < hi[0] && t.hi[1] > lo[1] && t.lo[1] < hi[1] && t.hi[2] > lo[2] && t.lo[2] < hi[2]);
+      const near = grid.near(lo[0], lo[2], hi[0], hi[2]).filter((t) => t.hi[0] > lo[0] && t.lo[0] < hi[0] && t.hi[1] > lo[1] && t.lo[1] < hi[1] && t.hi[2] > lo[2] && t.lo[2] < hi[2]);
       if (!near.length) continue;
       for (let s = 0.1; s < L - 0.05; s += 0.2) for (let y = r.y0 + 0.1; y < r.y1 - 0.05; y += 0.2) {
         const o: V3 = [a[0] + e[0] * s + n[0] * 0.002, y, a[1] + e[1] * s + n[1] * 0.002], d: V3 = [n[0] * depth, 0, n[1] * depth];
@@ -317,10 +313,10 @@ function floorUnder(tris: Tri[], x: number, z: number, top: number, depth: numbe
  * flight with no landing, 2026-11-06) is a fall. Outdoor sides use the terrain where the castle has no floor.
  */
 function doorFloorFaults(P: PlanX, solid: Tri[], ground: (x: number, z: number) => number): string[] {
-  const out: string[] = [];
+  const out: string[] = [], grid = triGrid(solid);
   for (const d of P.doors) {
     if (d.spaces.includes('farbank')) continue;
-    const r = Math.hypot(d.width, d.wall) + 1.5, near = solid.filter((t) => t.hi[0] > d.centre[0] - r && t.lo[0] < d.centre[0] + r && t.hi[2] > d.centre[2] - r && t.lo[2] < d.centre[2] + r);
+    const r = Math.hypot(d.width, d.wall) + 1.5, near = grid.near(d.centre[0] - r, d.centre[2] - r, d.centre[0] + r, d.centre[2] + r).filter((t) => t.hi[0] > d.centre[0] - r && t.lo[0] < d.centre[0] + r && t.hi[2] > d.centre[2] - r && t.lo[2] < d.centre[2] + r);
     const y = d.centre[1];
     for (const [k, sgn] of [[0, -1], [1, 1]] as const) {
       const sp = d.spaces[k];
@@ -463,10 +459,13 @@ function shellTriangles(groups: InteriorGroup[]): { p: V3[]; n: V3; c?: V3 }[] {
 /** Reveal triangles (in a doorway, facing across it) that reach both sides of the wall's mid-plane. */
 function revealFaults(P: PlanX, tris: { p: V3[]; n: V3; c?: V3 }[]): string[] {
   const bad: string[] = [];
+  // the triangles by their centres (those without one are checked at every door)
+  const grid = triGrid(tris.flatMap((t) => (t.c ? [{ t, lo: t.c, hi: t.c }] : []))), free = tris.filter((t) => !t.c);
   for (const d of P.doors) {
     if (P.caves?.openings.includes(d.id)) continue; // a natural opening in the caves has no reveal: the rock runs through
     const hw = d.width / 2 + LIP + 0.02, top = bbox(outlineGrown(P, d, LIP)).y1 + 0.02, R = hw + d.wall;
-    for (const t of tris) {
+    const reach = R + d.wall;
+    for (const t of [...free, ...grid.near(d.centre[0] - reach, d.centre[2] - reach, d.centre[0] + reach, d.centre[2] + reach).map((x) => x.t)]) {
       if (t.c && Math.hypot(t.c[0] - d.centre[0], t.c[2] - d.centre[2]) > R + d.wall) continue; // far from this door
       if (Math.abs(t.n[0] * d.normal[0] + t.n[2] * d.normal[1]) > 0.2) continue; // the faces and the rebate step
       const loc = t.p.map((q) => { const x = q[0] - d.centre[0], z = q[2] - d.centre[2]; return [x * d.along[0] + z * d.along[1], q[1], x * d.normal[0] + z * d.normal[1]]; });
@@ -505,7 +504,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   }, 120_000);
 
   it('opens every door onto floor on both sides, never onto a drop', () => {
-    const solid = [...tris, ...groupTris(inner.groups)];
+    const solid = [...tris, ...allGroupTris()];
     expect(doorFloorFaults(P, solid, heightAt)).toEqual([]);
     // what it is for: the cellar stair cut back to its last tread leaves its top door over the cellar floor
     const s = P.stairs.find((x) => x.kind === 'straight')!, d = P.doors.find((x) => x.id === s.landings[s.landings.length - 1].door)!;
@@ -591,7 +590,10 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   /** The visibility as main.ts makes it. */
   const makeVis = () => createVisibility(cam, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs });
   /** The castle as drawn, less its window glass (you see through it). */
-  const castleSolid = () => trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder);
+  let solidCache: Tri[] | undefined, groupCache: Tri[] | undefined;
+  const castleSolid = () => (solidCache ??= trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder));
+  /** Every interior group's triangles (built once: the checks below only read them). */
+  const allGroupTris = () => (groupCache ??= groupTris(inner.groups));
   /** A door's shut leaf as a flat outline at its mid-thickness: triangles, the outline, its depth along the door's normal. */
   const shutLeaf = (d: DoorSpec) => {
     const pl = placeLeaves(d)[0];
@@ -667,7 +669,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   // tower), from a few metres into the courtyard they were fine; a shut door in a room showed a white outline.
   it('draws the spaces of every opening seen from any pose, near or far, doors shut or open', () => {
     const vis = makeVis(), poses = playerPoses();
-    const solid = [...castleSolid(), ...groupTris(inner.groups)];
+    const solid = [...castleSolid(), ...allGroupTris()];
     const faults = new Map<string, string>(), ray = new T3.Ray();
     let seen = 0, n = 0;
     for (const open of [false, true]) { // as the castle starts, and with every leaf swung open (any agent may open any door)
@@ -695,7 +697,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
           const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
           if (dist > 220 || dist < 0.05) continue;
           ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
-          if (occ.raycastFirst(ray, T3.DoubleSide, 0, dist - 0.02)) continue;
+          if (occ.hits(ray, 0, dist - 0.02)) continue;
           seen++;
           for (const s of undrawn) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
         }
@@ -773,14 +775,24 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const meshes: THREE.Mesh[] = [];
     for (const g of inner.groups) g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
     const outside: string[] = [], v = new THREE.Vector3();
+    // every mesh's vertices in world space, once (flat loops: the vertex checks below run ~4× faster under coverage)
+    const world = new Map(meshes.map((m) => {
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute, w = new Float64Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); w[i * 3] = v.x; w[i * 3 + 1] = v.y; w[i * 3 + 2] = v.z; }
+      return [m, w];
+    }));
     let boxes = 0;
     for (const m of meshes) {
-      const bs = m.userData.roomBoxes as THREE.Box3[];
+      const bs = m.userData.roomBoxes as THREE.Box3[], w = world.get(m)!;
       boxes += bs.length;
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-        if (!bs.some((b) => b.distanceToPoint(v) < 1e-4)) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
+      for (let i = 0; i < w.length / 3; i++) {
+        const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
+        let inside = false;
+        for (const b of bs) { // Box3.distanceToPoint < 1e-4
+          const dx = Math.max(b.min.x - x, 0, x - b.max.x), dy = Math.max(b.min.y - y, 0, y - b.max.y), dz = Math.max(b.min.z - z, 0, z - b.max.z);
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 1e-4) { inside = true; break; }
+        }
+        if (!inside) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
       }
     }
     expect(meshes.length).toBeGreaterThan(250);
@@ -796,8 +808,11 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
         for (const m of meshes) {
           if (m.intersectsFrustum(fr)) continue;
           culled++;
-          const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
-          for (let i = 0; i < pos.count; i++) if (fr.containsPoint(v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld))) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
+          const w = world.get(m)!, pl = fr.planes;
+          for (let i = 0; i < w.length / 3; i++) { // Frustum.containsPoint: on the inner side of all six planes
+            const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
+            if (pl.every((q) => q.normal.x * x + q.normal.y * y + q.normal.z * z + q.constant >= 0)) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
+          }
         }
       }
     });
@@ -831,7 +846,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
             const p = on(d, u, leaf.t), tgt = new T3.Vector3(p[0], y, p[1]), dist = tgt.distanceTo(eye);
             ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
             rays++;
-            if (!sets.some((b) => b.raycastFirst(ray, T3.DoubleSide, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
+            if (!sets.some((b) => b.hits(ray, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
           }
         }
         if (bad) faults.push(`${d.id}: open past its shut leaf from ${s} (${bad} rays, e.g. ${first})`);
@@ -868,12 +883,12 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   it('meets the ground at every outdoor doorway: no sky through the threshold', () => {
     const terrain = buildTerrain(new THREE.MeshBasicMaterial(), undefined, { holes: inner.groundHoles.terrain });
     const tt = trianglesOf({ bins: { t: { pos: meshPositions(terrain.getObjectByName('terrain-near')!) } } } as unknown as Builder);
-    const faults: string[] = [], ray = new T3.Ray();
+    const faults: string[] = [], ray = new T3.Ray(), castle = castleSolid(), rooms = allGroupTris();
     let rays = 0;
     for (const d of P.doors) {
       if (!d.spaces.some((s) => OUTDOOR.has(s))) continue;
       const r = d.wall / 2 + 7, near = (t: Tri) => Math.hypot((t.lo[0] + t.hi[0]) / 2 - d.centre[0], (t.lo[2] + t.hi[2]) / 2 - d.centre[2]) < r + Math.hypot(t.hi[0] - t.lo[0], t.hi[2] - t.lo[2]) / 2;
-      const occ = bvhOf([...castleSolid().filter(near), ...groupTris(inner.groups).filter(near), ...tt.filter(near)]);
+      const occ = bvhOf([...castle.filter(near), ...rooms.filter(near), ...tt.filter(near)]);
       let bad = 0, first = '';
       for (const sg of [-1, 1]) for (const back of [1.5, 3, 5]) {
         const e = on(d, 0, sg * (d.wall / 2 + back)), eye = new T3.Vector3(e[0], d.centre[1] + 1.7, e[1]);
@@ -883,7 +898,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
           ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
           rays++;
           // the ray runs on 7 m past the doorway: well down into the ground on either side
-          if (!occ.raycastFirst(ray, T3.DoubleSide, 0, 12)) { bad++; if (!first) first = `${back} m ${sg < 0 ? 'before' : 'past'} it, at ${t.toFixed(2)} through, ${(y - d.centre[1]).toFixed(2)} up`; }
+          if (!occ.hits(ray, 0, 12)) { bad++; if (!first) first = `${back} m ${sg < 0 ? 'before' : 'past'} it, at ${t.toFixed(2)} through, ${(y - d.centre[1]).toFixed(2)} up`; }
         }
       }
       if (bad) faults.push(`${d.id}: ${bad} rays to the sky through the threshold (e.g. from ${first})`);
