@@ -85,10 +85,21 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
     dirty = true;
   };
 
+  // rapier 0.21's world.step() ends by walking every body and collider handle through JS, to wrap ones the
+  // engine made itself (soft bodies, cuts) and drop removed ones: O(handles) per step, about 40 % of a step
+  // with the castle's door leaves (the door-swing and stair-walk tests). Everything here is made through
+  // the JS API, which wraps it at once, so a step does that walk only after a body was removed (rapier
+  // drops the body's colliders on its own side; the walk drops their wrappers).
+  let remap = false;
+  const step = () => {
+    if (remap) { world.step(); remap = false; return; }
+    world.physicsPipeline.step(world.gravity, world.integrationParameters, world.islands, world.broadPhase, world.narrowPhase, world.bodies, world.colliders, world.softBodies, world.impulseJoints, world.multibodyJoints, world.ccdSolver);
+  };
+
   const tick = () => {
     const t = clock.now();
     for (const cb of fixed) cb(DT);
-    world.step();
+    step();
     dirty = false;
     const ms = clock.now() - t;
     stepMs = ticks ? stepMs * 0.95 + ms * 0.05 : ms; stepMsMax = Math.max(stepMsMax * 0.999, ms); ticks++;
@@ -148,7 +159,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
         fresh();
         return !world.intersectionWithShape(c, { x: 0, y: 0, z: 0, w: 1 }, new RAPIER.Capsule(half(h), shape.radius - 0.02), RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, G.character, collider);
       },
-      remove() { if (!alive) return; alive = false; characters--; tags.delete(collider.handle); world.removeCharacterController(kcc); world.removeRigidBody(body); },
+      remove() { if (!alive) return; alive = false; characters--; tags.delete(collider.handle); world.removeCharacterController(kcc); world.removeRigidBody(body); remap = true; },
     };
   };
 
@@ -240,7 +251,7 @@ export async function createPhysics(clock: Clock = systemClock): Promise<Physics
           if (!placed) { body.setTranslation(tr, true); body.setRotation(rot, true); world.propagateModifiedBodyPositionsToColliders(); placed = true; dirty = true; }
           body.setNextKinematicTranslation(tr); body.setNextKinematicRotation(rot);
         },
-        remove() { if (!alive) return; alive = false; tags.delete(c.handle); world.removeRigidBody(body); },
+        remove() { if (!alive) return; alive = false; tags.delete(c.handle); world.removeRigidBody(body); remap = true; },
       };
     },
 
