@@ -1,5 +1,29 @@
 # Progress
 
+## 2026-11-08: chimneypieces and hoods in tone with the walls (branch `claude/project-thread-ns4g2v-chimney`)
+
+From Anders' Mac (WebGPU, live 9006baa and later, `?furniture=1`, bookmark `hall`): the hall's hooded chimneypiece read near-white, white shafts and a pale bluish-grey hood against the warm rubble; the same hearth in the kitchen read dark.
+
+**Cause: the prop stone was twice as light as the walls as they render.** #73 set the prop stone texture to a linear albedo of about 0.3, "as dark as the walls", meaning the raw lithology colours (texgen `LITH_COL` ≈ 0.28). The wall shader (`render/materials.ts stone()`) takes those down by its tint (0.79), per-stone shade, mortar, grime, drift and AO. Rendered under one uniform light (a 4 × 4 m patch each, headless WebGL2, no tone mapping), the walls come out at linear luminance 0.172 (rubble), 0.19 (ashlar) and 0.22 (dressed), and the prop stone at 0.283 (lime), 0.244 (grey), 0.26 (sand). Lime on rubble was 1.65 × on albedo alone.
+
+The light path is the same for both. Checked on the CPU with the shader's own daylight (`tableDaylight`, new, a line-for-line mirror of `interiorIrradiance` over the baked room table):
+- every hood and shaft triangle is tagged to its room (N1-2 for the hall), never OUTDOOR_TAG;
+- prop and wall materials are adopted by the same `makeInteriorMaterials` clone (sun, daylight, floor, fires as point lights; same tone mapping);
+- at the hall hearth (luminance; floor 0.147 everywhere): the hood slope gets daylight 0.59 (bounce 0.22 + windows 0.37) and fire 0.77 from the hall's other fires. The wall beside it gets daylight 0.55–0.58 and fire 0.37–1.0.
+
+So the slope, turned up toward the windows, gets a little more light than the wall (about 1.1–1.4 ×), and that multiplied the 1.65 × albedo. The firebox flanks of the shafts get the fire's near field (5.5 against about 0.4 on the wall): that is the fire lighting the stone it burns beside, kept as #76 meant it. In the kitchen the hearth's walls get no daylight in the bake (floor 0.147 plus fire), so 1.65 × of very little still read dark.
+
+**Fix** (`props/textures.ts`): `stoneTex` is set against the walls as they render (`WALL_STONE`, the measured values above). Its mean is now about 0.185 (× 0.617). Lime renders at 0.176, a hair lighter than the rubble and no lighter than the ashlar; marble stays a dark 0.07. This applies to every prop in the stone bin (chimneypieces, hoods, the kitchen's spit hearth, and the stone pieces in medieval.ts).
+
+**Test** (`tests/hearthStone.test.ts`, whole castle, 69 fireplaces). Bake the interior light; dress every room as the game does. For each chimneypiece, hooded hearth and spit hearth:
+- light its room-facing stone (fronts, the hood's slope, shaft fronts; not the soot) with the shader's daylight and floor × its rendered albedo (texture × the piece's tint);
+- light the wall it stands against, 0.6 m to either side at 1.0, 1.6 and 2.4 m, the same way × `WALL_STONE`;
+- nine tenths of the surround by area must be at most 1.3 × the median wall point.
+
+Before: 56 of 69 fail, the hall's hood 1.96 ×, worst 1.96. After: none fail, the hall's hood 1.21, worst 1.21. Firelight is left out on both sides; the fire on a hearth's own front is `roomLight.test`'s rule. A second test keeps the stone's mean between the rubble and the ashlar. `interiorMath.test.ts` checks `tableDaylight` against the exact form factor of a pane seen square on.
+
+Not checked: the Mac (WebGPU). `WALL_STONE` is a measurement: if the wall shader changes, it must be re-measured.
+
 ## 2026-11-08: the cavern's fire burns with furniture on; the caves a little less black (branch `claude/project-thread-ns4g2v-caves4`)
 
 From the coordinator's WebGPU capture of #78 on Anders' Mac (`castle-plan/caves3/webgpu-caves-after-78.jpg`): in the `caves` bookmark the smugglers' fire showed only as logs. It had no flame and no light, and the cavern was black but for the fungi. The hall's candle lit its wall, so that was furniture mode (`?furniture=1`).

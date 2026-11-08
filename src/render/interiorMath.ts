@@ -545,3 +545,51 @@ export function gridRoom(g: RoomGrid, p: V3): number {
   const c = [0, 1, 2].map((k) => Math.min(g.size[k] - 1, Math.max(0, Math.floor((p[k] - g.origin[k]) / g.cell[k]))));
   return g.data[c[0] + g.size[0] * (c[1] + g.size[1] * c[2])] - 1;
 }
+
+/** The shader's polygon edge integral (interiorShader.ts `edge`, Hill & Heitz's fit). */
+function edgeFF(v1: V3, v2: V3): V3 {
+  const x = dot3(v1, v2), y = Math.abs(x);
+  const v = (0.8543985 + (0.4965155 + 0.0145206 * y) * y) / (3.417594 + (4.1616724 + y) * y);
+  const ts = x > 0 ? v : 0.5 / Math.sqrt(Math.max(1 - x * x, 1e-7)) - v;
+  const c = cross3(v1, v2);
+  return [c[0] * ts, c[1] * ts, c[2] * ts];
+}
+
+/**
+ * The interior shader's daylight at a point (interiorShader.ts interiorIrradiance), on the CPU, by term:
+ * the room's apertures (each one's form factor, clipped by its embrasure, × its radiance × gain) and its
+ * bounce × gain, read from the packed table row `r` (packTable); the readability floor is the caller's.
+ * Mirrors the shader line for line so tests can check what a surface receives anywhere in the castle.
+ */
+export function tableDaylight(data: Float32Array, texW: number, r: number, P: V3, N: V3, gain: number): { apertures: V3; bounce: V3 } {
+  const at = (x: number, k: number) => data[(r * texW + x) * 4 + k];
+  const bounce: V3 = [at(0, 1) * gain, at(0, 2) * gain, at(0, 3) * gain], aps: V3 = [0, 0, 0];
+  for (let i = 0; i < at(0, 0); i++) {
+    const x = i * AP_TEXELS + 1, t = (j: number): number[] => [0, 1, 2, 3].map((k) => at(x + j, k));
+    const [t0, t1, t2, t3, t4] = [t(0), t(1), t(2), t(3), t(4)];
+    const c: V3 = [t0[0], t0[1], t0[2]], D = t0[3], A: V3 = [t1[0], t1[1], t1[2]], hw = t1[3], U: V3 = [t2[0], t2[1], t2[2]], hh = t2[3];
+    const L: V3 = [t3[0], t3[1], t3[2]], hwi = t3[3], hhi = t4[0], yi = t4[1];
+    const nIn = cross3(A, U), d: V3 = [P[0] - c[0], P[1] - c[1], P[2] - c[2]];
+    const tt = dot3(d, nIn), pa = dot3(d, A), pu = dot3(d, U);
+    if (tt <= 0.003) continue;
+    let a0 = 0, a1 = 0, u0 = 0, u1 = 0;
+    if (tt < D) {
+      const f = tt / Math.max(D, 1e-3);
+      if (Math.abs(pa) < hw + (hwi - hw) * f + 0.12 && Math.abs(pu - yi * f) < hh + (hhi - hh) * f + 0.12) { a0 = -hw; a1 = hw; u0 = -hh; u1 = hh; }
+    } else {
+      const k = tt / (tt - D);
+      a0 = Math.max(-hw, pa + (-hwi - pa) * k); a1 = Math.min(hw, pa + (hwi - pa) * k);
+      u0 = Math.max(-hh, pu + (yi - hhi - pu) * k); u1 = Math.min(hh, pu + (yi + hhi - pu) * k);
+    }
+    if (!(a1 > a0 && u1 > u0)) continue;
+    const corner = (s: number, v: number) => norm3([A[0] * s + U[0] * v - d[0], A[1] * s + U[1] * v - d[1], A[2] * s + U[2] * v - d[2]]);
+    const v0 = corner(a0, u0), v1 = corner(a1, u0), v2 = corner(a1, u1), v3 = corner(a0, u1);
+    let F: V3 = [0, 0, 0];
+    for (const e of [edgeFF(v0, v1), edgeFF(v1, v2), edgeFF(v2, v3), edgeFF(v3, v0)]) F = [F[0] + e[0], F[1] + e[1], F[2] + e[2]];
+    if (dot3(F, nIn) > 0) F = [-F[0], -F[1], -F[2]];
+    const fl = Math.max(Math.hypot(F[0], F[1], F[2]), 1e-6), cw = dot3(F, N) / fl, s = Math.sqrt(fl);
+    const e = cw >= s ? fl * cw : cw <= -s ? 0 : (fl * (cw + s) * (cw + s)) / (s * 4);
+    for (let k = 0; k < 3; k++) aps[k] += L[k] * e * Math.PI * gain;
+  }
+  return { apertures: aps, bounce };
+}
