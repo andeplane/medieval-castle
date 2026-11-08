@@ -12,6 +12,7 @@ import { pointInPoly } from '../src/core/math2d';
 import { courtyard } from '../src/castle/layout';
 import { PAVE_Y } from '../src/castle/paving';
 import { MOAT_TUNNEL_Y } from '../src/castle/interior/plan';
+import { caveWalk, caveSpan } from '../src/castle/interior/caves';
 import { setupPlay, playDoors } from '../src/player/setup';
 import { ScriptedInput } from '../src/player/input';
 import { Footsteps } from '../src/player/footsteps';
@@ -218,5 +219,58 @@ describe('key paths', { timeout: 120_000 }, () => {
     const past = (w.feet[0] - g.centre[0]) * g.normal[0] + (w.feet[2] - g.centre[2]) * g.normal[1];
     expect(past).toBeLessThan(-0.2);  // …but not through it
     expect(past).toBeGreaterThan(-1.2);
+  });
+
+  /** Points to walk through a chain of rooms: each doorway with a point before and after it, a cave passage along its own walking line, a chamber or cellar through its middle. */
+  const caveRoute = (rooms: string[]): V3[] => {
+    const pts: V3[] = [];
+    for (let i = 0; i < rooms.length; i++) {
+      const r = room(rooms[i]);
+      if (i > 0) {
+        const d = plan.doors.find((x) => x.spaces.includes(rooms[i - 1]) && x.spaces.includes(rooms[i]))!;
+        const into = d.spaces[1] === rooms[i] ? 1 : -1, off = d.wall / 2 + 0.45;
+        const at = (s: number): V3 => {
+          const q: [number, number] = [d.centre[0] + d.normal[0] * s * off, d.centre[2] + d.normal[1] * s * off];
+          const sp = d.spaces[s > 0 ? 1 : 0], cs = plan.caves && caveSpan(plan.caves, sp, q);
+          return [q[0], cs ? cs.floor : d.centre[1], q[1]];
+        };
+        pts.push(at(-into), d.centre, at(into));
+      }
+      if (r.zone !== 'cave') { if (i === 0 || i === rooms.length - 1) { const n = G.nodes.get(`room:${r.id}`)!.pos; pts.push([n[0], r.y0, n[2]]); } continue; }
+      let w = caveWalk(plan.caves!, r.id);
+      const last = pts[pts.length - 1];
+      if (last && w.length > 1 && Math.hypot(w[0][0] - last[0], w[0][2] - last[2]) > Math.hypot(w[w.length - 1][0] - last[0], w[w.length - 1][2] - last[2])) w = [...w].reverse();
+      pts.push(...w);
+    }
+    return pts;
+  };
+
+  it('the N cellar → the breach → the squeeze → down the drop → the great cavern, as the nav graph leads', () => {
+    const p = path('N-c1', 'cave-cavern');
+    const rooms = p.nodes.filter((n) => n.startsWith('room:')).map((n) => n.slice(5));
+    expect(rooms).toEqual(['N-c1', 'cave-breach', 'cave-hall', 'cave-squeeze', 'cave-ledge', 'cave-drop', 'cave-cavern']);
+    const c = room('N-c1'), n = G.nodes.get('room:N-c1')!.pos;
+    start(n[0], c.y0, n[2]);
+    const w = follow(caveRoute(rooms));
+    expect(w.reached, JSON.stringify(w)).toBe(w.of);
+    const cav = plan.caves!.chambers.find((k) => k.id === 'cave-cavern')!;
+    expect(Math.hypot(w.feet[0] - cav.c[0], w.feet[2] - cav.c[1])).toBeLessThan(0.6);
+    expect(w.feet[1]).toBeCloseTo(cav.y, 0); // on the cavern floor, 8.8 m below the cellar and under the moat
+    expect(w.minY).toBeGreaterThan(cav.y - 0.3); // never through a floor
+  });
+
+  it('every cave chamber on foot: both dead ends and back, the cavern, and out through the crack into the great tower\'s cellar', () => {
+    const loop = ['N-c1', 'cave-breach', 'cave-hall', 'cave-crawl', 'cave-ossuary', 'cave-crawl', 'cave-hall', 'cave-squeeze', 'cave-ledge', 'cave-drop', 'cave-cavern',
+      'cave-smugglers', 'cave-cache', 'cave-smugglers', 'cave-cavern', 'cave-rise', 'cave-well', 'cave-slope', 'cave-sump', 'cave-climb', 'great-c'];
+    for (const k of plan.caves!.chambers) expect(loop).toContain(k.id);
+    const c = room('N-c1'), n = G.nodes.get('room:N-c1')!.pos;
+    start(n[0], c.y0, n[2]);
+    const pts = caveRoute(loop);
+    const w = follow(pts);
+    expect(w.reached, JSON.stringify(w)).toBe(w.of);
+    const gc = room('great-c');
+    expect(pointInPoly(gc.poly, w.feet[0], w.feet[2])).toBe(true);
+    expect(w.feet[1]).toBeCloseTo(gc.y0, 1);
+    expect(w.minY).toBeGreaterThan(-10.6 - 0.3);
   });
 });

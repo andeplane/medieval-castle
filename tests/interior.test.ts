@@ -9,7 +9,7 @@ import { buildShell, OUTDOOR_REVEALS, type ShellResult } from '../src/castle/int
 import { buildInterior } from '../src/castle/interior/index';
 import { interiorViews } from '../src/camera/interiorViews';
 import { buildCastle } from '../src/castle/castle';
-import { Builder, type MatKey } from '../src/castle/builder';
+import { Builder, type MatKey, type BinKey } from '../src/castle/builder';
 import { gatehouseFrame, islandOutline } from '../src/castle/layout';
 import { GATEHOUSE } from '../src/castle/spec';
 import { pointInPoly, add, scale, sub, norm, type V2 } from '../src/core/math2d';
@@ -114,7 +114,7 @@ describe('interior plan', () => {
   it('keeps rooms inside the footprint and apart', () => {
     const foot = outerFootprint(), isl = islandOutline();
     for (const r of P.rooms) {
-      if (r.zone === 'tunnel') continue;
+      if (r.zone === 'tunnel' || r.zone === 'cave') continue; // underground: the moat tunnel and the caves run under the moat
       for (const p of r.poly) {
         expect(foot.some((f) => pointInPoly(f, p[0], p[1]))).toBe(true);
         expect(pointInPoly(isl, p[0], p[1])).toBe(true);
@@ -304,7 +304,7 @@ describe('interior shell', () => {
 
 describe('buildInterior', () => {
   it('makes one mesh per material per group, colliders, and stays inside the budget', () => {
-    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass'] as MatKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
+    const mats = Object.fromEntries((['old', 'new', 'trim', 'slate', 'lead', 'wood', 'iron', 'void', 'glass', 'rock', 'pool', 'glow'] as BinKey[]).map((k) => [k, new THREE.MeshBasicMaterial()])) as unknown as Record<MatKey, THREE.Material>;
     const ext = buildCastle().builder;
     const excl0 = ext.stoneExcl.length;
     const res = buildInterior(mats, ext, { plan: P, heightAt: () => 2.6 });
@@ -314,10 +314,12 @@ describe('buildInterior', () => {
     expect(res.triangles).toBeLessThan(400_000);
     const meshes = res.groups.reduce((s, g) => s + g.object.children.length, 0);
     expect(meshes).toBeLessThan(400);
-    // one soup per group, then one walking ramp per stair
-    expect(res.collision.length).toBe(res.groups.length + P.stairs.length);
+    // one soup per group, then one walking ramp per stair, then one over each flight of the caves' rough steps
+    const caveSteps = P.caves!.passages.filter((p) => p.steps).map((p) => `ramp:${p.id}`);
+    expect(caveSteps.length).toBeGreaterThan(0);
+    expect(res.collision.length).toBe(res.groups.length + P.stairs.length + caveSteps.length);
     expect(res.groups.filter((g) => !g.rooms.length).map((g) => g.key)).toEqual([OUTDOOR_REVEALS]);
-    expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual(P.stairs.map((s) => `ramp:${s.id}`));
+    expect(res.collision.slice(res.groups.length).map((c) => c.name)).toEqual([...P.stairs.map((s) => `ramp:${s.id}`), ...caveSteps]);
     for (const g of res.groups) {
       const names = g.object.children.map((m) => (m as THREE.Mesh).material);
       expect(new Set(names).size).toBe(names.length);
@@ -333,9 +335,44 @@ describe('interior camera bookmarks', () => {
   it('derives the interior views from the plan', () => {
     const v = interiorViews(P);
     const names = v.map((x) => x.name);
-    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar']) expect(names).toContain(n);
+    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar', 'cave-entrance', 'cave-squeeze', 'cave-drop', 'caves', 'cave-exit']) expect(names).toContain(n);
     for (const x of v) { expect(x.mode).toBe('fly'); expect(x.clamp).toBe(false); expect(x.pos.every(Number.isFinite)).toBe(true); }
     expect(interiorViews({ ...P, rooms: [], doors: [], sallyPort: null })).toEqual([]);
+    // the caves' views stand where a player stands: in their rooms
+    const C = P.caves!, cav = C.chambers.find((k) => k.id === 'cave-cavern')!, cv = v.find((x) => x.name === 'caves')!;
+    expect(cv.pos[1]).toBeCloseTo(cav.y + 1.65, 6);
+    const caveOnly = interiorViews({ ...P, rooms: P.rooms.filter((r) => r.zone === 'cave'), doors: [] }).map((x) => x.name).filter((n) => n.startsWith('cave'));
+    expect(caveOnly).toEqual(['cave-squeeze', 'cave-drop', 'caves']); // no doorways: no views from the cellars
+  });
+
+  const viewNames = (Q: PlanX) => interiorViews(Q).map((x) => x.name);
+  type Edit = (Q: PlanX) => void;
+  const flatTunnel: Edit = (Q) => { for (const t of Q.tunnels) t.path = t.path.map((p) => [p[0], -1, p[2]] as typeof p); };
+  const noSqueeze: Edit = (Q) => { Q.caves!.passages = Q.caves!.passages.filter((p) => p.id !== 'cave-squeeze'); };
+  const noDrop: Edit = (Q) => { Q.caves!.passages = Q.caves!.passages.filter((p) => !p.steps); };
+  const noCavern: Edit = (Q) => { Q.caves!.chambers = Q.caves!.chambers.filter((k) => k.id !== 'cave-cavern'); };
+  const noCellar: Edit = (Q) => { Q.rooms = Q.rooms.filter((r) => r.id !== 'N-c1'); };
+  it.each([
+    ['a tunnel that never goes deep', flatTunnel, ['tunnel']],
+    ['no squeeze passage', noSqueeze, ['cave-squeeze']],
+    ['no stepped drop (the cavern view is placed from it)', noDrop, ['cave-drop', 'caves']],
+    ['no cavern chamber', noCavern, ['caves']],
+    ['no cellar room at the cave breach', noCellar, ['cellar', 'cave-entrance']],
+  ] as [string, Edit, string[]][])('leaves out only the views it cannot place: %s', (_what, edit, gone) => {
+    const Q = clone(P);
+    edit(Q);
+    const all = viewNames(P), got = viewNames(Q);
+    expect(all.filter((n) => !got.includes(n))).toEqual(gone);
+  });
+
+  it('stands on the cellar side of a cave doorway whichever way the door lists its spaces', () => {
+    const Q = clone(P), d = Q.doors.find((x) => x.spaces.includes(Q.caves!.entrance) && x.spaces.includes('N-c1'))!;
+    const before = interiorViews(P).find((x) => x.name === 'cave-entrance')!;
+    d.spaces = [d.spaces[1], d.spaces[0]];
+    const flipped = interiorViews(Q).find((x) => x.name === 'cave-entrance')!;
+    // swapping the door's spaces mirrors the stand point through the door
+    expect(flipped.pos[0] - d.centre[0]).toBeCloseTo(-(before.pos[0] - d.centre[0]), 6);
+    expect(flipped.pos[2] - d.centre[2]).toBeCloseTo(-(before.pos[2] - d.centre[2]), 6);
   });
 });
 
