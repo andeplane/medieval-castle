@@ -15,7 +15,7 @@ import { prismVolume, extrudeVolume, type Volume } from './carve';
 import { buildTunnel } from './tunnel';
 import { buildStair } from './stairs';
 import { grooveFromFront } from './portcullis';
-import { doorOutlines, stopPlane, seatsOf } from './doorGeom';
+import { doorCuts, type Cut } from './doorGeom';
 import { wingQuads, squareTowerPoly, towerCentre, gatehouseFrame, eastTurretFrame, stairTowerCentre } from '../layout';
 import { TOWERS, GATEHOUSE, EAST_TURRET, STAIR_TOWER, GROUND } from '../spec';
 import { STAIR_SLIT } from '../openings';
@@ -177,7 +177,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     for (const d of P.doors) {
       const k = d.spaces.findIndex((s) => room.get(s)?.zone === CAVE_ZONE);
       if (k < 0 || natural.has(d.id)) continue;
-      portals.push({ door: d, clear: doorOutlines(d, P.rise[d.id]).clear, cave: k as 0 | 1 });
+      portals.push({ door: d, clear: doorCuts(d, P.rise[d.id])[0].o, cave: k as 0 | 1 }); // leafless: one clear cut
     }
     buildCaves(groupOf(cave).B, P.caves, P.seed, portals);
   }
@@ -217,7 +217,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const n = d.normal, al = d.along, c: V2 = [d.centre[0], d.centre[2]];
     const leafy = d.leaf && d.kind !== 'gate';
     // the door's outlines (doorGeom): the same ones cut the castle's walls (openings.ts doorHoles) and place the leaf
-    const { clear, reb } = doorOutlines(d, P.rise[d.id]);
+    const cuts = doorCuts(d, P.rise[d.id]), clear = cuts.find((x) => x.band === 'clear')?.o ?? cuts[0].o;
     // faces: for room sides, the room's actual edge (handles skew); for outside/courtyard, the mid-plane ± wall/2
     const sides = d.spaces.map((sp, k) => {
       const sgn = k === 0 ? -1 : 1, r = room.get(sp);
@@ -233,11 +233,12 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
       return dot(sub(s.e.a, P0), s.e.n) / den;
     };
     const W = (u: number, yy: number, t: number): V3 => [c[0] + al[0] * u + n[0] * t, yy, c[1] + al[1] * u + n[1] * t];
-    // holes in the room faces: a side the leaf swings into shows the rebated outline (both for a two-way door)
-    const seats = seatsOf(d), rebated = (k: number) => seats.includes(k as 0 | 1);
+    // holes in the room faces: each face shows the doorway's outline at its depth (doorCuts: the rebate on the
+    // face a leaf swings into, a back-swinging leaf's recess where it runs through the wall)
+    const atFace = (k: number) => (k === 0 ? cuts[0] : cuts[cuts.length - 1]).o;
     sides.forEach((s, k) => {
       if (!s.e) return;
-      const pts = (rebated(k) ? reb : clear).map(([u, yy]) => toEdge(s.e!, W(u, yy, depthOn(k, u))));
+      const pts = atFace(k).map(([u, yy]) => toEdge(s.e!, W(u, yy, depthOn(k, u))));
       s.e.holes.push({ pts, kind: 'door', id: d.id });
     });
     const owner = sides.find((s) => s.r)!.r!;
@@ -248,10 +249,8 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     // is split at the mid-plane. Never only with the room beyond, which the room graph may leave out (the
     // white outline round a shut door, 2026-11-07: the whole reveal was spaces[0]'s).
     const sideB = (k: number) => (sides[k].r ? groupOf(sides[k].r!) : outdoorReveals()).B;
-    // the stops: just behind the shut leaf's back face in each seat (doorGeom places the leaf)
-    const stopT = (k: number) => (k === 1 ? 1 : -1) * stopPlane(d);
-    // reveal: from face 0 to the stop with one outline, then the other to face 1 (a two-way door: the
-    // rebated outline from each face to its stop, the clear one between the stops).
+    // reveal: each stretch of the doorway (doorCuts) from face 0 to face 1 with its outline, and a flat step
+    // between two stretches (the stop just behind a shut leaf; a back-swinging leaf's rear arch and stop).
     // A band that crosses the wall's mid-plane is split there: the interior light gives each triangle the
     // room nearest its centre (render/interiorMath tagTriangles), so a quad from face to face would light
     // its two triangles from the two rooms and show saw teeth round the head (the gate-inner arch).
@@ -285,21 +284,26 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     };
     if (!leafy) ring(clear, (u) => depthOn(0, u), (u) => depthOn(1, u));
     else {
-      const face = (k: number) => (u: number) => depthOn(k, u);
-      const a = rebated(0) ? () => stopT(0) : face(0), b = rebated(1) ? () => stopT(1) : face(1);
-      if (rebated(0)) ring(reb, face(0), () => stopT(0), [0]);
-      ring(clear, a, b, seats.length === 1 ? [1 - seats[0]] : [0, 1]);
-      if (rebated(1)) ring(reb, () => stopT(1), face(1), [1]);
-      // each rebate step: a flat ring between the two outlines facing its swing side
-      for (const k of seats) {
-        const f: Frame = { o: [c[0] + n[0] * stopT(k), 0, c[1] + n[1] * stopT(k)], r: [al[0], 0, al[1]], u: [0, 1, 0], n: k === 1 ? [n[0], 0, n[1]] : [-n[0], 0, -n[1]] };
-        // U-shaped ring between the rebated and the clear outline (open at the threshold)
-        for (let i = 1; i < reb.length; i++) {
-          const j = (i + 1) % reb.length;
-          const A = at(f, reb[i][0], reb[i][1]), Bq = at(f, reb[j][0], reb[j][1]), C = at(f, clear[j][0], clear[j][1]), D = at(f, clear[i][0], clear[i][1]);
-          quadN(sideB(k), 'trim', A, Bq, C, D, f.n);
+      // who sees each stretch: the rebate is the swing face's (in front of the shut leaf), the clear rest the
+      // other side's; a step faces into the bigger stretch: the stop behind a one-way leaf is seen past it from
+      // the swing side. A back-swinging leaf has no stop: its rebate and recess, and their steps, are seen from
+      // either side (past the shut leaf, through the FIT round it): both.
+      const k = d.swingInto, rank = { clear: 0, reb: 1, sweep: 2 } as const;
+      const bandOwners = (b: Cut['band']) => (b === 'sweep' || (b === 'reb' && d.swingsBack) ? [0, 1] : b === 'reb' ? [k] : [1 - k]);
+      const stepOwners = (a: Cut['band'], b: Cut['band']) => (a === 'sweep' || b === 'sweep' ? [0, 1] : [k]);
+      cuts.forEach((cut, i) => {
+        const tA = i === 0 ? (u: number) => depthOn(0, u) : () => cut.t0, tB = i === cuts.length - 1 ? (u: number) => depthOn(1, u) : () => cut.t1;
+        ring(cut.o, tA, tB, bandOwners(cut.band));
+        if (i === 0) return;
+        const prev = cuts[i - 1], t = cut.t0, big = rank[cut.band] > rank[prev.band] ? cut : prev, small = big === cut ? prev : cut;
+        const f: Frame = { o: [c[0] + n[0] * t, 0, c[1] + n[1] * t], r: [al[0], 0, al[1]], u: [0, 1, 0], n: big === cut ? [n[0], 0, n[1]] : [-n[0], 0, -n[1]] };
+        // U-shaped ring between the bigger and the smaller outline (open at the threshold)
+        for (const owner of stepOwners(prev.band, cut.band)) for (let a = 1; a < big.o.length; a++) {
+          const b = (a + 1) % big.o.length;
+          const A = at(f, big.o[a][0], big.o[a][1]), Bq = at(f, big.o[b][0], big.o[b][1]), C = at(f, small.o[b][0], small.o[b][1]), D = at(f, small.o[a][0], small.o[a][1]);
+          quadN(sideB(owner), 'trim', A, Bq, C, D, f.n);
         }
-      }
+      });
     }
     // the threshold at an outdoor face: a riser from under the sill up to the ground in front (the paving
     // stands 2-12 cm above the sills), so no sky shows between the passage floor and the courtyard (2026-11-07:
@@ -322,11 +326,7 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     const t1 = Math.max(depthOn(1, 0), depthOn(1, -d.width / 2), depthOn(1, d.width / 2)) + (sides[1].r ? 0.05 : 0.02);
     const out = d.kind === 'gate' ? 1.4 : 0; // the gate's cut runs on through the batter in front of it
     if (!leafy) carveVols.push(extrudeVolume(c, al, n, clear, t0 - out, t1));
-    else {
-      if (rebated(0)) carveVols.push(extrudeVolume(c, al, n, reb, t0, stopT(0)));
-      carveVols.push(extrudeVolume(c, al, n, clear, rebated(0) ? stopT(0) - 0.002 : t0, rebated(1) ? stopT(1) + 0.002 : t1));
-      if (rebated(1)) carveVols.push(extrudeVolume(c, al, n, reb, stopT(1), t1));
-    }
+    else for (const cut of cuts) carveVols.push(extrudeVolume(c, al, n, cut.o, Math.max(cut.t0 - 0.002, t0), Math.min(cut.t1 + 0.002, t1)));
   }
 
   function gateDetails(B: Builder, d: DoorSpec, W: (u: number, y: number, t: number) => V3, clear: V2[]) {

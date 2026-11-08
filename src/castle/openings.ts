@@ -123,14 +123,14 @@ export function clampToGap(bands: [number, number][], d: Dressed, y: number): nu
 export interface DoorHole {
   id: string;
   c: V2; along: V2; normal: V2; wall: number;
-  clear: V2[]; reb: V2[];   // (u along `along`, y absolute): the clear outline, and the rebated one round a leaf
-  swings: (-1 | 1)[];       // the sides of the mid-plane (along normal) the leaf swings to: none without a leaf, both for a two-way door
-  stop: number;             // each stop's distance from the mid-plane toward its swing side
+  /** The doorway's outline (u along `along`, y absolute) by signed depth along `normal` from the mid-plane,
+   *  t0 = −∞ to t1 = +∞ (doorGeom doorCuts): the clear outline, a leaf's rebate, a back-swinging leaf's recess. */
+  cuts: { t0: number; t1: number; o: V2[] }[];
 }
 
 /**
- * Where a door passes through a wall face, in the face's (s, y): its rebated outline on the swing side of
- * a stop, its clear outline elsewhere (what the interior's carve leaves of the face); null when it does not.
+ * Where a door passes through a wall face, in the face's (s, y): the doorway's outline at the face's depth
+ * (what the interior's carve leaves of the face); null when it does not.
  */
 export function doorHoleOn(f: { a: V2; b: V2; out: V2; y0?: number; y1?: number }, h: DoorHole): V2[] | null {
   const dn = dot(h.normal, f.out);
@@ -139,7 +139,7 @@ export function doorHoleOn(f: { a: V2; b: V2; out: V2; y0?: number; y1?: number 
   const tAt = (u: number) => -dot(sub(add(h.c, scale(h.along, u)), f.a), f.out) / dn; // face's depth along normal
   const t = tAt(0);
   if (Math.abs(t) > h.wall / 2 + 0.06) return null;
-  const o = h.swings.some((sw) => t * sw > h.stop) ? h.reb : h.clear;
+  const o = (h.cuts.find((c) => t >= c.t0 && t < c.t1) ?? h.cuts[h.cuts.length - 1]).o;
   const pts = o.map(([u, y]): V2 => [dot(sub(add(add(h.c, scale(h.along, u)), scale(h.normal, tAt(u))), f.a), e), y]);
   const ss = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   if (Math.max(...ss) < 0 || Math.min(...ss) > L) return null;

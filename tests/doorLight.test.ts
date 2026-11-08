@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import { planInterior } from '../src/castle/interior/plan';
 import { buildCastleDoors, buildDoors, isOutdoor, BACK_SIDE_SWING, type DoorMats } from '../src/castle/interior/doors';
-import { placeLeaves, leafMatrix, m4swing } from '../src/castle/interior/doorGeom';
+import { placeLeaves, leafMatrix, leafSwing, m4apply } from '../src/castle/interior/doorGeom';
 import { playDoors } from '../src/player/setup';
 import { GROUND } from '../src/castle/spec';
 import type { DoorSpec } from '../src/castle/interior/types';
@@ -21,27 +21,28 @@ const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) 
 
 /**
  * Every drawn leaf triangle of every door at openness `initial`, with the space it must be lit as;
- * `flipped`: every two-way leaf first opened from its first swing space, so it hangs in its other seat.
+ * `flipped`: every leaf that swings back first opened from its forward space, so it swings back (and is
+ * shut again for `initial` 0: in the same seat, whichever way it last swung).
  */
 function faces(initial: number, flipped = false) {
   const fb = fakeBatch();
   const sys = buildCastleDoors(doors, mats, GROUND, undefined, { batch: fb.factory, initial, ajar: 0 });
-  if (flipped) for (const d of doors) if (d.otherHinge) {
+  if (flipped) for (const d of doors) if (d.swingsBack) {
     const sg = d.swingInto === 1 ? 1 : -1, t = d.wall / 2 + 1;
     sys.setOpen(d.id, true, true, { pos: { x: d.centre[0] + d.normal[0] * sg * t, y: d.centre[1] + 1, z: d.centre[2] + d.normal[1] * sg * t } });
     if (initial === 0) sys.setOpen(d.id, false, true);
-    expect(sys.seat(d.id)).toBe(1 - d.swingInto);
+    expect(sys.swingsInto(d.id)).toBe(1 - d.swingInto);
   }
-  const leaves = doors.map((d) => ({ d, pl: placeLeaves(d, sys.seat(d.id)!)[0] }));
+  const leaves = doors.map((d) => { const pl = placeLeaves(d)[0]; return { d, pl, back: m4apply(leafMatrix(pl, leafSwing(pl, 0)), [0, 0, pl.backAxis]) }; });
   const out: { d: DoorSpec; outdoorMat: boolean; looks: string | null }[] = [];
   const seen = new Set<string>();
   for (const b of fb.made) for (const [i, m] of b.mats) {
     if (b.hidden.has(i)) continue;
-    // whose instance: a leaf (or its jamb iron) is posed about its pivot
-    const own = leaves.find((l) => near([m[12], m[13], m[14]], l.pl.pivot));
+    // whose instance: a leaf (or its jamb iron) is posed about its pivot, or turned back on its back edge
+    const own = leaves.find((l) => near([m[12], m[13], m[14]], l.pl.pivot) || near(m4apply(m, [0, 0, l.pl.backAxis]), l.back));
     if (!own) continue; // the portcullis and its windlass
     seen.add(own.d.id);
-    const shutPose = near(m, leafMatrix(own.pl, m4swing(0)));
+    const shutPose = near(m, leafMatrix(own.pl, leafSwing(own.pl, 0)));
     const g = b.geoms[b.inst[i]];
     for (let k = 0; k < g.nor.length; k += 9) {
       const n = [0, 1, 2].map((r) => m[r] * g.nor[k] + m[4 + r] * g.nor[k + 1] + m[8 + r] * g.nor[k + 2]);
@@ -51,7 +52,7 @@ function faces(initial: number, flipped = false) {
       // Edges (board sides in the joints, the rim) of a shut leaf are seen through the joints from either side:
       // they take the room's light, never the sun (thin sunlit lines in a dim room, 2026-11-07).
       const room = own.d.spaces.filter((sp) => !isOutdoor(sp));
-      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : room.length === 1 && Math.abs(through) < 0.2 ? room[0] : null) : own.d.spaces[own.pl.seat];
+      const looks = shutPose ? (through > 0.5 ? own.d.spaces[1] : through < -0.5 ? own.d.spaces[0] : room.length === 1 && Math.abs(through) < 0.2 ? room[0] : null) : own.d.spaces[sys.swingsInto(own.d.id)!];
       out.push({ d: own.d, outdoorMat: outdoorMat.has(b.material!), looks });
     }
   }
@@ -59,7 +60,7 @@ function faces(initial: number, flipped = false) {
 }
 
 describe('door leaves are lit as the space each face looks into', () => {
-  for (const [label, initial, flipped] of [['shut', 0, false], ['wide open', 1, false], ['shut in the other seat', 0, true], ['wide open the other way', 1, true]] as const) it(`every leaf face of the castle, ${label}`, () => {
+  for (const [label, initial, flipped] of [['shut', 0, false], ['wide open', 1, false], ['shut after swinging back', 0, true], ['wide open back', 1, true]] as const) it(`every leaf face of the castle, ${label}`, () => {
     const { out, seen } = faces(initial, flipped);
     expect(seen.size).toBe(doors.length); // every leaf door was found
     const wrong = new Map<string, number>();
@@ -98,6 +99,15 @@ describe('door leaves are lit as the space each face looks into', () => {
     expect(shown(out)).toBe(1);
     expect(shown(room)).toBe(roomShut + 2);
     // shut again: back to the courtyard
+    sys.setOpen(d.id, false, true);
+    expect(shown(out)).toBe(3);
+    // opened back (from its room, away from them): its front faces turn into the courtyard too
+    expect(d.swingsBack).toBe(true);
+    const sg = d.swingInto === 1 ? 1 : -1;
+    sys.setOpen(d.id, true, true, { pos: { x: d.centre[0] + d.normal[0] * sg * 2, y: d.centre[1] + 1, z: d.centre[2] + d.normal[1] * sg * 2 } });
+    expect(sys.swingsInto(d.id)).toBe(1 - d.swingInto);
+    expect(shown(out)).toBe(5); // wood and strap iron, both faces, and the jamb iron's courtyard side
+    expect(shown(room)).toBe(roomShut - 2);
     sys.setOpen(d.id, false, true);
     expect(shown(out)).toBe(3);
     expect(BACK_SIDE_SWING).toBeLessThan(Math.PI / 2);

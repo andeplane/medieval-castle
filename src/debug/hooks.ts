@@ -27,7 +27,7 @@ export interface HookDeps {
   probes?: Record<string, unknown>;
   /** Use whatever is under the crosshair (E). */
   use?(): boolean;
-  doors?: { state(): Record<string, number>; setOpen(id: string, open: boolean, instant?: boolean): void; seat(id: string): 0 | 1 | null };
+  doors?: { state(): Record<string, number>; setOpen(id: string, open: boolean, instant?: boolean): void; swingsInto(id: string): 0 | 1 | null; leafPose(id: string): number[] | null };
   /** The HUD (src/ui/hud.ts), so captures can show it locked, with the card or the tools. */
   hud?: unknown;
 }
@@ -114,8 +114,10 @@ export function installHooks(d: HookDeps, w: HookWindow, clock: Clock) {
     doors: d.doors && {
       state: () => d.doors!.state(),
       setOpen: (id: string, open: boolean, instant = false) => d.doors!.setOpen(id, open, instant),
-      /** The space (0 or 1, into its spaces) a door's leaf swings into now: away from whoever opened it last. */
-      seat: (id: string) => d.doors!.seat(id),
+      /** The space (0 or 1, into its spaces) a door's leaf swings into now: away from whoever opened it last, where it can. */
+      swingsInto: (id: string) => d.doors!.swingsInto(id),
+      /** A leaf's world matrix now (column-major): it only ever turns about its seat. */
+      leafPose: (id: string) => d.doors!.leafPose(id),
       tick: (seconds = 1) => { for (let t = 0; t < seconds; t += 1 / 60) d.tick(1 / 60); return d.doors!.state(); },
     },
   };

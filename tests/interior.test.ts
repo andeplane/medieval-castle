@@ -394,13 +394,13 @@ describe('leaves hung to open (the whole castle is checked in world.test.ts)', (
     const sgn = d0.swingInto === 1 ? 1 : -1, id = d0.spaces[d0.swingInto];
     // a room on the swing side reaching 3 m past one jamb but only 0.1 m past the other (hinge 'right' = +along)
     const room = (a0: number, a1: number) => ({ ...rooms.get(id)!, poly: [[a0, 0], [a1, 0], [a1, 3], [a0, 3]].map(([a, t]) => at(d0, a, sgn * (d0.wall / 2 - 0.01 + t))) });
-    const hw = d0.width / 2, tight = { rooms: [room(-3, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    const hw = d0.width / 2, tight = { rooms: [room(-3, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const, swingsBack: undefined }] };
     expect(leafSwingFits(tight, tight.doors[0])).toBe(false);
     fitHinges(tight);
     expect(tight.doors[0].hinge).toBe('left');
     expect(leafSwingFits(tight, tight.doors[0])).toBe(true);
     // too tight either side: left as it was (and the swing test above reports it)
-    const both = { rooms: [room(-hw - 0.1, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const }] };
+    const both = { rooms: [room(-hw - 0.1, hw + 0.1)], doors: [{ ...d0, hinge: 'right' as const, swingsBack: undefined }] };
     fitHinges(both);
     expect(both.doors[0].hinge).toBe('right');
     // a door into the open air has no room to check

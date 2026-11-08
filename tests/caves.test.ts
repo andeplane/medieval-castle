@@ -20,8 +20,9 @@ import { mats } from './world';
 
 type V3 = [number, number, number];
 /** A vertex of an open edge sits within a cell of where its quads were left out. */
+let portalB: ReturnType<typeof behindPortal> | null = null;
 const closeBehind = (pos: number[], i: number) => {
-  const b = behindPortal(planInterior().caves!);
+  const b = (portalB ??= behindPortal(planInterior().caves!));
   for (const dx of [-0.4, 0, 0.4]) for (const dz of [-0.4, 0, 0.4]) for (const dy of [-0.4, 0, 0.4]) if (b(pos[3 * i] + dx, pos[3 * i + 1] + dy, pos[3 * i + 2] + dz)) return true;
   return false;
 };
