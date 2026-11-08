@@ -543,8 +543,11 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const joint = line(j, 0.01).mul(patchJ), crack = line(k, 0.012).mul(patch).mul(near);
   col = col.mul(float(1).sub(joint.mul(0.55))).mul(float(1).sub(crack.mul(0.45)));
   // pale flowstone and dark iron streaks running down the walls (stretched noise; not on floors and roofs)
-  const runU = p.x.mul(wn.z).add(p.z.mul(wn.x)), wall = float(1).sub(wn.y);
-  const run = texture(macro, vec2(runU.mul(0.9), p.y.mul(0.07))), flow = smoothstep(0.7, 0.86, run.r).mul(wall);
+  // (the two vertical planes sampled apart and blended: one coordinate mixing x and z by the normal slid
+  // through the texture wherever the wall turned, and cut hard-edged patches)
+  const wall = float(1).sub(wn.y), wxz = wn.x.add(wn.z).max(1e-3);
+  const run = texture(macro, vec2(p.x.mul(0.9), p.y.mul(0.07))).mul(wn.z).add(texture(macro, vec2(p.z.mul(0.9), p.y.mul(0.07))).mul(wn.x)).div(wxz);
+  const flow = smoothstep(0.7, 0.86, run.r).mul(wall);
   col = mix(col, vec3(0.5, 0.48, 0.43), flow.mul(0.55));
   col = mix(col, col.mul(vec3(1.2, 0.9, 0.65)), smoothstep(0.72, 0.88, run.b).mul(wall).mul(0.5));
   // grit: three octaves, the finer ones only near

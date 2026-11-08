@@ -13,13 +13,18 @@ From the coordinator's WebGPU captures after #72 on Anders' Mac: the cavern was 
 - Beds about 0.7 m thick, warped by the broad noise. Each bed has its own stone (grey limestone, buff, dark shale, rust, pale) with a thin dark parting between beds and laminae inside them.
 - Joints (3D worley cell edges, about 2 m apart) and fine cracks in patches (about 0.6 m cells). They are cut into the bump as well as darkened.
 - Pale flowstone and iron streaks run down the walls.
-- Grit at 1.1, 5.3 and 17 cycles/m, the finer octaves only near; noise at 9/m in the bump. Together they give crisp detail at 0.5–1 m.
+- Relief as a height in metres: broad swells, sharp ridged knuckles (2.7/m) and octaves at 7.5 and 19/m, all within about 7 m, with the joints, cracks and partings cut in. The darker hollows of that relief show under the lantern's frontal light too. Grit in the colour at 1.1, 5.3 and 17 cycles/m.
+- **Why the squeeze was smooth clay:** three's `bumpMap` takes its slope by sampling the height again at uvs offset by a pixel. A height made from world-position noise does not change with uv, so it got no slope at all, and only the texture terms bumped. Now `rockBump` takes the height's own screen derivatives: Mikkelsen's surface gradient, unnormalised, so the slope is the height's own in metres per metre. The grit textures stay out of the relief because their sub-millimetre detail turned into pixel noise.
 - Darker, glossier damp patches.
 - Round the pool (uniforms from `caveShading`): dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it that glints with the fire.
 
 **Fungi light.** The halo quads are gone (one draw call fewer). Each cluster's light on the rock is baked into the rock's uv v (`bakeFungiLight`: a gaussian of the distance from each cluster, 0.5 m, on faces turned its way) and drawn as teal light × the rock's colour. It is part of the rock surface, so no angle can show an edge. Tested: each cluster's light is above 0.5 at the cluster and exactly nothing more than 2 m from every cluster.
 
-**Pool.** It is now very dark water with a fresnel reflection of the dark roof and the fire's glint (a sharp core and a broader streak), broken by slow 3D-noise ripples, and is more opaque at grazing angles.
+**Pool.** Very dark water (a physical material with no specular of its own; its isotropic firelight made a brown sheen). Its reflection is in the emissive:
+- the roof, dim and warmer near the fire;
+- the fire's glint (a sharp core and a broader streak).
+
+Both are weighted by fresnel and broken by slow 3D-noise ripples. The water is more opaque at grazing angles. The bookmarks see no glint: the mirror image of a fire on the near shore falls on the shore, not the water.
 
 **The way down** (assumption, plainest cue). On the shortest way from the courtyard to the caves, two doors start standing open (`nav.ts doorsOnWayToCaves` → `DoorOptions.standOpen`):
 - the door you go in by from the courtyard (court>N0-4), so its torchlit room shows from the courtyard;
