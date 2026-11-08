@@ -8,7 +8,7 @@
 import * as THREE from 'three/webgpu';
 import type { DoorSpec, Interactable, PhysicsApi, V3, Quat } from './types';
 import { rngFor } from '../../core/rng';
-import { placeLeaves, seatsOf, seatAwayFrom, leafClassFor, leafMatrix, leafPoint, m4mul, m4swing, m4translate, m4scale, m4rotX, m4apply, KIND, type LeafPlace, type M4 } from './doorGeom';
+import { placeLeaves, swingAwayFrom, leafClassFor, leafMatrix, leafPoint, leafSwing, m4mul, m4translate, m4scale, m4rotX, m4apply, KIND, type LeafPlace, type M4 } from './doorGeom';
 import { leafGeometry, mirrorX, type PartBin, type Box3, type LeafGeom } from './doorParts';
 import { threeBatch, type BatchFactory, type BatchLike } from './doorBatch';
 import {
@@ -28,15 +28,18 @@ export interface DoorSystem {
   interactables: Interactable[];
   /** Advance by dt seconds. playerPos (if given) and every registered character block moving parts. */
   update(dt: number, playerPos?: Vec3Like): void;
-  /** Open or close a door (or raise / lower a portcullis); with `by`, a shut two-way leaf opens away from them. */
+  /** Open or close a door (or raise / lower a portcullis); with `by`, a shut leaf opens away from them where it
+   *  can (swingAwayFrom). A leaf never leaves its seat: only the way it swings is chosen, and only here. */
   setOpen(id: string, open: boolean, instant?: boolean, by?: Opener): void;
   /** Openness 0..1 per id (a portcullis: its gate's id, 1 = raised). */
   state(): Record<string, number>;
   /** For any agent (NPCs too): ask door `id` to open/close from `by.pos`; false if unknown or out of reach.
-   *  A shut two-way leaf opens away from `by` (seatAwayFrom). */
+   *  A shut leaf opens away from `by` where it can (swingAwayFrom). */
   request(id: string, open: boolean, by: Opener): boolean;
   /** The space a door's leaf swings into now (index into its spaces), or null for no leaf or an unknown id. */
-  seat(id: string): 0 | 1 | null;
+  swingsInto(id: string): 0 | 1 | null;
+  /** A leaf's world matrix now (column-major), or null for no leaf or an unknown id. */
+  leafPose(id: string): number[] | null;
   /** Fully open (or raised). Archways (no leaf) are always open. */
   isOpen(id: string): boolean;
   /** A character (0.6 m wide) can get through now: enough gap beside the leaf, or the portcullis up past head height. */
@@ -68,7 +71,7 @@ export interface DoorOptions {
 export type DoorMats = { wood: THREE.Material; iron: THREE.Material };
 /** Courtyard and outside are lit by the sun and sky; every other space is a room, lit as an interior. */
 export const isOutdoor = (space: string) => space === 'courtyard' || space === 'outside';
-/** Past this swing the back face of a leaf stands in its swing space (and is lit as that space). */
+/** Past this swing a leaf's trailing face stands in the space it swings into (and is lit as that space). */
 export const BACK_SIDE_SWING = Math.PI / 4;
 
 /**
@@ -96,20 +99,23 @@ export function inDoorway(d: DoorSpec, x: number, z: number, inset = 0.3, out = 
 
 type Body = { setPose(p: V3, q: Quat): void; remove(): void };
 interface Leaf {
-  /** Where the leaf hangs now (places[seat]); a two-way door has a place in each seat. */
+  /** Where the leaf hangs: its one seat, which it never leaves. */
   place: LeafPlace;
-  places: Partial<Record<0 | 1, LeafPlace>>;
-  seat: 0 | 1;
   geom: LeafGeom;
-  angle: number; vel: number; max: number;
-  /** Batch instances drawing the leaf in each seat (only the current seat's are shown); `moves` follow the
-   *  swing (else jamb iron, posed shut), and a `shut` one is drawn only while the leaf is shut (true) or
-   *  open (false) past BACK_SIDE_SWING. */
+  /** Which way it swings now (+1 forward on its pintles, −1 back on its back edge) and how far (≥ 0). */
+  dir: 1 | -1;
+  angle: number; vel: number;
+  /** Batch instances drawing the leaf; `moves` follow the swing (else jamb iron, posed shut), and one with
+   *  `show` is drawn only while that holds (which side's light a face takes depends on the swing). */
   draws: Draw[];
   bodies: Body[];
   matrix: M4;
 }
-interface Draw { b: BatchLike; i: number; moves: boolean; shut?: boolean; leaf?: Leaf; seat?: 0 | 1 }
+interface Draw { b: BatchLike; i: number; moves: boolean; show?: (l: Leaf) => boolean; leaf?: Leaf }
+/** How far a leaf can swing its current way. */
+const maxOf = (l: Leaf) => (l.dir > 0 ? l.place.maxAngle : l.place.backAngle);
+/** Open its way past BACK_SIDE_SWING: forward (its back face then stands in the forward space), or back. */
+const pastFwd = (l: Leaf) => l.dir > 0 && l.angle >= BACK_SIDE_SWING, pastBack = (l: Leaf) => l.dir < 0 && l.angle >= BACK_SIDE_SWING;
 interface Unit { id: string; d: DoorSpec; kind: DoorSpec['kind']; leaf: Leaf; open: boolean; moving: boolean; blocked: boolean; weight: number; pos: V3; width: number }
 interface Port {
   spec: PortcullisSpec; s: PortState;
@@ -211,20 +217,18 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
 
   // which material set lights each side of a door: the rooms', or the outdoor one for courtyard and outside
   const sideOut = (d: DoorSpec): [boolean, boolean] => (opts.outdoor ? [isOutdoor(d.spaces[0]), isOutdoor(d.spaces[1])] : [false, false]);
-  const units: Unit[] = [], open: string[] = [], pending: { leaf: Leaf; vks: Partial<Record<0 | 1, string>>; d: DoorSpec }[] = [];
+  const units: Unit[] = [], open: string[] = [], pending: { leaf: Leaf; vk: string; d: DoorSpec }[] = [];
   for (const d of doors) {
-    const seats = seatsOf(d);
-    if (!seats.length) { open.push(d.id); continue; }
-    const out = sideOut(d), places: Leaf['places'] = {}, vks: Partial<Record<0 | 1, string>> = {};
-    for (const k of seats) { places[k] = placeLeaves(d, k)[0]; vks[k] = variant(places[k]!, d, out[0] !== out[1], out[k] && !out[1 - k]); }
-    const pl = places[d.swingInto]!, geom = variants.get(vks[d.swingInto]!)!.geom;
-    const leaf: Leaf = { place: pl, places, seat: d.swingInto, geom, angle: 0, vel: 0, max: pl.maxAngle, draws: [], bodies: [], matrix: [] };
+    const [pl] = placeLeaves(d);
+    if (!pl) { open.push(d.id); continue; }
+    const out = sideOut(d), k = d.swingInto, vk = variant(pl, d, out[0] !== out[1], out[k] && !out[1 - k]), geom = variants.get(vk)!.geom;
+    const leaf: Leaf = { place: pl, geom, dir: 1, angle: 0, vel: 0, draws: [], bodies: [], matrix: [] };
     const unit: Unit = { id: d.id, d, kind: d.kind, leaf, open: false, moving: false, blocked: false, width: d.width, weight: d.kind === 'postern' ? 1.3 : d.kind === 'grille' ? 1.1 : 1, pos: [d.centre[0], d.centre[1] + 1.2, d.centre[2]] };
-    units.push(unit); pending.push({ leaf, vks, d });
+    units.push(unit); pending.push({ leaf, vk, d });
     // a few ordinary doors left ajar, seeded per door
     const r = rngFor('door-ajar:' + d.id);
-    if ((d.kind === 'plank' || d.kind === 'postern') && r() < ajarRate) leaf.angle = leaf.max * (0.12 + r() * 0.5);
-    if (opts.initial !== undefined) leaf.angle = leaf.max * opts.initial;
+    if ((d.kind === 'plank' || d.kind === 'postern') && r() < ajarRate) leaf.angle = pl.maxAngle * (0.12 + r() * 0.5);
+    if (opts.initial !== undefined) leaf.angle = pl.maxAngle * opts.initial;
   }
 
   // --- portcullis parts: grille, fixtures, drum, ropes and coils
@@ -233,21 +237,20 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   const rope = ropeGeometry(), coil = coilGeometry();
   const anyWinch = portSpecs.some((p) => p.winch);
 
-  // --- what each leaf draws: [part, outdoor set?, moves, shut]. Shut, a split leaf's back faces look
-  // through the doorway into the other side; opened past BACK_SIDE_SWING they stand in the swing space.
-  // Each seat of a two-way door has its own set (its hand, and which side looks out, follow the seat).
-  type Want = { part: keyof Bins; bin: PartBin; out: boolean; moves: boolean; shut?: boolean; seat: 0 | 1 };
-  const wants = pending.map(({ vks, d }) => {
+  // --- what each leaf draws: [part, outdoor set?, moves, show]. Shut, a split leaf's front faces look into
+  // the forward space and its back faces through the doorway into the other; opened forward past
+  // BACK_SIDE_SWING its back faces stand in the forward space, opened back that far its front faces in the other.
+  type Want = { part: keyof Bins; bin: PartBin; out: boolean; moves: boolean; show?: (l: Leaf) => boolean };
+  const wants = pending.map(({ vk, d }) => {
     const list: Want[] = [];
-    for (const seat of seatsOf(d)) {
-      const out = sideOut(d), sw = out[seat], other = out[1 - seat], sp = variants.get(vks[seat]!)!.split.get(sw && !other), v = variants.get(vks[seat]!)!;
-      for (const part of ['wood', 'iron', 'fixed'] as const) {
-        const moves = part !== 'fixed';
-        if (!sp || sw === other) { list.push({ part, bin: v.whole[part], out: sw, moves, seat }); continue; }
-        list.push({ part, bin: sp.front[part], out: sw, moves, seat });
-        if (moves) list.push({ part, bin: sp.back[part], out: other, moves, shut: true, seat }, { part, bin: sp.back[part], out: sw, moves, shut: false, seat });
-        else list.push({ part, bin: sp.back[part], out: other, moves, seat });
-      }
+    const out = sideOut(d), sw = out[d.swingInto], other = out[1 - d.swingInto], v = variants.get(vk)!, sp = v.split.get(sw && !other);
+    for (const part of ['wood', 'iron', 'fixed'] as const) {
+      const moves = part !== 'fixed';
+      if (!sp || sw === other) { list.push({ part, bin: v.whole[part], out: sw, moves }); continue; }
+      if (moves && d.swingsBack) list.push({ part, bin: sp.front[part], out: sw, moves, show: (l) => !pastBack(l) }, { part, bin: sp.front[part], out: other, moves, show: pastBack });
+      else list.push({ part, bin: sp.front[part], out: sw, moves });
+      if (moves) list.push({ part, bin: sp.back[part], out: other, moves, show: (l) => !pastFwd(l) }, { part, bin: sp.back[part], out: sw, moves, show: pastFwd });
+      else list.push({ part, bin: sp.back[part], out: other, moves });
     }
     return list.filter((w) => w.bin.pos.length);
   });
@@ -292,9 +295,9 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   const items = pending.flatMap(({ leaf }, n) => wants[n].map((w) => ({ leaf, w, b: batches[slot(w)], g: geomOf(batches[slot(w)], w.bin), i: -1 })));
   for (const it of instancesByGeometry(items)) it.i = it.b.addInstance(it.g);
   let next = 0;
-  pending.forEach(({ leaf, vks, d }, n) => {
-    const v = variants.get(vks[d.swingInto]!)!;
-    tris += vcount(v.whole.wood, v.whole.iron, v.whole.fixed) / 3; // one seat is drawn at a time
+  pending.forEach(({ leaf, vk }, n) => {
+    const v = variants.get(vk)!;
+    tris += vcount(v.whole.wood, v.whole.iron, v.whole.fixed) / 3; // one lighting of each face is drawn at a time
     // oak from fresh honey-brown to grey and weathered
     const r = rngFor('door-tint:' + leaf.place.door), grey = r(), k = 0.62 + r() * 0.3;
     const tint: V3 = [k * (1 - grey * 0.12), k * (0.9 - grey * 0.02), k * (0.8 + grey * 0.12)];
@@ -302,8 +305,8 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     for (const w of wants[n]) {
       const { b, i } = items[next++];
       if (w.part === 'wood') b.setColorAt(i, tint);
-      if (!w.moves) b.setMatrixAt(i, leafMatrix(leaf.places[w.seat]!, m4swing(0)));
-      const dr: Draw = { b, i, moves: w.moves, shut: w.shut, leaf, seat: w.seat };
+      if (!w.moves) b.setMatrixAt(i, leafMatrix(leaf.place, leafSwing(leaf.place, 0)));
+      const dr: Draw = { b, i, moves: w.moves, show: w.show, leaf };
       leaf.draws.push(dr); own.draws.push(dr);
     }
   });
@@ -335,19 +338,20 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
   if (physics) for (const u of units) for (const b of u.leaf.geom.boxes) u.leaf.bodies.push(physics.addKinematicBox([(b.max[0] - b.min[0]) / 2, (b.max[1] - b.min[1]) / 2, (b.max[2] - b.min[2]) / 2], 'door:' + u.id));
 
   // --- posing
-  const worldOf = (l: Leaf, angle = l.angle): M4 => leafMatrix(l.place, m4swing(angle));
-  /** Is a leaf's draw part of what it shows now: its seat, and the side its back faces stand in? */
-  const current = (dr: Draw) => !dr.leaf || (dr.seat === dr.leaf.seat && (dr.shut === undefined || (dr.leaf.angle < BACK_SIDE_SWING) === dr.shut));
+  const swingOf = (l: Leaf, angle = l.angle): M4 => leafSwing(l.place, l.dir * angle);
+  const worldOf = (l: Leaf, angle = l.angle): M4 => leafMatrix(l.place, swingOf(l, angle));
+  /** Is a draw part of what its leaf shows now (the side each face stands in)? */
+  const current = (dr: Draw) => !dr.leaf || !dr.show || dr.show(dr.leaf);
   const pose = (l: Leaf) => {
     l.matrix = worldOf(l);
     const on = shown.get(l.place.door) ?? true;
     for (const dr of l.draws) {
-      if (dr.moves && dr.seat === l.seat) dr.b.setMatrixAt(dr.i, l.matrix);
+      if (dr.moves) dr.b.setMatrixAt(dr.i, l.matrix);
       dr.b.setVisibleAt(dr.i, on && current(dr));
     }
     if (l.bodies.length) {
       const q = m4quat(l.matrix);
-      l.geom.boxes.forEach((b, i) => l.bodies[i].setPose(leafPoint(l.place, m4swing(l.angle), [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2]), q));
+      l.geom.boxes.forEach((b, i) => l.bodies[i].setPose(leafPoint(l.place, swingOf(l), [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2]), q));
     }
   };
   const posePort = (p: Port) => {
@@ -369,13 +373,6 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     } else if (p.body) { p.body.remove(); p.body = null; }
   };
   for (const u of units) pose(u.leaf);
-  /** Hang a shut two-way leaf in `seat` (no-op for a leaf that is open, moving, one-way or already there). */
-  const seatTo = (u: Unit, seat: 0 | 1 | null) => {
-    const l = u.leaf, pl = seat === null ? undefined : l.places[seat];
-    if (!pl || seat === l.seat || l.angle !== 0 || u.moving) return;
-    l.seat = seat!; l.place = pl; l.max = pl.maxAngle;
-    pose(l);
-  };
   for (const p of ports) posePort(p);
 
   // --- blocking: would the leaf's boxes at this angle come within LEAF_CLEAR of a character's axis?
@@ -395,7 +392,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
 
   // --- leaf animation
   const step = (u: Unit, dt: number, who: Vec3Like[]) => {
-    const l = u.leaf, goal = u.open ? l.max : 0;
+    const l = u.leaf, goal = u.open ? maxOf(l) : 0;
     let a = l.angle, v = l.vel;
     if (u.open) {
       // pushed open: quick start, settles slowly on its hinges
@@ -420,14 +417,15 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
     if (a === goal) u.moving = false;
     pose(l);
   };
-  const openness = (u: Unit) => u.leaf.angle / u.leaf.max;
+  const openness = (u: Unit) => u.leaf.angle / maxOf(u.leaf);
   const setUnit = (u: Unit, o: boolean, instant = false, by?: Opener) => {
-    // opening a shut leaf: hang it to swing away from whoever opens it
-    if (o && by) {
-      if (instant && u.leaf.places[0] && u.leaf.places[1]) { u.leaf.angle = 0; u.moving = false; }
-      seatTo(u, seatAwayFrom(u.d, by.pos.x, by.pos.z, by.dir));
+    // opening a shut leaf: it swings away from whoever opens it, where it can (the only place the way is chosen)
+    const l = u.leaf;
+    if (o && by && (l.angle === 0 || instant)) {
+      const way = swingAwayFrom(u.d, by.pos.x, by.pos.z, by.dir);
+      if (way !== null && way !== l.dir) { l.angle = 0; l.dir = way; }
     }
-    if (instant) { u.open = o; u.moving = false; u.leaf.angle = o ? u.leaf.max : 0; u.leaf.vel = 0; pose(u.leaf); return; }
+    if (instant) { u.open = o; u.moving = false; l.angle = o ? maxOf(l) : 0; l.vel = 0; pose(l); return; }
     if (u.open === o && (u.moving || openness(u) === (o ? 1 : 0))) return;
     u.open = o; u.moving = true;
     if (o) { sound('latch', u.pos, u.weight * 0.8); sound('creak', u.pos, u.weight); } else sound('creak', u.pos, u.weight * 0.7);
@@ -532,7 +530,8 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
         for (const dr of g.draws) dr.b.setVisibleAt(dr.i, v && current(dr));
       }
     },
-    seat: (id) => byId.get(id)?.leaf.seat ?? null,
+    swingsInto: (id) => { const u = byId.get(id); return u ? (u.leaf.dir > 0 ? u.d.swingInto : (1 - u.d.swingInto) as 0 | 1) : null; },
+    leafPose: (id) => { const u = byId.get(id); return u ? [...u.leaf.matrix] : null; },
     state() {
       const o: Record<string, number> = {};
       for (const u of units) o[u.id] = Math.round(openness(u) * 1000) / 1000;
@@ -577,7 +576,8 @@ export function joinDoors(systems: DoorSystem[]): DoorSystem {
     setOpen: (id, o, instant, by) => { for (const s of systems) s.setOpen(id, o, instant, by); },
     state: () => Object.assign({}, ...systems.map((s) => s.state())),
     request: (id, o, by) => systems.some((s) => s.request(id, o, by)),
-    seat: (id) => systems.reduce<0 | 1 | null>((k, s) => k ?? s.seat(id), null),
+    swingsInto: (id) => systems.reduce<0 | 1 | null>((k, s) => k ?? s.swingsInto(id), null),
+    leafPose: (id) => systems.reduce<number[] | null>((m, s) => m ?? s.leafPose(id), null),
     isOpen: (id) => systems.some((s) => s.isOpen(id)),
     isPassable: (id) => systems.some((s) => s.isPassable(id)),
     blocksPlayer: (p) => systems.some((s) => s.blocksPlayer(p)),
