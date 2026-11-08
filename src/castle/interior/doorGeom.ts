@@ -307,9 +307,16 @@ export function placeLeaves(d: DoorSpec): LeafPlace[] {
 
 /** Column-major 4×4 (three.js Matrix4.elements order). */
 export type M4 = number[];
+// unrolled (the plan's hinge fitting multiplies millions of these): each entry summed in the same order, from 0, as the loop it replaces
 export const m4mul = (a: M4, b: M4): M4 => {
-  const o = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; }
+  const o: M4 = new Array(16);
+  for (let c = 0; c < 16; c += 4) {
+    const b0 = b[c], b1 = b[c + 1], b2 = b[c + 2], b3 = b[c + 3];
+    o[c] = 0 + a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    o[c + 1] = 0 + a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    o[c + 2] = 0 + a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    o[c + 3] = 0 + a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
   return o;
 };
 export const m4apply = (m: M4, p: V3): V3 => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];

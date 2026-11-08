@@ -727,8 +727,8 @@ export function leafSwingFits(P: Pick<InteriorPlan, 'rooms'>, d: DoorSpec, dir: 
   if (!pl || !r) return true;
   const { zBack } = leafDepth(pl.kind), end = dir > 0 ? pl.maxAngle : -BACK_ANGLE;
   // a coarser sweep than the test's (the leaf's ends and middle; rooms are convex where doors meet them)
-  for (let i = 0; i <= 12; i++) for (let k = 0; k <= 2; k++) for (const z of [zBack, 0]) {
-    const p = leafAt(pl, (end * i) / 12, [(pl.width * k) / 2, 1, z]);
+  for (let i = 0; i <= 12; i++) for (let k = 0, at = leafAtAngle(pl, (end * i) / 12); k <= 2; k++) for (const z of [zBack, 0]) {
+    const p = at([(pl.width * k) / 2, 1, z]);
     const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
     const across = dx * d.along[0] + dz * d.along[1], through = dx * d.normal[0] + dz * d.normal[1];
     if (Math.abs(across) <= d.width / 2 + LIP && Math.abs(through) <= d.wall / 2 + 0.15) continue;

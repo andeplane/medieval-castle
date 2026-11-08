@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
 import * as T3 from 'three';
-import { MeshBVH } from 'three-mesh-bvh';
+import { rayIndex, soupTris } from './helpers/rays';
 import { buildInterior } from '../src/castle/interior/index';
 import { bakeInteriorLight, buildShadowSkins, bvhOccluder, createInteriorLight } from '../src/render/interiorLight';
 import { apertureFrame, inPoly, type Aperture, type WindowInput } from '../src/render/interiorMath';
@@ -42,12 +42,10 @@ function casters(roots: THREE.Object3D[]) {
       for (let i = 0; i < n; i++) { v.fromBufferAttribute(p, idx ? idx.getX(i) : i).applyMatrix4(m.matrixWorld); out.push(v.x, v.y, v.z); }
     });
   }
-  const bvhs = [...soup].map(([side, pos]) => {
-    const g = new T3.BufferGeometry(); g.setAttribute('position', new T3.BufferAttribute(new Float32Array(pos), 3));
-    return { side: side as T3.Side, bvh: new MeshBVH(g) };
-  });
+  // as three-mesh-bvh's raycastFirst, faster under coverage (helpers/rays.ts); float32, as a BufferAttribute keeps them
+  const bvhs = [...soup].map(([side, pos]) => ({ side: side as T3.Side, bvh: rayIndex(soupTris(new Float32Array(pos))) }));
   const ray = new T3.Ray();
-  return (o: V3, d: V3) => { ray.origin.set(...o); ray.direction.set(...d); return bvhs.some((b) => !!b.bvh.raycastFirst(ray, b.side, 0.01, 600)); };
+  return (o: V3, d: V3) => { ray.origin.set(...o); ray.direction.set(...d); return bvhs.some((b) => b.bvh.hits(ray, 0.01, 600, b.side)); };
 }
 
 const PAD = 0.15; // the skins' holes are 5 cm proud of the opening, and the aperture model of a splay is approximate
