@@ -7,10 +7,10 @@
 //   props are taken out again, last first, until it does.
 // Tall props and wall hangings go on solid walls only: walls with a room behind, or with no window cut in
 // them (the shell's embrasures, castle/interior/shell.ts WindowFace, when the caller passes them).
-// The look is a medieval castle lived in around 1800-1900 (castle-plan/furnishing/style-guide.md): family
-// rooms are built round a chimneypiece on an inner wall with a seating group facing it, lit by candles in
-// brass sconces, lamps and the fire; torches burn only in tunnels, cellars, gate rooms and passages; one
-// textile colour per room (the room's tone, passed to the props as their variant seed).
+// Every room also has a character (characterOf): a palette of textiles, a tier (servants' plain, the
+// household's, the lord's rich) and a layout (which of its role's arrangements it takes), so that rooms of
+// one role do not read as copies. After its recipe a room gets wall dressing, small things on its tables
+// and chests, and a piece in every quarter of its floor that is still empty.
 import type { V2 } from '../core/math2d';
 import { pointInPoly } from '../core/math2d';
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
@@ -20,6 +20,7 @@ import { orient, convexOverlap, centroidOf } from '../castle/interior/geom';
 import type { WindowFace } from '../castle/interior/shell';
 import { KIND, makeProp, type Prop } from './kit';
 import { shutter, buildShutter } from './medieval';
+import { PALETTES } from './period';
 import { yawXZ, type Placed } from './place';
 
 export type Role = 'hall' | 'chapel' | 'bedchamber' | 'solar' | 'study' | 'guard' | 'kitchen' | 'store' | 'cellar' | 'gate' | 'passage' | 'empty'
@@ -32,12 +33,16 @@ export type Role = 'hall' | 'chapel' | 'bedchamber' | 'solar' | 'study' | 'guard
   // towers
   | 'mews' | 'watch';
 
-/** Props come from a small pool of seeded variants per kind, so 1000+ placements build ~200 meshes. */
+/** Props come from a small pool of seeded variants per kind, so 1000+ placements build a few hundred meshes. */
 export const VARIANTS = 6;
+/** Room palettes (period.ts PALETTES): a toned prop's variant seed ≡ its room's palette (mod NT). */
+export const NT = PALETTES.length;
+/** Toned kinds keep two shapes in every palette. */
+const TONED_VARIANTS = NT * 2;
 export function variantPool(make: (kind: string, seed: number) => Prop = makeProp) {
   const cache = new Map<string, Prop>();
   return (kind: string, seed: number) => {
-    const v = seed % VARIANTS, key = `${kind}:${v}`;
+    const v = seed % (TONED.has(kind) ? TONED_VARIANTS : VARIANTS), key = `${kind}:${v}`;
     let p = cache.get(key);
     if (!p) { p = make(kind, v); cache.set(key, p); }
     return p;
@@ -301,6 +306,54 @@ export function roleOf(r: RoomSpec, rng: Rng): Role {
   return pick(rng, r.floor <= 2 ? POOLS.low : POOLS.high);
 }
 
+// ------------------------------------------------------------------ character
+
+/** How well a room is kept: 0 the servants' and the garrison's (plain wood, wool, pegs and baskets),
+ * 1 the household's (a hanging, a chair, a rug), 2 the lord's and the best rooms (tapestries, carpets,
+ * upholstered seats, more candles). */
+export type Tier = 0 | 1 | 2;
+export interface Character { tier: Tier; /** period.ts PALETTES */ palette: number; /** which of its role's arrangements */ layout: number }
+/** Roles whose rooms are always the best kept, and the working rooms that are always plain. */
+const RICH: readonly Role[] = ['lord', 'lady', 'treasury', 'hall', 'chapel'];
+const SERVICE: readonly Role[] = ['guard', 'store', 'cellar', 'laundry', 'brewhouse', 'bakehouse', 'garderobe', 'dungeon', 'mews', 'watch', 'buttery', 'pantry', 'wine-cellar', 'well-room', 'armoury', 'kitchen', 'gate', 'passage', 'empty'];
+/** Arrangements per role (RECIPES branch on D.layout); other roles have one. */
+export const LAYOUTS: Partial<Record<Role, number>> = { bedchamber: 3, solar: 3, study: 3, library: 2, sewing: 2, guard: 2, nursery: 2, physician: 2, wardrobe: 2 };
+
+/** The household's working rooms: plain, but kept well in the lord's wing. */
+const WORKING: readonly Role[] = ['wardrobe', 'sewing', 'physician', 'steward'];
+
+/**
+ * A room's character, from the seed and its place. Tier: by role; among the rooms of one of the family's
+ * roles, ranked by floor area (half again in the lord's wing, his zone above the ground; less in a tower
+ * garret, floor 5 and up), the top third is rich and the bottom quarter poor, and one in five is nudged a
+ * step either way; the working rooms are plain, or rich in the lord's wing. Palette and layout: the rooms
+ * of one role take the palettes in turn from a seeded start, and their layouts in a different order, so no
+ * two rooms of a role up to NT × layouts share both.
+ */
+export function characterOf(r: RoomSpec, P: InteriorPlan, slot: RoleSlot, seed = 0): Character {
+  const { role, k } = slot, rng = mulberry32(hashSeed(`character:${r.id}`, seed));
+  const n = LAYOUTS[role] ?? 1;
+  const palette = (k + (hashSeed(`palette:${role}`, seed) % NT)) % NT;
+  const layout = (k + Math.floor(k / NT) + (hashSeed(`layout:${role}`, seed) % n)) % n;
+  let tier: Tier;
+  if (RICH.includes(role)) tier = 2;
+  else if (SERVICE.includes(role)) tier = 0;
+  else {
+    const T = roleTable(P, seed), lord = P.rooms.find((x) => T.get(x.id)?.role === 'lord');
+    const wing = (x: RoomSpec) => !!lord && x.zone === lord.zone && x.floor >= 1;
+    if (WORKING.includes(role)) tier = wing(r) ? 2 : 1;
+    else {
+      const score = (x: RoomSpec) => AREA(x) * (wing(x) ? 1.5 : 1) * (TOWER_ZONES.includes(x.zone) && x.floor >= 5 ? 0.6 : 1);
+      const peers = P.rooms.filter((x) => T.get(x.id)?.role === role).sort((a, b) => score(b) - score(a) || (a.id < b.id ? -1 : 1));
+      const i = Math.max(0, peers.indexOf(r)), m = peers.length;
+      tier = i < m / 3 ? 2 : i >= m * 0.75 ? 0 : 1;
+    }
+    const x = rng();
+    if (x < 0.1) tier = Math.max(0, tier - 1) as Tier; else if (x < 0.2) tier = Math.min(2, tier + 1) as Tier;
+  }
+  return { tier, palette, layout };
+}
+
 // ------------------------------------------------------------------ placing
 
 export class RoomDresser {
@@ -308,8 +361,11 @@ export class RoomDresser {
   /** Stretches of wall in use, along the wall (s) and up it (y above the floor): doors, tall furniture
    * against it and hangings, so a portrait never hangs behind a bookcase. */
   wallTaken: { w: Wall; s0: number; s1: number; y0: number; y1: number }[] = [];
-  /** The room's textile colour (period.ts TONES): every toned prop takes a variant seed ≡ tone (mod 3). */
+  /** The room's palette (period.ts PALETTES): every toned prop takes a variant seed ≡ tone (mod NT). */
   tone: number;
+  /** How well kept the room is (characterOf) and which of its role's arrangements it takes. */
+  tier: Tier = 1;
+  layout = 0;
   private n = 0;
   private pictures = 0;
   /** The room's number among the rooms of its role (roleTable): recipes vary by it. */
@@ -321,7 +377,7 @@ export class RoomDresser {
   private known = false;
   constructor(public r: RoomSpec, public P: InteriorPlan, public keepOut: V2[][], public rng: Rng, private make: (k: string, s: number) => Prop, private seed: number, windows: readonly WindowFace[] = []) {
     this.walls = wallsOf(r, P); this.poly = orient(r.poly);
-    this.tone = Math.floor(rng() * 3);
+    this.tone = Math.floor(rng() * NT);
     this.windows = windows.filter((w) => w.room === r.id);
     this.known = windows.length > 0;
     // window holes take their stretch of wall at their height; a niche that comes down to the floor keeps
@@ -388,7 +444,7 @@ export class RoomDresser {
     const h = hashSeed(`${this.r.id}:${this.n++}`, this.seed);
     // pictures in one room take consecutive variants from a seeded start: never the same canvas twice
     if (kind === 'portrait') return this.make(kind, (hashSeed(`${this.r.id}:pictures`, this.seed) % VARIANTS) + this.pictures++);
-    return this.make(kind, TONED.has(kind) ? this.tone + 3 * (h % 0x5555555) : h);
+    return this.make(kind, TONED.has(kind) ? this.tone + NT * (h % 0x2aaaaaa) : h);
   }
 
   /** Can this placed prop go here (inside the room, clear of keep-outs and other blockers)? */
@@ -409,22 +465,27 @@ export class RoomDresser {
     return this.fits(p) && (p.at[1] - this.r.y0) + p.prop.bounds.max[1] < this.r.y1 - this.r.y0 - 0.05;
   }
 
-  /** Back against a wall. inner: only walls with another room behind (no windows). */
-  againstWall(kind: string, o: { inner?: boolean; tries?: number; prefer?: (w: Wall) => number; centre?: boolean; corner?: boolean } = {}): Placed | null {
+  /** Back against a wall. inner: only walls with another room behind (no windows). toward: the wall
+   * nearest that point first, and the spot along it nearest it, within `within` m of it. */
+  againstWall(kind: string, o: { inner?: boolean; tries?: number; prefer?: (w: Wall) => number; centre?: boolean; corner?: boolean; toward?: V2; within?: number } = {}): Placed | null {
     const prop = this.prop(kind), b = prop.bounds, cx = (b.min[0] + b.max[0]) / 2, width = b.max[0] - b.min[0];
     let walls = this.walls.filter((w) => w.L >= width + 0.1 && (!o.inner || this.solid(w)));
-    walls = o.prefer ? [...walls].sort((a, c) => o.prefer!(c) - o.prefer!(a)) : shuffle(walls, this.rng);
+    const T = o.toward, within = o.within ?? Infinity;
+    walls = T ? walls.filter((w) => segDist(w.a, w.b, T) <= within).sort((a, c) => segDist(a.a, a.b, T) - segDist(c.a, c.b, T)) : o.prefer ? [...walls].sort((a, c) => o.prefer!(c) - o.prefer!(a)) : shuffle(walls, this.rng);
     for (const w of walls) {
       const t: V2 = [(w.b[0] - w.a[0]) / w.L, (w.b[1] - w.a[1]) / w.L], yaw = yawFacing(w.n);
       const steps = Math.max(1, Math.floor((w.L - width) / 0.25));
       const start = Math.floor(this.rng() * steps);
-      // centred: from the middle of the wall outwards; corner: from both ends inwards; otherwise from a
-      // random point along it
-      const order = o.corner ? Array.from({ length: steps + 1 }, (_, k) => (k % 2 ? steps - (k >> 1) : k >> 1)) : o.centre ? Array.from({ length: steps + 1 }, (_, k) => Math.round(steps / 2 + (k % 2 ? 1 : -1) * Math.ceil(k / 2))).filter((k) => k >= 0 && k <= steps) : Array.from({ length: steps + 1 }, (_, k) => (start + k) % (steps + 1));
+      const sOf = (k: number) => width / 2 + 0.05 + (k / Math.max(1, steps)) * Math.max(0, w.L - width - 0.1);
+      // centred: from the middle of the wall outwards; corner: from both ends inwards; toward: nearest the
+      // point first; otherwise from a random point along it
+      const all = Array.from({ length: steps + 1 }, (_, k) => k);
+      const order = T ? all.sort((a, c) => Math.abs(sOf(a) - this.along(w, T)) - Math.abs(sOf(c) - this.along(w, T))) : o.corner ? all.map((k) => (k % 2 ? steps - (k >> 1) : k >> 1)) : o.centre ? all.map((k) => Math.round(steps / 2 + (k % 2 ? 1 : -1) * Math.ceil(k / 2))).filter((k) => k >= 0 && k <= steps) : all.map((k) => (start + k) % (steps + 1));
       for (const k of order) {
-        const s = width / 2 + 0.05 + (k / Math.max(1, steps)) * Math.max(0, w.L - width - 0.1);
+        const s = sOf(k);
         const back = 0.04 - b.min[2];
         const at: V2 = [w.a[0] + t[0] * s + w.n[0] * back, w.a[1] + t[1] * s + w.n[1] * back];
+        if (T && Math.hypot(at[0] - T[0], at[1] - T[1]) > within) continue;
         const [ox, oz] = yawXZ(cx, 0, yaw);
         const p: Placed = { prop, at: [at[0] - ox, this.r.y0, at[1] - oz], yaw };
         if (this.fitsFloor(p)) {
@@ -448,16 +509,20 @@ export class RoomDresser {
     return null;
   }
 
-  /** On the wall at mount height (sconces, tapestries); clear of doors and other hangings. */
-  onWall(kind: string, inner = true, o: { fractions?: number[]; walls?: Wall[] } = {}): Placed | null {
+  /** On the wall at mount height (sconces, tapestries); clear of doors and other hangings. toward: on the
+   * wall nearest that point, as near it as there is room. */
+  onWall(kind: string, inner = true, o: { fractions?: number[]; walls?: Wall[]; toward?: V2; within?: number } = {}): Placed | null {
     const prop = this.prop(kind), k = KIND[kind], b = prop.bounds, width = b.max[0] - b.min[0];
     // every wall kind has a mount height (kit test); hang lower under a low ceiling
     const mount = Math.min(k.mount!, this.r.y1 - this.r.y0 - 0.12 - b.max[1]);
     if (mount + b.min[1] < 0.5) return null; // too low a ceiling for it
-    const y0 = mount + b.min[1] - 0.05, y1 = mount + b.max[1] + 0.05;
-    for (const w of shuffle((o.walls ?? this.walls).filter((x) => x.L >= width + 0.4 && (!inner || this.solid(x))), this.rng)) {
+    const y0 = mount + b.min[1] - 0.05, y1 = mount + b.max[1] + 0.05, T = o.toward;
+    let walls = (o.walls ?? this.walls).filter((x) => x.L >= width + 0.4 && (!inner || this.solid(x)));
+    walls = T ? walls.filter((w) => segDist(w.a, w.b, T) <= (o.within ?? Infinity)).sort((a, c) => segDist(a.a, a.b, T) - segDist(c.a, c.b, T)) : shuffle(walls, this.rng);
+    for (const w of walls) {
       const t: V2 = [(w.b[0] - w.a[0]) / w.L, (w.b[1] - w.a[1]) / w.L];
-      for (const f of o.fractions ?? shuffle([0.5, 0.3, 0.7, 0.2, 0.8], this.rng)) {
+      const f0 = T ? this.along(w, T) / w.L : 0;
+      for (const f of T ? [0, -0.08, 0.08, -0.16, 0.16, -0.25, 0.25].map((d) => f0 + d).filter((f) => f > 0 && f < 1) : o.fractions ?? shuffle([0.5, 0.3, 0.7, 0.2, 0.8], this.rng)) {
         const s = Math.min(w.L - width / 2 - 0.2, Math.max(width / 2 + 0.2, f * w.L));
         if (this.wallTaken.some((x) => x.w === w && x.s0 < s + width / 2 + 0.25 && x.s1 > s - width / 2 - 0.25 && x.y0 < y1 && x.y1 > y0)) continue;
         this.wallTaken.push({ w, s0: s - width / 2, s1: s + width / 2, y0, y1 });
@@ -518,6 +583,7 @@ export class RoomDresser {
   /** Put a piece where its kind goes: a wall piece on a solid wall, a floor piece against a wall, or
    * (when no wall has room) free-standing near the middle. */
   place(kind: string): Placed | null {
+    if (kind === 'tapestry' && this.tier < 2) kind = this.hangingKind(); // a tapestry is for the best rooms
     const k = KIND[kind];
     if (k.placement === 'wall') return this.onWall(kind, kind !== 'candle-sconce' && kind !== 'sconce');
     return this.againstWall(kind) ?? this.near(kind, this.axis().c, this.rng() * 6, 1.5);
@@ -533,6 +599,57 @@ export class RoomDresser {
     const bits = this.k + 1;
     list.forEach((kind, i) => { if ((bits >> i) & 1) this.place(kind); });
   }
+  /**
+   * Under a window: its back to the window wall, centred on the hole, for a piece low enough to stand under
+   * the sill (a chest or bench as a window seat, a table as a desk in the light). The window with the most
+   * room in front of it first.
+   */
+  underWindow(kind: string): Placed | null {
+    const prop = this.prop(kind), b = prop.bounds, cx = (b.min[0] + b.max[0]) / 2;
+    const ws = this.windows.filter((w) => !w.slit && w.y0 - this.r.y0 >= b.max[1] + 0.03 && w.w >= 0.6);
+    for (const w of shuffle(ws, this.rng)) {
+      const yaw = yawFacing(w.n), back = 0.04 - b.min[2], [ox, oz] = yawXZ(cx, 0, yaw);
+      for (const s of [0, 0.25, -0.25, 0.5, -0.5]) {
+        const p: Placed = { prop, at: [w.c[0] + w.n[0] * back + w.t[0] * s - ox, this.r.y0, w.c[1] + w.n[1] * back + w.t[1] * s - oz], yaw };
+        if (this.fitsFloor(p)) return this.add(p);
+      }
+    }
+    return null;
+  }
+
+  /** What the room has in it so far, as points on the floor: the centres of all pieces but the shutters,
+   * and the corners of standing ones. */
+  marks(): V2[] {
+    const out: V2[] = [];
+    for (const p of this.placed) {
+      if (p.prop.kind.name === 'shutter') continue;
+      out.push([p.at[0], p.at[2]]);
+      if (p.prop.kind.placement === 'floor' && !flat(p.prop)) out.push(...footRect(p));
+    }
+    return out;
+  }
+
+  /**
+   * The quarters of the floor (split at the centroid along the longest wall and across it) with nothing
+   * in them or within `reach` of them, each as its floor points (0.25 m grid), the farthest from the
+   * middle first. Quarters under `minArea` m² are left out.
+   */
+  emptyQuarters(reach = 0.6, minArea = 1.5): V2[][] {
+    const { c, u, v } = this.axis(), xs = this.poly.map((p) => p[0]), zs = this.poly.map((p) => p[1]), cell = 0.25;
+    const quarter = (p: V2) => ((p[0] - c[0]) * u[0] + (p[1] - c[1]) * u[1] >= 0 ? 1 : 0) + ((p[0] - c[0]) * v[0] + (p[1] - c[1]) * v[1] >= 0 ? 2 : 0);
+    const cells: V2[][] = [[], [], [], []];
+    for (let x = Math.min(...xs) + cell / 2; x < Math.max(...xs); x += cell) for (let z = Math.min(...zs) + cell / 2; z < Math.max(...zs); z += cell) if (pointInPoly(this.poly, x, z)) cells[quarter([x, z])].push([x, z]);
+    const m = this.marks(), d = (p: V2) => Math.hypot(p[0] - c[0], p[1] - c[1]);
+    return cells.filter((q) => q.length * cell * cell >= minArea && !q.some((g) => m.some((k) => Math.hypot(k[0] - g[0], k[1] - g[1]) <= reach))).map((q) => [...q].sort((a, b) => d(b) - d(a)));
+  }
+
+  /** Where the room's first doorway comes in (null for a room with none). */
+  door(): V2 | null { const d = this.P.doors.find((x) => x.spaces.includes(this.r.id)); return d ? doorEntry(d, this.r.id).at : null; }
+  /** A wall hanging by the room's tier: pegs for cloaks, a dyed hanging or a painted shield, a tapestry. */
+  hangingKind(): string { return this.tier === 2 ? 'tapestry' : this.tier === 1 ? (this.rng() < 0.7 ? 'hanging' : 'shield') : 'peg-rail'; }
+  /** The kind of a piece by the room's tier: [poor, plain, rich]. */
+  byTier<T>(kinds: readonly [T, T, T]): T { return kinds[this.tier]; }
+
   /** A long axis through the room (direction of its longest wall) and the centroid. */
   axis(): { c: V2; u: V2; v: V2 } {
     const w = [...this.walls].sort((a, b) => b.L - a.L)[0];
@@ -545,22 +662,24 @@ function shuffle<T>(xs: T[], r: Rng): T[] { const a = [...xs]; for (let i = a.le
 const times = (r: Rng, a: number, b: number) => a + Math.floor(r() * (b - a + 1));
 /** Lies flat on the floor (a carpet, rug, runner or skin): walked over, under furniture, layered. */
 export const flat = (p: Prop) => p.kind.placement === 'floor' && p.bounds.max[1] < 0.06;
-/** Kinds whose textiles follow the room's tone (their variant seed ≡ tone mod 3). */
+/** Kinds whose textiles follow the room's palette (their variant seed ≡ palette mod NT). */
 /** Seats round a fire, which may stand on the edge of a skin before it. */
 export const FIRESIDE = new Set(['armchair', 'sofa', 'footstool']);
-export const TONED = new Set(['four-poster', 'armchair', 'sofa', 'footstool', 'round-table', 'carpet', 'pedestal-desk']);
+export const TONED = new Set(['four-poster', 'armchair', 'sofa', 'footstool', 'round-table', 'carpet', 'pedestal-desk', 'tapestry', 'bed', 'rug', 'peg-rail', 'shield', 'hanging']);
 /** Roles with no floor to furnish: stairs, passages and the gate passages (all floor is a way through). */
 export const UNFLOORED: readonly Role[] = ['empty', 'passage', 'gate'];
 /** Every other room has at least this many pieces. */
 export const MIN_PROPS = 6;
 /** Plain pieces that suit any room, to bring a bare one up to MIN_PROPS. */
-const FILL = ['chest', 'stool', 'candle-sconce', 'bucket', 'crate', 'bench', 'tapestry', 'shelf', 'sack', 'stool', 'candle-sconce'];
+const FILL = ['chest', 'stool', 'candle-sconce', 'bucket', 'crate', 'bench', 'tapestry', 'wall-shelf', 'sack', 'stool', 'candle-sconce'];
 /** Roles where people live: a hearth, candles not torches, carpets, pictures. */
 export const FAMILY: readonly Role[] = ['hall', 'solar', 'bedchamber', 'study'];
 /** Roles that may burn torches (style guide: tunnels, cellars, gate rooms and passages). */
 export const TORCH_ROLES: readonly Role[] = ['passage', 'cellar', 'gate', 'wine-cellar', 'dungeon', 'well-room', 'watch'];
 
 const longest = (w: Wall) => w.L;
+/** Prefer walls whose middle is far from a point (the bed away from the door). */
+const farFrom = (p: V2 | null) => (w: Wall) => (p ? Math.hypot((w.a[0] + w.b[0]) / 2 - p[0], (w.a[1] + w.b[1]) / 2 - p[1]) : w.L);
 /** Clear space round the fireside seats and their lamp table: room to sit down, and they read as separate pieces. */
 export const SEAT_GAP = 0.25;
 const frontOf = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
@@ -570,23 +689,23 @@ const frontOf = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
  * overmantel mirror or portrait, a garniture on the mantel, a rug or skin before it, armchairs angled
  * to the fire (and a sofa facing it), a side table with a lamp. Returns the hearth, or null.
  */
-export function hearthGroup(D: RoomDresser, o: { kind?: string; chairs?: 0 | 1 | 2; sofa?: boolean; lamp?: boolean; stool?: boolean } = {}): Placed | null {
+export function hearthGroup(D: RoomDresser, o: { kind?: string; chairs?: 0 | 1 | 2; sofa?: boolean; lamp?: boolean; stool?: boolean; seat?: string } = {}): Placed | null {
   const h = D.againstWall(o.kind ?? 'chimneypiece', { inner: true, centre: true, prefer: longest });
   if (!h) return null;
   const n = frontOf(h), t: V2 = [n[1], -n[0]], b = h.prop.bounds, front = b.max[2];
   const P = (d: number, s: number): V2 => [h.at[0] + n[0] * d + t[0] * s, h.at[2] + n[1] * d + t[1] * s];
   const fire = P(front - 0.35, 0);
   if (h.prop.meta.above) D.over(D.rng() < 0.6 ? 'overmantel-mirror' : 'portrait', h);
-  if (h.prop.meta.mantel) D.onMantel(D.rng() < 0.25 ? 'candelabrum' : 'candlestick', h, [-0.72, 0.72]);
-  D.at(D.rng() < 0.5 ? 'skin' : 'rug', P(front + 0.85, 0), h.yaw + Math.PI / 2, 0.15);
+  if (h.prop.meta.mantel) D.onMantel(D.tier === 2 && D.rng() < 0.5 ? 'candelabrum' : 'candlestick', h, [-0.72, 0.72]);
+  if (D.tier > 0 || D.rng() < 0.3) D.at(D.rng() < 0.5 ? 'skin' : 'rug', P(front + 0.85, 0), h.yaw + Math.PI / 2, 0.15);
   const chairs = o.chairs ?? 2;
   if (chairs) {
     for (const sx of chairs === 2 ? [-1, 1] : [D.rng() < 0.5 ? -1 : 1]) {
       const c = P(front + 1.3, sx * range(D.rng, 0.95, 1.1));
-      D.at('armchair', c, yawFacing([fire[0] - c[0], fire[1] - c[1]]), 0.2, SEAT_GAP);
+      D.at(o.seat ?? 'armchair', c, yawFacing([fire[0] - c[0], fire[1] - c[1]]), 0.2, SEAT_GAP);
     }
     if (o.sofa) D.at('sofa', P(front + 2.9, 0), h.yaw + Math.PI, 0.3, SEAT_GAP);
-    if (o.lamp !== false) { const st = D.at('side-table', P(front + 1.4, (D.rng() < 0.5 ? -1 : 1) * 1.75), h.yaw, 0.2, SEAT_GAP); D.onTop('oil-lamp', st); }
+    if (o.lamp !== false) { const st = D.at('side-table', P(front + 1.4, (D.rng() < 0.5 ? -1 : 1) * 1.75), h.yaw, 0.2, SEAT_GAP); D.onTop(D.tier === 2 ? 'oil-lamp' : 'candlestick', st); }
     if (o.stool !== false) D.at('footstool', P(front + 0.75, (D.rng() < 0.5 ? -1 : 1) * 0.6), h.yaw + 0.3, 0.1);
   }
   return h;
@@ -673,66 +792,126 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.onWall('tapestry'); D.onWall('candle-sconce', false); D.onWall('candle-sconce', false);
   },
   bedchamber: (D) => {
-    // the bed's head against an inner wall, towards a corner so the rest of the wall (or the longest
-    // inner wall) is left for the hearth; a chest at its foot
-    const bed = D.againstWall(D.rng() < 0.7 ? 'four-poster' : 'bed', { inner: true, corner: true }) ?? D.againstWall('bed');
+    // three arrangements: the bed's head in a corner of an inner wall (the rest of the wall left for the
+    // hearth), the bed's head in the middle of the longest solid wall between two bedside tables, or the
+    // bed in the corner farthest from the door with a window seat; a chest at its foot. The bed by tier:
+    // a plain bed with a wool coverlet, a curtained bed for the best rooms.
+    const kind = D.byTier(['bed', D.rng() < 0.35 ? 'four-poster' : 'bed', 'four-poster'] as const);
+    const bed = D.layout === 1 ? D.againstWall(kind, { inner: true, centre: true, prefer: longest }) ?? D.againstWall(kind, { centre: true })
+      : D.layout === 2 ? D.againstWall(kind, { corner: true, prefer: farFrom(D.door()) }) ?? D.againstWall(kind)
+      : D.againstWall(kind, { inner: true, corner: true }) ?? D.againstWall(kind);
     if (bed) {
-      const b = bed.prop.bounds, n = frontOf(bed), t: V2 = [n[1], -n[0]];
-      if (D.rng() < 0.5) D.near('chest', [bed.at[0] + n[0] * (b.max[2] + 0.4), bed.at[2] + n[1] * (b.max[2] + 0.4)], bed.yaw + Math.PI / 2, 0.3);
-      const sx = D.rng() < 0.5 ? -1 : 1, st = D.at('side-table', [bed.at[0] + t[0] * sx * (b.max[0] + 0.35) + n[0] * (b.min[2] + 0.35), bed.at[2] + t[1] * sx * (b.max[0] + 0.35) + n[1] * (b.min[2] + 0.35)], bed.yaw, 0.1);
-      D.onTop('candlestick', st);
-      D.at('rug', [bed.at[0] + t[0] * -sx * (b.max[0] + 0.55), bed.at[2] + t[1] * -sx * (b.max[0] + 0.55)], bed.yaw, 0.2);
+      const b = bed.prop.bounds, n = frontOf(bed), t: V2 = [n[1], -n[0]], P = (d: number, s: number): V2 => [bed.at[0] + n[0] * d + t[0] * s, bed.at[2] + n[1] * d + t[1] * s];
+      if (D.layout !== 0 || D.rng() < 0.5) D.at(D.tier === 0 ? 'basket' : 'chest', P(b.max[2] + 0.4, 0), bed.yaw + Math.PI / 2, 0.3);
+      const sides = D.layout === 1 ? [-1, 1] : [D.rng() < 0.5 ? -1 : 1];
+      for (const sx of sides) D.onTop(D.tier === 2 && D.rng() < 0.4 ? 'candelabrum' : 'candlestick', D.at(D.tier === 0 ? 'stool' : 'side-table', P(b.min[2] + 0.35, sx * (b.max[0] + 0.35)), bed.yaw, 0.1));
+      if (D.tier > 0) D.at('rug', P((b.min[2] + b.max[2]) / 2, -sides[0] * (b.max[0] + 0.55)), bed.yaw, 0.2);
     }
-    const hearth = hearthGroup(D, { chairs: 1, lamp: false, stool: false });
-    if (!hearth) D.near('carpet', D.axis().c, D.rng() * 3, 0.6);
-    D.againstWall('cupboard', { inner: true });
-    D.onWall('portrait'); D.onWall('tapestry');
-    D.onWall('candle-sconce', false);
+    const hearth = D.tier > 0 ? hearthGroup(D, { chairs: D.tier === 2 ? 1 : 0, lamp: false, stool: false, seat: D.layout === 0 ? 'armchair' : 'box-chair' }) : null;
+    if (!hearth && D.tier === 2) D.near('carpet', D.axis().c, D.rng() * 3, 0.6);
+    if (D.layout === 2) D.underWindow(D.tier === 0 ? 'bench' : 'chest');
+    D.againstWall(D.byTier(['chest', 'cupboard', 'cupboard'] as const), { inner: true });
+    if (D.tier === 2) D.onWall('portrait');
+    D.onWall(D.hangingKind());
+    D.onWall(D.tier === 0 ? 'peg-rail' : 'candle-sconce', D.tier === 0);
     D.extras(['chest', 'stool', 'prie-dieu', 'writing-desk', 'drying-rack', 'box-chair']);
   },
   solar: (D) => {
-    // the drawing room: a carpet, the hearth with a sofa and armchairs facing it, a round table under
-    // a lamp in the middle, pictures hung in a row, sconces
-    const { c, v } = D.axis();
-    D.near('carpet', c, yawFacing(v), 0.4);
-    hearthGroup(D, { sofa: true });
-    const t = D.near('round-table', c, D.rng() * 6, 1.4);
-    D.onTop('oil-lamp', t, 0.15, 0.1); D.onTop('book-stack', t, -0.25, -0.1);
-    if (t) for (const a of [0.5, 2.6]) { const yaw = t.yaw + a; D.at('hall-chair', [t.at[0] + Math.sin(yaw) * 0.85, t.at[2] + Math.cos(yaw) * 0.85], yaw + Math.PI, 0.15); }
-    const cab = D.againstWall('cupboard', { inner: true });
-    D.onTop('candelabrum', cab, 0, 0.05);
-    for (const kind of ['portrait', 'portrait', 'stag-head']) D.onWall(kind);
+    // the family's day room, in one of three arrangements: the hearth with seats round it and a table in
+    // the middle; a table in the window's light with chairs and a window seat; or a long board with
+    // benches down the room and a cupboard of plate, the hearth left bare
+    const { c, u, v } = D.axis(), seat = D.byTier(['stool', 'chair', 'box-chair'] as const);
+    if (D.layout === 0) {
+      if (D.tier > 0) D.near(D.tier === 2 ? 'carpet' : 'rug', c, yawFacing(v), 0.4);
+      hearthGroup(D, { sofa: D.tier === 2, seat: D.tier === 2 ? 'armchair' : seat, chairs: D.tier === 0 ? 1 : 2 });
+      const t = D.near('round-table', c, D.rng() * 6, 1.4);
+      D.onTop(D.tier === 2 ? 'oil-lamp' : 'candlestick', t, 0.15, 0.1); D.onTop('book-stack', t, -0.25, -0.1);
+      if (t) for (const a of [0.5, 2.6]) { const yaw = t.yaw + a; D.at('hall-chair', [t.at[0] + Math.sin(yaw) * 0.85, t.at[2] + Math.cos(yaw) * 0.85], yaw + Math.PI, 0.15); }
+    } else if (D.layout === 1) {
+      const t = D.underWindow('trestle-table') ?? D.near('trestle-table', c, yawFacing(u), 1.2);
+      if (t) {
+        const n = frontOf(t), d = t.prop.bounds.max[2] + 0.35;
+        for (const s of D.tier === 0 ? [0] : [-0.5, 0.5]) D.at(seat, [t.at[0] + n[0] * d + n[1] * s, t.at[2] + n[1] * d - n[0] * s], t.yaw + Math.PI, 0.15);
+        D.onTop('book-stack', t, -0.4, 0); D.onTop(D.tier === 2 ? 'candelabrum' : 'tableware', t, 0.4, 0);
+      }
+      hearthGroup(D, { chairs: D.tier === 0 ? 0 : 1, lamp: false, stool: false, seat });
+      D.underWindow('chest') ?? D.againstWall('chest');
+      D.againstWall(D.k % 2 ? 'loom' : 'lectern');
+      if (D.tier > 0) D.near('rug', c, yawFacing(v), 1);
+    } else {
+      const t = D.near('trestle-table', c, yawFacing(u), 1);
+      if (t) {
+        const side = frontOf(t);
+        for (const s of [-0.75, 0.75]) D.near('bench', [t.at[0] + side[0] * s, t.at[2] + side[1] * s], t.yaw, 0.15);
+        D.onTop('tableware', t, range(D.rng, -0.6, 0.6), 0);
+        if (D.tier === 2) D.ceiling('chandelier', [t.at[0], t.at[2]]);
+      }
+      hearthGroup(D, { chairs: 0, lamp: false, stool: false });
+      const cab = D.againstWall(D.tier === 2 ? 'dresser' : 'cupboard', { inner: true });
+      D.onTop(D.tier === 2 ? 'candelabrum' : 'candlestick', cab, 0, 0.05);
+    }
+    for (const kind of D.tier === 2 ? ['portrait', 'portrait', D.hangingKind()] : [D.hangingKind(), 'shield']) D.onWall(kind);
     D.onWall('candle-sconce', false);
     D.extras(['loom', 'chest', 'box-chair', 'tapestry', 'stool', 'side-table']);
   },
   study: (D) => {
-    // the library: bookcases on the inner walls, the hearth with a leather armchair, a desk in the room
-    const h = hearthGroup(D, { chairs: 1, stool: false });
-    for (let i = 0; i < 2; i++) D.againstWall('bookcase', { inner: true });
-    const { c, v } = D.axis();
-    D.near('carpet', c, yawFacing(v), 0.6);
-    const desk = D.near('pedestal-desk', [c[0] + v[0] * 0.8, c[1] + v[1] * 0.8], yawFacing(v), 1.0);
-    if (desk) {
-      const n = frontOf(desk);
-      D.at('hall-chair', [desk.at[0] - n[0] * 0.75, desk.at[2] - n[1] * 0.75], desk.yaw, 0.1);
-      D.onTop('oil-lamp', desk, -0.5, -0.15); D.onTop('book-stack', desk, 0.4, 0);
+    // a scholar's room in three arrangements: bookcases on the inner walls, the hearth with one seat and a
+    // desk in the room; a table in the window's light with books and a lectern in the middle; or a sloped
+    // desk in a corner, shelves and a press of books, a chest of rolls
+    const { c, v } = D.axis(), seat = D.byTier(['stool', 'chair', 'box-chair'] as const);
+    if (D.layout === 0) {
+      const h = hearthGroup(D, { chairs: 1, stool: false, lamp: D.tier === 2, seat: D.tier === 2 ? 'armchair' : seat });
+      for (let i = 0; i < 2; i++) D.againstWall('bookcase', { inner: true });
+      if (D.tier > 0) D.near(D.tier === 2 ? 'carpet' : 'rug', c, yawFacing(v), 0.6);
+      const desk = D.near(D.tier === 2 ? 'pedestal-desk' : 'trestle-table', [c[0] + v[0] * 0.8, c[1] + v[1] * 0.8], yawFacing(v), 1.0);
+      if (desk) {
+        const n = frontOf(desk);
+        D.at(seat, [desk.at[0] - n[0] * 0.75, desk.at[2] - n[1] * 0.75], desk.yaw, 0.1);
+        D.onTop(D.tier === 2 ? 'oil-lamp' : 'candlestick', desk, -0.5, -0.15); D.onTop('book-stack', desk, 0.4, 0);
+      }
+      if (!h) D.againstWall('bookcase');
+    } else if (D.layout === 1) {
+      const t = D.underWindow('trestle-table');
+      if (t) { const n = frontOf(t), d = t.prop.bounds.max[2] + 0.35; D.at(seat, [t.at[0] + n[0] * d, t.at[2] + n[1] * d], t.yaw + Math.PI, 0.15); D.onTop('book-stack', t, -0.5, 0); D.onTop('candlestick', t, 0.3, 0); }
+      else D.againstWall('writing-desk');
+      D.againstWall('bookcase', { inner: true });
+      D.near('lectern', c, D.rng() * 6, 1);
+      hearthGroup(D, { chairs: D.tier === 0 ? 0 : 1, lamp: false, stool: false, seat });
+      D.onTop('book-stack', D.againstWall('chest'));
+      D.onWall('wall-shelf');
+    } else {
+      const desk = D.againstWall('writing-desk', { corner: true, prefer: farFrom(D.door()) });
+      if (desk) { const n = frontOf(desk); D.at('stool', [desk.at[0] + n[0] * 0.55, desk.at[2] + n[1] * 0.55], 0, 0.15); }
+      D.againstWall(D.tier === 0 ? 'chest' : 'bookcase', { inner: true });
+      hearthGroup(D, { chairs: D.tier === 0 ? 0 : 1, lamp: false, stool: false, seat });
+      D.onWall('wall-shelf'); D.onWall('wall-shelf');
+      D.near(D.tier === 0 ? 'basket' : 'skin', c, D.rng() * 6, 1);
     }
-    if (!h) D.againstWall('bookcase');
-    for (const kind of ['stag-head', 'portrait', 'portrait']) D.onWall(kind);
+    for (const kind of D.tier === 2 ? ['stag-head', 'portrait'] : [D.hangingKind()]) D.onWall(kind);
     D.onWall('candle-sconce', false);
     D.extras(['writing-desk', 'lectern', 'chest', 'stool', 'book-stack', 'tapestry']);
   },
   guard: (D) => {
-    // kept old: a deal table and benches, arms racked and in trophies, a suit of armour, an iron ring of candles
+    // kept plain: a deal table and benches in the middle, or against the wall with the men's pallets down
+    // the room and a brazier; arms racked and in trophies, the garrison's shield, pegs for cloaks
     const { c, v } = D.axis();
-    const t = D.near('trestle-table', c, yawFacing(v), 1);
-    D.onTop('tableware', t, 0, 0); D.onTop('candlestick', t, 0.5, 0);
-    if (t) for (const s of [-0.72, 0.72]) { const side = frontOf(t); D.near('bench', [t.at[0] + side[0] * s, t.at[2] + side[1] * s], t.yaw, 0.15); }
-    D.againstWall('weapon-rack', { inner: true }); D.againstWall('armour');
-    D.againstWall('chest'); D.againstWall('stool');
-    if (D.rng() < 0.5) D.againstWall('straw-pallet');
-    if (t) D.ceiling('chandelier', [t.at[0], t.at[2]]);
-    D.onWall('weapon-trophy'); D.onWall('candle-sconce', false);
+    if (D.layout === 0) {
+      const t = D.near('trestle-table', c, yawFacing(v), 1);
+      D.onTop('tableware', t, 0, 0); D.onTop('candlestick', t, 0.5, 0);
+      if (t) for (const s of [-0.72, 0.72]) { const side = frontOf(t); D.near('bench', [t.at[0] + side[0] * s, t.at[2] + side[1] * s], t.yaw, 0.15); }
+      D.againstWall('weapon-rack', { inner: true }); D.againstWall('armour');
+      D.againstWall('chest'); D.againstWall('stool');
+      if (D.rng() < 0.5) D.againstWall('straw-pallet');
+      if (t) D.ceiling('chandelier', [t.at[0], t.at[2]]);
+    } else {
+      const t = D.againstWall('trestle-table', { inner: true });
+      if (t) { const n = frontOf(t); D.at('bench', [t.at[0] + n[0] * (t.prop.bounds.max[2] + 0.3), t.at[2] + n[1] * (t.prop.bounds.max[2] + 0.3)], t.yaw, 0.15); D.onTop('tableware', t, -0.3, 0); D.onTop('candlestick', t, 0.4, 0); }
+      for (let i = 0; i < 2; i++) D.againstWall('straw-pallet', { corner: true });
+      D.focal('brazier');
+      D.againstWall('weapon-rack');
+    }
+    D.onWall('weapon-trophy'); D.onWall('shield'); D.onWall('peg-rail');
+    D.onWall('candle-sconce', false);
     D.extras(['brazier', 'stool', 'barrel', 'crate', 'bucket', 'armour-stand']);
   },
   kitchen: (D) => {
@@ -777,7 +956,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     for (let i = 0; i < 2; i++) D.againstWall('sack');
     D.againstWall('bucket');
     D.onWall('candle-sconce', false);
-    D.extras(['cask-rack', 'crate', 'stool', 'shelf', 'firewood', 'chest']);
+    D.extras(['cask-rack', 'crate', 'stool', 'wall-shelf', 'firewood', 'chest']);
   },
   bakehouse: (D) => {
     // the oven against a solid wall, a kneading table, flour sacks, the faggots to fire it
@@ -798,7 +977,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     for (let i = 0; i < 1 + (D.k % 2); i++) D.near('drying-rack', [c[0] + v[0] * 1.5, c[1] + v[1] * 1.5], yawFacing(v) + Math.PI / 2, 1.5) ?? D.againstWall('drying-rack');
     D.againstWall('bucket'); D.againstWall('chest');
     D.onWall('candle-sconce', false);
-    D.extras(['cauldron', 'bucket', 'stool', 'shelf', 'firewood', 'barrel']);
+    D.extras(['cauldron', 'bucket', 'stool', 'wall-shelf', 'firewood', 'barrel']);
   },
   armoury: (D) => {
     // racks of weapons, harness on its stand, a grindstone to keep the edges, trophies on the walls
@@ -815,7 +994,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     for (let i = 0; i < 2; i++) D.againstWall('barrel');
     const b = D.againstWall('barrel'); D.onTop('candlestick', b);
     D.onWall('sconce', false);
-    D.extras(['crate', 'shelf', 'stool', 'sack', 'chest', 'cask-rack']);
+    D.extras(['crate', 'wall-shelf', 'stool', 'sack', 'chest', 'cask-rack']);
   },
   dungeon: (D) => {
     // chains on the walls, straw on the floor, a bucket, the gaoler's bench and a torch
@@ -855,39 +1034,59 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.extras(['stool', 'loom', 'drying-rack', 'chest', 'cupboard', 'rug']);
   },
   wardrobe: (D) => {
-    // the wardrobe: gowns on a rail, chests and presses of clothes and stuffs
-    D.againstWall('drying-rack') ?? D.near('drying-rack', D.axis().c, 0, 1);
+    // the wardrobe: gowns on a rail and presses of clothes, or cloaks on pegs round the walls over chests
+    // of stuffs and baskets of linen
+    if (D.layout === 0) {
+      D.againstWall('drying-rack') ?? D.near('drying-rack', D.axis().c, 0, 1);
+      D.againstWall('cupboard', { inner: true });
+    } else {
+      D.onWall('peg-rail'); D.onWall('peg-rail');
+      D.againstWall('basket', { corner: true });
+    }
     for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('chest');
-    D.againstWall('cupboard', { inner: true });
+    if (D.tier > 0) D.onWall(D.hangingKind());
     D.onWall('candle-sconce', false);
-    D.extras(['tapestry', 'stool', 'candle-sconce', 'shelf', 'crate', 'sack']);
+    D.extras(['tapestry', 'stool', 'candle-sconce', 'wall-shelf', 'crate', 'sack']);
   },
   garderobe: (D) => {
     // the privy on its wall, water, a candle, a shelf; small rooms keep small things
     D.againstWall('privy', { inner: true }) ?? D.againstWall('privy');
     D.againstWall('bucket'); D.againstWall('stool');
     D.onWall('candle-sconce', false); D.onWall('candle-sconce', false);
-    D.extras(['chest', 'sack', 'crate', 'drying-rack', 'shelf', 'bucket']);
+    D.extras(['chest', 'sack', 'crate', 'drying-rack', 'wall-shelf', 'bucket']);
   },
   nursery: (D) => {
-    // the cradle by the fire, the nurse's bed and stool, a chest of swaddling, a rug
+    // the cradle by the fire, or at the foot of the nurse's bed; a chest of swaddling, a basket, a rug
     const h = hearthGroup(D, { chairs: 0, lamp: false, stool: false });
-    if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('cradle', [h.at[0] + n[0] * (f + 1.4) + t[0] * 0.9, h.at[2] + n[1] * (f + 1.4) + t[1] * 0.9], h.yaw + Math.PI / 2, 0.4); }
+    if (D.layout === 0) {
+      if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('cradle', [h.at[0] + n[0] * (f + 1.4) + t[0] * 0.9, h.at[2] + n[1] * (f + 1.4) + t[1] * 0.9], h.yaw + Math.PI / 2, 0.4); }
+      D.againstWall('bed');
+    } else {
+      const bed = D.againstWall('bed', { corner: true, prefer: farFrom(D.door()) });
+      if (bed) { const n = frontOf(bed), d = bed.prop.bounds.max[2] + 0.55; D.at('cradle', [bed.at[0] + n[0] * d, bed.at[2] + n[1] * d], bed.yaw + Math.PI / 2, 0.4); }
+      D.againstWall('basket');
+    }
     if (!D.placed.some((p) => p.prop.kind.name === 'cradle')) D.focal('cradle');
-    D.againstWall('bed'); D.againstWall('chest'); D.againstWall('stool');
-    D.onWall('tapestry'); D.onWall('candle-sconce', false);
+    D.againstWall('chest'); D.againstWall('stool');
+    D.onWall(D.hangingKind()); D.onWall('candle-sconce', false);
     D.extras(['rug', 'stool', 'cupboard', 'chair', 'drying-rack', 'chest']);
   },
   library: (D) => {
-    // the library and scriptorium: presses of books, a scribe's desk, a lectern with a great book
+    // the library and scriptorium: presses of books, a scribe's desk in the middle or a reading table in
+    // the window's light, a lectern with a great book
     for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('bookcase', { inner: true });
     const { c, v } = D.axis();
-    const desk = D.near('writing-desk', [c[0] + v[0] * 0.6, c[1] + v[1] * 0.6], yawFacing(v), 1);
-    if (desk) { const n = frontOf(desk); D.at('stool', [desk.at[0] + n[0] * 0.55, desk.at[2] + n[1] * 0.55], 0, 0.15); }
-    D.near('lectern', [c[0] - v[0] * 1.2, c[1] - v[1] * 1.2], yawFacing(v), 1);
+    const desk = D.layout === 0 ? D.near('writing-desk', [c[0] + v[0] * 0.6, c[1] + v[1] * 0.6], yawFacing(v), 1) : D.underWindow('trestle-table') ?? D.near('writing-desk', c, yawFacing(v), 1);
+    if (desk) { const n = frontOf(desk), d = desk.prop.kind.name === 'trestle-table' ? desk.prop.bounds.max[2] + 0.3 : 0.55; D.at('stool', [desk.at[0] + n[0] * d, desk.at[2] + n[1] * d], 0, 0.15); D.onTop('book-stack', desk.prop.kind.name === 'trestle-table' ? desk : null, 0.3, 0); }
+    D.near('lectern', D.layout === 0 ? [c[0] - v[0] * 1.2, c[1] - v[1] * 1.2] : c, yawFacing(v), 1);
     const ch = D.againstWall('chest'); D.onTop('book-stack', ch);
+    if (D.layout === 1) D.onWall('wall-shelf');
+    // by tier: a carpet and a portrait, a rug and a hanging, or a basket of rolls and pegs
+    if (D.tier > 0) D.near(D.tier === 2 ? 'carpet' : 'rug', c, yawFacing(v), 1);
+    D.onWall(D.tier === 2 ? 'portrait' : D.hangingKind());
+    if (D.tier === 0) D.againstWall('basket');
     D.onWall('candle-sconce', false);
-    D.extras(['chair', 'shelf', 'rug', 'portrait', 'candle-sconce', 'book-stack']);
+    D.extras(['chair', 'wall-shelf', 'rug', 'portrait', 'candle-sconce', 'book-stack']);
   },
   steward: (D) => {
     // the counting room: the chequered table with its coin and scales, the steward's chair, chests and rolls
@@ -895,7 +1094,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     const t = D.near('counting-table', c, yawFacing(v), 1);
     if (t) { const n = frontOf(t); D.at(D.k % 2 ? 'box-chair' : 'chair', [t.at[0] - n[0] * 0.75, t.at[2] - n[1] * 0.75], t.yaw, 0.15); }
     for (let i = 0; i < 2; i++) D.againstWall('chest');
-    D.againstWall('shelf', { inner: true });
+    D.onWall('wall-shelf');
     D.againstWall('writing-desk');
     D.onWall('candle-sconce', false);
     D.extras(['cupboard', 'stool', 'tapestry', 'crate', 'book-stack', 'chest']);
@@ -906,25 +1105,30 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.near('counting-table', D.axis().c, yawFacing(D.axis().v), 1);
     D.againstWall('weapon-rack');
     D.onWall('candle-sconce', false); D.onWall('weapon-trophy');
-    D.extras(['armour', 'stool', 'crate', 'shelf', 'cupboard', 'chest']);
+    D.extras(['armour', 'stool', 'crate', 'wall-shelf', 'cupboard', 'chest']);
   },
   sewing: (D) => {
-    // the women's work room: a loom against the wall, a table of cloth, stools, a chest of thread
+    // the women's work room: a loom against the wall, a table of cloth in the middle or in the window's
+    // light, stools, baskets of wool, a chest of thread
     D.againstWall('loom', { inner: true }) ?? D.againstWall('loom');
-    const t = D.near('trestle-table', D.axis().c, yawFacing(D.axis().v), 1);
-    if (t) { const n = frontOf(t); for (const s of [-0.7, 0.7]) D.at('stool', [t.at[0] + n[0] * s, t.at[2] + n[1] * s], 0, 0.2); }
-    D.againstWall('chest'); D.againstWall('drying-rack');
+    const t = D.layout === 1 ? D.underWindow('trestle-table') ?? D.near('trestle-table', D.axis().c, yawFacing(D.axis().v), 1) : D.near('trestle-table', D.axis().c, yawFacing(D.axis().v), 1);
+    if (t) { const n = frontOf(t); for (const s of D.layout === 1 ? [t.prop.bounds.max[2] + 0.3] : [-0.7, 0.7]) D.at('stool', [t.at[0] + n[0] * s, t.at[2] + n[1] * s], 0, 0.2); D.onTop('basket', t, 0.5, 0); }
+    D.againstWall('chest'); D.againstWall(D.layout === 1 ? 'basket' : 'drying-rack');
+    if (D.layout === 1) D.onWall('peg-rail');
     D.onWall('candle-sconce', false);
-    D.extras(['shelf', 'sack', 'tapestry', 'bench', 'rug', 'cupboard']);
+    D.extras(['wall-shelf', 'sack', 'tapestry', 'bench', 'rug', 'cupboard']);
   },
   physician: (D) => {
-    // the physician's room: a bed for the sick, a table of jars and bowls, shelves of simples, his desk
-    D.againstWall('bed');
-    const t = D.near('work-table', D.axis().c, yawFacing(D.axis().v), 1);
+    // the physician's room: a bed for the sick (by the wall, or in the corner farthest from the door), a
+    // table of jars and bowls in the middle or in the window's light, simples on shelves, his desk
+    D.layout === 1 ? D.againstWall('bed', { corner: true, prefer: farFrom(D.door()) }) : D.againstWall('bed');
+    const t = D.layout === 1 ? D.underWindow('trestle-table') : D.near('work-table', D.axis().c, yawFacing(D.axis().v), 1);
+    D.onTop('tableware', t, 0, 0);
     if (!t) D.againstWall('trestle-table');
-    D.againstWall('shelf', { inner: true }); D.againstWall('writing-desk'); D.againstWall('stool');
+    D.onWall('wall-shelf'); D.onWall('wall-shelf'); D.againstWall('writing-desk'); D.againstWall('stool');
+    if (D.layout === 1) D.againstWall('basket');
     D.onWall('candle-sconce', false);
-    D.extras(['chest', 'cupboard', 'bucket', 'drying-rack', 'lectern', 'shelf']);
+    D.extras(['chest', 'cupboard', 'bucket', 'drying-rack', 'lectern', 'wall-shelf']);
   },
   mews: (D) => {
     // the falconer's mews: hawks hooded on their perches, straw, water, the falconer's chest
@@ -934,7 +1138,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.near('straw-heap', [c[0] + v[0] * 1.2, c[1] + v[1] * 1.2], 0, 1);
     D.againstWall('bucket'); D.againstWall('chest'); D.againstWall('stool');
     D.onWall('candle-sconce', false);
-    D.extras(['bench', 'barrel', 'sack', 'crate', 'weapon-rack', 'shelf']);
+    D.extras(['bench', 'barrel', 'sack', 'crate', 'weapon-rack', 'wall-shelf']);
   },
   watch: (D) => {
     // the watch room at the top of a tower: a brazier to keep warm, a bench under the slits, arms
@@ -949,7 +1153,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     if (D.rng() < 0.5) D.againstWall('shelf', { inner: true });
     if (D.rng() < 0.4) D.againstWall('firewood');
     D.onWall('candle-sconce', false);
-    D.extras(['cask-rack', 'stool', 'bucket', 'shelf', 'firewood', 'chest']);
+    D.extras(['cask-rack', 'stool', 'bucket', 'wall-shelf', 'firewood', 'chest']);
   },
   cellar: (D) => {
     for (let i = 0; i < times(D.rng, 4, 9); i++) D.againstWall(pick(D.rng, ['barrel', 'barrel', 'barrel', 'crate', 'sack', 'firewood']));
@@ -958,6 +1162,47 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.extras(['cask-rack', 'crate', 'straw-heap', 'bucket', 'chest', 'stool']);
   },
 };
+
+/** Wall pieces that dress a room (not its lights, not its shutters). */
+export const DECOR: ReadonlySet<string> = new Set(['tapestry', 'hanging', 'shield', 'peg-rail', 'wall-shelf', 'portrait', 'stag-head', 'weapon-trophy', 'shackles', 'overmantel-mirror']);
+/** Pieces with a top that small things stand on. */
+const TOPS: ReadonlySet<string> = new Set(['chest', 'cupboard', 'trestle-table', 'work-table', 'side-table', 'counting-table', 'round-table', 'pedestal-desk']);
+/** What fills an empty quarter of the floor, by tier, and what hangs there when nothing stands. */
+const CLUTTER: readonly (readonly string[])[] = [['sack', 'basket', 'bucket', 'crate', 'firewood', 'barrel'], ['basket', 'chest', 'stool', 'bucket', 'sack'], ['chest', 'basket', 'stool', 'side-table']];
+const WALL_FILL: readonly (readonly string[])[] = [['peg-rail', 'wall-shelf'], ['wall-shelf', 'peg-rail', 'shield'], ['wall-shelf', 'shield', 'hanging']];
+const GARRISON: readonly Role[] = ['guard', 'armoury', 'watch', 'gate'];
+
+/**
+ * After a room's recipe: wall dressing up to what its size and tier call for (a hanging, a shelf, pegs
+ * with cloaks; the garrison's shields), small things on the bare tops of its tables and chests (books, a
+ * jug and bowls, a basket; a candle when the room has none), and a piece in or by every quarter of the
+ * floor that is still empty: something that suits the tier against the nearest wall, else on that wall.
+ */
+export function finish(D: RoomDresser) {
+  const want = 1 + (AREA(D.r) > 20 ? 1 : 0) + (D.tier === 2 ? 1 : 0), decor = () => D.placed.filter((p) => DECOR.has(p.prop.kind.name)).length;
+  const living = !SERVICE.includes(D.role);
+  for (const kind of GARRISON.includes(D.role) ? ['shield', 'peg-rail', 'wall-shelf'] : living ? [D.hangingKind(), 'wall-shelf', 'peg-rail'] : ['peg-rail', 'wall-shelf']) { if (decor() >= want) break; D.onWall(kind); }
+  let lit = D.placed.some((p) => p.prop.meta.emitters.some((e) => e.kind === 'candle'));
+  const y0 = D.r.y0;
+  for (const base of [...D.placed]) {
+    if (!TOPS.has(base.prop.kind.name) || base.at[1] > y0 + 0.05 || D.rng() < 0.4) continue;
+    if (D.placed.some((p) => p !== base && p.at[1] > y0 + 0.05 && p.prop.kind.placement === 'floor' && Math.hypot(p.at[0] - base.at[0], p.at[2] - base.at[2]) < 0.6)) continue;
+    const w = base.prop.bounds.max[0] - base.prop.bounds.min[0];
+    const kind = !lit && living ? 'candlestick' : living ? pick(D.rng, ['book-stack', 'tableware', 'book-stack']) : pick(D.rng, ['tableware', 'basket']);
+    if (kind === 'candlestick') lit = true;
+    D.onTop(kind, base, range(D.rng, -w / 4, w / 4), 0);
+  }
+  for (const q of D.emptyQuarters()) {
+    const targets = [q[0], q[Math.floor(q.length / 3)], q[Math.floor((q.length * 2) / 3)]];
+    let ok = false;
+    for (const target of targets) {
+      for (const kind of shuffle([...CLUTTER[D.tier]], D.rng)) if (D.againstWall(kind, { toward: target, within: 0.9 })) { ok = true; break; }
+      for (const kind of ok ? [] : WALL_FILL[D.tier]) if (D.onWall(kind, true, { toward: target, within: 0.9 })) { ok = true; break; }
+      if (!ok) ok = !!D.at(pick(D.rng, CLUTTER[D.tier]), target, D.rng() * 6, 0.4);
+      if (ok) break;
+    }
+  }
+}
 
 /** Dress one room. */
 export function dressRoom(r: RoomSpec, P: InteriorPlan, deps: DressDeps = {}): RoomDressing {
@@ -970,8 +1215,11 @@ export function dressRoom(r: RoomSpec, P: InteriorPlan, deps: DressDeps = {}): R
   const keepOut = keepOutFor(r, P);
   const D = new RoomDresser(r, P, keepOut, rng, make, seed, deps.windows);
   D.k = slot.k; D.role = role;
+  const ch = characterOf(r, P, slot, seed);
+  D.tier = ch.tier; D.layout = ch.layout; D.tone = ch.palette;
   if (role !== 'empty') D.shutters();
   RECIPES[role](D);
+  if (!UNFLOORED.includes(role)) finish(D);
   // a floor on how bare a room may be: top it up with plain things that suit any room
   if (!UNFLOORED.includes(role)) for (const kind of FILL) { if (D.placed.length >= MIN_PROPS) break; D.place(kind); }
   // every family room gets something soft underfoot: a rug laid along the room where a carpet would not fit
