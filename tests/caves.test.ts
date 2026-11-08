@@ -19,7 +19,7 @@ import { pointInPoly, type V2 } from '../src/core/math2d';
 import { heightAt } from '../src/world/terrain';
 import { buildCastle } from '../src/castle/castle';
 import { CARRIED_LANTERN, lanternAt, lanternLit, lanternFire } from '../src/player/lantern';
-import { fireAt } from '../src/light/roomLight';
+import { fireAt, firesByRoom } from '../src/light/roomLight';
 import { mats } from './world';
 
 type V3 = [number, number, number];
@@ -309,6 +309,12 @@ describe('cave rock', () => {
     const none = caveShading({ ...C, chambers: C.chambers.map((c) => ({ ...c, pool: undefined })), features: [] });
     expect(none.pool[3]).toBe(0); expect(none.fire[1]).toBeLessThan(-1000);
     expect(fireSpot({ ...k, pool: undefined }, C.passages, C.features)).toBeNull();
+    // each cave fire is the fire of the room it stands in (no holder: by position), so it lights the room
+    // the camera is in there; the caves have no furniture, so main.ts keeps these with furniture too
+    const byRoom = firesByRoom(P.rooms, caveFires(C, 'g').emitters);
+    expect(byRoom.get('cave-cavern')?.map((x) => x.kind)).toEqual(['brazier']);
+    expect([...byRoom.keys()].every((id) => isCave(P.rooms.find((r) => r.id === id)!))).toBe(true);
+    expect([...byRoom.values()].flat().length).toBe(caveFires(C, 'g').emitters.length);
   });
 
   it('bakes how open the rock is: 1 on open ground, less in a slot and under a shelf', () => {

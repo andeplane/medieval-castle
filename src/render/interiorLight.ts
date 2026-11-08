@@ -33,11 +33,12 @@ const TEX_W = 1 + MAX_AP * AP_TEXELS;
 export type InteriorKey = 'old' | 'new' | 'trim' | 'wood' | 'iron' | 'glass';
 export type InteriorMaterials = Record<InteriorKey, THREE.MeshStandardNodeMaterial>;
 /**
- * The share of the readability floor (InteriorLight.floor) the natural caves get: a quarter, so the caves are
- * dark away from their fires, the fungi and your lantern, and the lit places stand out (caves3: the floor
- * was what made the great cavern one flat, foggy grey).
+ * The share of the readability floor (InteriorLight.floor) the natural caves get: half, so the caves are dark
+ * away from their fires, the fungi and your lantern and the lit places stand out (caves3: the full floor made
+ * the great cavern one flat, foggy grey), while walls and stalactites still read as dim shapes (caves4: at a
+ * quarter the cavern was pitch black on WebGPU).
  */
-export const CAVE_FLOOR = 0.25;
+export const CAVE_FLOOR = 0.5;
 
 /** The material map plus `adopt` (non-enumerable, so `Object.entries(materials)` still lists only
  * materials). Firelight is not a light here: each room's fires come from the fire table

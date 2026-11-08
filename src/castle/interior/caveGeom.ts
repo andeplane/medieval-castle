@@ -572,7 +572,7 @@ export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[
   return out;
 }
 /** The cavern fire's light: low and broad, a little above the logs. */
-export const fireEmitter = (at: V3): LightEmitter => ({ kind: 'brazier', position: [at[0], at[1] + 0.5, at[2]], colour: [1, 0.86, 0.7], intensity: 1.3, flicker: 0.4 });
+export const fireEmitter = (at: V3): LightEmitter => ({ kind: 'brazier', position: [at[0], at[1] + 0.5, at[2]], colour: [1, 0.86, 0.7], intensity: 1.6, flicker: 0.4 });
 
 /**
  * What the cave shaders need of the plan: the pool's still water (centre, level and radius; r 0 if none),
