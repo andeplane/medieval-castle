@@ -147,6 +147,8 @@ async function main() {
     }),
     views: () => L.views.map((v) => v.name),
     setCamera: go,
+    /** Free camera for close-ups: lookFrom([x, y, z], [tx, ty, tz]). */
+    lookFrom: (pos: [number, number, number], target: [number, number, number]) => { camera.position.set(...pos); controls.target.set(...target); controls.update(); },
     step: async (n = 1) => { for (let i = 0; i < n; i++) render(); },
   };
   (window as unknown as Record<string, unknown>).__game = hooks;

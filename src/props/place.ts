@@ -84,7 +84,7 @@ function vignettes(x0: number, z0: number): { placed: Placed[]; stages: Stage[];
     stages.push({ min: [ox, 0, oz], max: [ox + W, H, oz + D], open: 'south' });
     const h = N('hooded-hearth', 1, ox + W / 2, oz), hw = h.prop.bounds.max[0];
     for (const sx of [-1, 1]) N('armour', 2 + sx, ox + W / 2 + sx * (hw + 0.55), oz);
-    P('skin', 3, [ox + W / 2, 0, h.at[2] + 1.9], Math.PI / 2);
+    P('skin', 4, [ox + W / 2, 0, h.at[2] + 1.9], Math.PI / 2); // a bear
     const throne = Wst('throne', 1, oz + 5, ox);
     const high = P('trestle-table', 2, [throne.at[0] + 1.4, 0, oz + 5], Math.PI / 2);
     P('candelabrum', 3, [high.at[0], 0.78, oz + 4.4]); P('tableware', 4, [high.at[0], 0.78, oz + 5.4], Math.PI / 2);
