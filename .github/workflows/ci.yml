@@ -20,6 +20,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: nproc; grep -m1 'model name' /proc/cpuinfo; free -g | head -2
       - run: npm ci --no-audit --no-fund
       - run: npm run coverage
       - run: npm run build
