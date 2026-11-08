@@ -11,6 +11,12 @@
 // - The closed leaf's back face sits `rebate` in from the swing-side face of the wall, against the stop:
 //   the step where the rebated outline (the clear outline grown by LIP) meets the clear one. The leaf is
 //   the clear outline grown by GROW, so it laps the stop all round and stays LIP − GROW off the rebate.
+// - A leaf hangs in one seat and never leaves it. A door that swings both ways (DoorSpec.swingsBack) turns
+//   forward on its pintles into spaces[swingInto] and back on its back edge (local z = backAxis) toward the
+//   other space. It has no stop: its rebate is its own outline (FIT all round) from the face to just behind
+//   it, and behind that the doorway is cut out for its sweep (a square-headed recess as tall as the leaf, as
+//   far back as the leaf reaches, then the stop for the eye and the clear outline; or through the wall).
+//   doorCuts lists the outline at every depth of the doorway; every wall the door passes through is cut by it.
 // - Head rise above the springing (`height`): round w/2, pointed HEAD_RISE.pointed·w, segmental
 //   HEAD_RISE.segmental·w, flat 0. `openingOutline` gives the clear outline the shell should cut.
 import type { DoorSpec, V3 } from './types';
@@ -76,49 +82,99 @@ export function openingOutline(head: DoorSpec['head'], w: number, h: number, seg
  * (openings.ts doorHoles) and the leaf (inset from the rebate by LIP − GROW).
  * `rise` overrides the head's rise for an open arch (PlanX.rise); leaves always take headRise.
  */
-export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2[] } {
+export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2[]; sweep: V2[] } {
   const leafy = d.leaf && d.kind !== 'gate', y = d.centre[1];
   const clear = archOutline(0, y, d.width, d.height, d.head, leafy ? headRise(d.head, d.width) : rise ?? headRise(d.head, d.width));
-  if (!leafy) return { clear, reb: clear };
-  const grown = headTop(d.head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
-  return { clear, reb: clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)])) };
+  if (!leafy) return { clear, reb: clear, sweep: clear };
+  // a back-swinging leaf fills its rebate: the rebate is the leaf's own outline (its size class) grown by FIT
+  const cls = leafClassFor(d, d.kind as LeafKind), back = !!d.swingsBack;
+  const grown = back ? headTop(d.head, cls.ow, cls.oh, -(GROW + FIT)) : headTop(d.head, d.width, d.height, -LIP);
+  const k = back ? (cls.ow + 2 * (GROW + FIT)) / d.width : 1 + (2 * LIP) / d.width;
+  const reb = clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)]));
+  // the back sweep's recess: square-headed, LIP beyond the clear jambs, SWEEP_HEAD over the leaf's top
+  const top = y + cls.sill + leafTop(cls) + SWEEP_HEAD, ks = 1 + (2 * LIP) / d.width;
+  return { clear, reb, sweep: clear.map(([u, yy], i): V2 => (i < 2 ? [u * ks, yy] : [u * ks, top])) };
+}
+
+/** Gap round a back-swinging leaf in its rebate (it has no stop to lap, so it fills the rebate). */
+export const FIT = 0.001;
+/** Headroom over a back-swinging leaf's top in the recess it sweeps through. */
+export const SWEEP_HEAD = 0.015;
+/** Furthest a leaf swings back. */
+export const BACK_ANGLE = Math.PI / 2;
+/** Top of a leaf of class `cls` above its bottom. */
+export const leafTop = (cls: LeafClass) => headTop(cls.head, cls.ow, cls.oh, -GROW)(0) - cls.sill;
+/** Rebate beyond the clear outline: LIP, or for a back-swinging leaf (which fills it) about GROW + FIT. */
+export const lipOf = (d: DoorSpec) => (d.swingsBack ? GROW + FIT : LIP);
+
+/** One stretch of a doorway, by signed depth t along its normal from the wall's mid-plane, and its outline. */
+export interface Cut { t0: number; t1: number; o: V2[]; band: 'clear' | 'reb' | 'sweep' }
+
+/**
+ * The doorway at every depth, from the spaces[0] side (t0 = −∞) to the spaces[1] side (t1 = +∞): the clear
+ * outline only for an arch or a gate; for a leaf the rebate from its swing face to the stop, then the clear
+ * outline; for a back-swinging leaf the rebate to just behind its back face (REAR_STEP), the sweep's recess
+ * as far back as the leaf reaches, then the clear outline (or the recess runs through the wall).
+ */
+export function doorCuts(d: DoorSpec, rise?: number): Cut[] {
+  const { clear, reb, sweep } = doorOutlines(d, rise);
+  if (!d.leaf || d.kind === 'gate') return [{ t0: -Infinity, t1: Infinity, o: clear, band: 'clear' }];
+  // stretches from the swing face inward, by depth from that face
+  const parts: { to: number; o: V2[]; band: Cut['band'] }[] = [];
+  if (!d.swingsBack) parts.push({ to: d.wall / 2 - stopPlane(d), o: reb, band: 'reb' }, { to: Infinity, o: clear, band: 'clear' });
+  else {
+    const b = backReach(d);
+    parts.push({ to: b.rear, o: reb, band: 'reb' }, { to: b.through ? Infinity : b.end, o: sweep, band: 'sweep' });
+    if (!b.through) parts.push({ to: Infinity, o: clear, band: 'clear' });
+  }
+  const sg = d.swingInto === 1 ? 1 : -1, at = (depth: number) => (depth === Infinity ? -sg * Infinity : sg * (d.wall / 2 - depth));
+  const cuts = parts.map((p, i) => {
+    const a = at(i ? parts[i - 1].to : -Infinity), b = at(p.to);
+    return { t0: Math.min(a, b), t1: Math.max(a, b), o: p.o, band: p.band };
+  });
+  return sg > 0 ? cuts.reverse() : cuts;
+}
+
+/** Just in front of a back-swinging leaf's back face (toward its swing face): where its rebate ends. */
+export const REAR_STEP = 0.01;
+/** Room left between the back sweep's reach and the far face for a stop; less, and the recess runs through. */
+export const MIN_STOP = 0.06;
+
+/**
+ * Depths (from the swing face) of a back-swinging leaf's doorway: the end of its rebate, how far back its
+ * sweep reaches, and whether that leaves room for a stop before the far face (else the recess runs through).
+ */
+export function backReach(d: DoorSpec): { rear: number; end: number; through: boolean } {
+  const kind = d.kind as LeafKind, f = doorFrame(d, kind), back = f.pivotDepth - leafDepth(kind).zBack;
+  const cls = leafClassFor(d, kind), radius = Math.hypot(cls.width, -leafDepth(kind).zBack);
+  const end = back + radius + 0.02;
+  return { rear: back - REAR_STEP, end, through: end > d.wall - MIN_STOP };
 }
 
 /**
- * Where the stop is, from the wall's mid-plane toward the swing side (0 for a door without a leaf). A
- * two-way door has one stop per face, each this far from the mid-plane (the leaf's seat depth does not
- * depend on the side), with the clear outline between them.
+ * Where the stop is, from the wall's mid-plane toward the swing side (0 for a door without a leaf): just
+ * behind the shut leaf's back face. A back-swinging leaf has none there (doorCuts), but sits as deep.
  */
 export function stopPlane(d: DoorSpec): number {
   return d.leaf && d.kind !== 'gate' ? d.wall / 2 - stopDepth(d, d.kind) : 0;
 }
 
-/** Thinnest stop ring left between the two seats of a two-way door. */
-export const MIN_STOP = 0.06;
-/** Is the wall thick enough to rebate both faces and keep a stop of at least MIN_STOP between them? */
-export const twoWayFits = (d: DoorSpec) => !!d.leaf && d.kind !== 'gate' && 2 * stopPlane(d) >= MIN_STOP;
-
 /**
- * The seats a door's leaf can hang in, by the space it then swings into: spaces[swingInto] first, and the
- * other space for a two-way door (otherHinge set). Empty for an archway or a gate.
+ * Which way a leaf should swing to open away from someone at (x, z): +1 forward into spaces[swingInto],
+ * −1 back toward the other space. Toward the space they are not in; if that is the other space and the leaf
+ * cannot swing back, forward. In the door's plane (within 5 cm) the side they look away from when `dir` is
+ * given, else null (no preference).
  */
-export function seatsOf(d: DoorSpec): (0 | 1)[] {
-  if (!d.leaf || d.kind === 'gate') return [];
-  return d.otherHinge ? [d.swingInto, d.swingInto === 1 ? 0 : 1] : [d.swingInto];
-}
-/** Hinge side of the leaf when it swings into spaces[seat]. */
-export const hingeOf = (d: DoorSpec, seat: 0 | 1): 'left' | 'right' => (seat === d.swingInto ? d.hinge : d.otherHinge ?? d.hinge);
-
-/**
- * The seat a leaf should swing into to open away from someone at (x, z): the space they are not in. In the
- * door's plane (within 5 cm) the side they look away from when `dir` is given, else null (keep the seat).
- */
-export function seatAwayFrom(d: DoorSpec, x: number, z: number, dir?: { x: number; z: number }): 0 | 1 | null {
+export function swingAwayFrom(d: DoorSpec, x: number, z: number, dir?: { x: number; z: number }): 1 | -1 | null {
   const t = (x - d.centre[0]) * d.normal[0] + (z - d.centre[2]) * d.normal[1];
-  if (Math.abs(t) >= 0.05) return t > 0 ? 0 : 1;
-  if (!dir) return null;
-  const f = dir.x * d.normal[0] + dir.z * d.normal[1];
-  return Math.abs(f) < 1e-6 ? null : f > 0 ? 0 : 1;
+  let away: 0 | 1;
+  if (Math.abs(t) >= 0.05) away = t > 0 ? 0 : 1;
+  else {
+    const f = dir ? dir.x * d.normal[0] + dir.z * d.normal[1] : 0;
+    if (Math.abs(f) < 1e-6) return null;
+    away = f > 0 ? 0 : 1;
+  }
+  return away === d.swingInto || !d.swingsBack ? 1 : -1;
 }
 
 // ------------------------------------------------------------------------------------- frames
@@ -130,9 +186,9 @@ export interface DoorFrame {
   pivotDepth: number; // pivot axis distance inside the swing face
 }
 
-export function doorFrame(d: DoorSpec, kind: LeafKind, seat: 0 | 1 = d.swingInto): DoorFrame {
+export function doorFrame(d: DoorSpec, kind: LeafKind): DoorFrame {
   const n = d.normal, right: V2 = [-n[1], n[0]];
-  const s = seat === 1 ? 1 : -1, eV: V2 = [n[0] * s, n[1] * s];
+  const s = d.swingInto === 1 ? 1 : -1, eV: V2 = [n[0] * s, n[1] * s];
   const swingFace: V2 = [d.centre[0] + eV[0] * d.wall / 2, d.centre[2] + eV[1] * d.wall / 2];
   const back = -leafDepth(kind).zBack; // pivot to back face
   // back face against the stop at `rebate`, but keep the whole leaf (and its knuckles) inside the wall
@@ -148,7 +204,7 @@ export function stopDepth(d: DoorSpec, kind: LeafKind): number {
 /** One swinging leaf of a door: where its pivot is and which way it faces. */
 export interface LeafPlace {
   door: string;
-  seat: 0 | 1;          // the space it swings into: spaces[seat]
+  seat: 0 | 1;          // the space it swings into forward: spaces[seat] (= swingInto)
   kind: LeafKind;
   classKey: string;
   width: number;        // along the leaf, hinge edge to latch edge
@@ -159,7 +215,9 @@ export interface LeafPlace {
   eU: V2;               // hinge → latch (closed), world
   eV: V2;               // into the swing space
   mirrored: boolean;    // (eU, up, eV) is left-handed: use the mirrored geometry
-  maxAngle: number;
+  maxAngle: number;     // forward swing (on the pintles)
+  backAngle: number;    // back swing on its back edge (0: it does not swing back)
+  backAxis: number;     // local z of that back edge (the leaf's back face)
 }
 
 /**
@@ -167,8 +225,8 @@ export interface LeafPlace {
  * from that face and the rebate jamb LIP − GROW beyond the hinge edge, so the swing stops where the
  * leaf would reach the face past that jamb: 100° for a door near the face, ~90° deep in a passage.
  */
-export function maxSwing(pivotDepth: number) {
-  return Math.min(OPEN_ANGLE, Math.PI / 2 + Math.atan((LIP - GROW) / Math.max(pivotDepth, 1e-3)));
+export function maxSwing(pivotDepth: number, lip = LIP) {
+  return Math.min(OPEN_ANGLE, Math.PI / 2 + Math.atan((lip - GROW) / Math.max(pivotDepth, 1e-3)));
 }
 
 /** Class: leaves that share one geometry. Widths/heights are binned down by < BIN, which the GROW lap absorbs. */
@@ -191,14 +249,14 @@ export function leafClassFor(d: DoorSpec, kind: LeafKind): LeafClass {
 
 /**
  * The leaves a door needs: one whole leaf, or none for an open arch or a gate (closed by its portcullis),
- * hung in `seat` (default: spaces[swingInto]; see seatsOf for a two-way door's other seat).
+ * hung in the rebate on the spaces[swingInto] face.
  */
-export function placeLeaves(d: DoorSpec, seat: 0 | 1 = d.swingInto): LeafPlace[] {
+export function placeLeaves(d: DoorSpec): LeafPlace[] {
   if (!d.leaf || d.kind === 'gate') return [];
   const kind: LeafKind = d.kind;
-  const f = doorFrame(d, kind, seat);
+  const f = doorFrame(d, kind);
   const cls = leafClassFor(d, kind);
-  const hs = hingeOf(d, seat) === 'right' ? 1 : -1;
+  const hs = d.hinge === 'right' ? 1 : -1;
   const sill = cls.sill;
   // hinge edge at s = hs·(ow/2 + GROW) (class geometry centred in the opening); latch toward the other jamb
   const sHinge = hs * (cls.ow / 2 + GROW);
@@ -209,9 +267,10 @@ export function placeLeaves(d: DoorSpec, seat: 0 | 1 = d.swingInto): LeafPlace[]
   const mirrored = f.eV[0] * -eU[1] + f.eV[1] * eU[0] < 0;
   const top = headTop(d.head, cls.ow, cls.oh, -GROW);
   return [{
-    door: d.id, seat, kind, classKey: cls.key, width: cls.width,
+    door: d.id, seat: d.swingInto, kind, classKey: cls.key, width: cls.width,
     height: top(0) - sill, sOff: sHinge, sDir: (hs > 0 ? -1 : 1) as 1 | -1,
-    pivot, eU, eV: f.eV, mirrored, maxAngle: maxSwing(f.pivotDepth),
+    pivot, eU, eV: f.eV, mirrored, maxAngle: maxSwing(f.pivotDepth, lipOf(d)),
+    backAngle: d.swingsBack ? BACK_ANGLE : 0, backAxis: leafDepth(kind).zBack,
   }];
 }
 
@@ -242,6 +301,15 @@ export function leafMatrix(L: Pick<LeafPlace, 'pivot' | 'eU' | 'eV' | 'mirrored'
   const ux = L.mirrored ? -L.eU[0] : L.eU[0], uz = L.mirrored ? -L.eU[1] : L.eU[1];
   const basis: M4 = [ux, 0, uz, 0, 0, 1, 0, 0, L.eV[0], 0, L.eV[1], 0, L.pivot[0], L.pivot[1], L.pivot[2], 1];
   return m4mul(basis, L.mirrored ? m4mul(MIRROR, m4mul(local, MIRROR)) : local);
+}
+
+/**
+ * Local transform of a leaf swung by `a`: forward (a > 0) on its pintles, back (a < 0) on its back edge
+ * (local z = backAxis), so the shut leaf (a = 0) is the same either way and never leaves its seat.
+ */
+export function leafSwing(L: Pick<LeafPlace, 'backAxis'>, a: number): M4 {
+  if (a >= 0) return m4swing(a);
+  return m4mul(m4translate(0, 0, L.backAxis), m4mul(m4swing(a), m4translate(0, 0, -L.backAxis)));
 }
 
 /** World position of an unmirrored-local point at a local transform (handy for tests and hit boxes). */
