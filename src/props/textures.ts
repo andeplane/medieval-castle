@@ -272,9 +272,10 @@ export function scenePx(n: TileNoise, i: number, x: number, y: number): Px2 {
 
 /** Pelt: long hair streaks along v, darker roots, mid brown so tints give bear, deer or wolf. */
 export function furPx(n: TileNoise, x: number, y: number): Px2 {
-  const lane = (Math.floor(x * 96) + 0.5) / 96, s = n.n(lane, y, 24) * 0.5 + 0.5, s2 = n.n(x * 1.3, y * 0.3, 64) * 0.5 + 0.5;
-  const k = 0.5 + 0.5 * Math.max(s, s2 * 0.8);
-  return { c: [0.42 * k, 0.32 * k, 0.22 * k], h: Math.max(s, s2), r: 0.8 };
+  // short fibres: lanes across, each broken every ~1.5 cm along; tufts and a soft clumping on top
+  const lane = (Math.floor(x * 96) + 0.5) / 96, fib = n.n(lane, y, 128) * 0.5 + 0.5, tuft = n.n(x, y, 24) * 0.5 + 0.5, clump = n.n(x, y, 8) * 0.5 + 0.5;
+  const k = 0.42 + 0.33 * fib * (0.6 + 0.4 * tuft) + 0.25 * clump;
+  return { c: [0.36 * k, 0.27 * k, 0.19 * k], h: 0.3 * clump + 0.7 * fib * tuft, r: 0.85 };
 }
 
 /** The paint atlas (geom ATLAS): every carpet, runner, canvas and pelt design in one non-tiling texture. */

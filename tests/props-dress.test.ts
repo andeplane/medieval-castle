@@ -4,11 +4,14 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
 import { portcullisInPlan } from '../src/castle/interior/portcullis';
+import { buildShell, type WindowFace } from '../src/castle/interior/shell';
+import { islandCastle } from './world';
+import { yawXZ } from '../src/props/place';
 
 // a 6 × 5 m room with doors on its west and east walls, and a store room behind the north wall
 const room = (id: string, poly: V2[], kind: RoomSpec['kind'] = 'chamber', floor = 3): RoomSpec => ({ id, zone: 'N', floor, kind, poly, y0: 10, y1: 13.5 });
@@ -68,6 +71,17 @@ describe('dressing helpers', () => {
       expect(Math.min(...xs)).toBeCloseTo(-0.5); expect(Math.max(...xs)).toBeCloseTo(2.5); expect(Math.min(...zs)).toBeCloseTo(-0.5); expect(Math.max(...zs)).toBeCloseTo(1.5);
     }
   });
+  it('a wall is solid unless a window opens in it (or in a facet just off it, as in a round room)', () => {
+    const win = (c: V2, n: V2): WindowFace => ({ room: 'A', c, n, t: [n[1], -n[0]], w: 1, y0: 11, ys: 12.5, y1: 13, slit: false });
+    const mk = (ws: WindowFace[]) => new RoomDresser(R, plan, [], mulberry32(1), variantPool(), 0, ws);
+    const south = (D: RoomDresser) => D.walls.find((w) => w.n[0] < -0.9)!; // the east wall, x = 6, facing -x
+    expect(mk([]).solid(south(mk([])))).toBe(false); // windows unknown: only inner walls are solid
+    const on = mk([win([6, 2.5], [-1, 0])]), off = mk([win([5.7, 2.5], [-1, 0])]), other = mk([win([0, 2.5], [1, 0])]);
+    expect(on.solid(south(on))).toBe(false);
+    expect(off.solid(south(off))).toBe(false);
+    expect(other.solid(south(other))).toBe(true);
+    expect(off.wallAt(off.windows[0])).toBeNull();
+  });
   it('variant pool reuses meshes', () => {
     let built = 0;
     const make = variantPool((k, s) => { built++; return makeProp(k, s); });
@@ -81,25 +95,27 @@ describe('dressing helpers', () => {
     expect(roleOf(room('x', R.poly, 'gate'), r)).toBe('gate');
     expect(roleOf(room('x', R.poly, 'passage'), r)).toBe('passage');
     expect(roleOf(room('x', R.poly, 'stair'), r)).toBe('empty');
-    expect(roleOf(room('x', R.poly, 'undercroft', 0), r)).toBe('cellar');
-    expect(roleOf(room('x', R.poly, 'tower', -1), r)).toBe('cellar');
-    expect(['store', 'empty']).toContain(roleOf(room('x', [[0, 0], [2, 0], [2, 2], [0, 2]]), r));
     for (let i = 0; i < 20; i++) {
-      expect(['kitchen', 'store', 'guard']).toContain(roleOf(room('x', R.poly, 'chamber', 0), r));
-      expect(['guard', 'study', 'bedchamber', 'store']).toContain(roleOf(room('x', R.poly, 'chamber', 1), r));
-      expect(['bedchamber', 'solar', 'study']).toContain(roleOf(room('x', R.poly, 'chamber', 5), r));
+      expect(POOLS.ground).toContain(roleOf(room('x', R.poly, 'undercroft', 0), r));
+      expect(POOLS.deep).toContain(roleOf(room('x', R.poly, 'tower', -1), r));
+      expect(['store', 'garderobe']).toContain(roleOf(room('x', [[0, 0], [2, 0], [2, 2], [0, 2]]), r));
+      expect(['kitchen', ...POOLS.ground]).toContain(roleOf(room('x', R.poly, 'chamber', 0), r));
+      expect(POOLS.low).toContain(roleOf(room('x', R.poly, 'chamber', 1), r));
+      expect(POOLS.high).toContain(roleOf(room('x', R.poly, 'chamber', 5), r));
     }
   });
+
 });
 
 const front = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
 const HEARTHS = ['chimneypiece', 'hooded-hearth'];
 /** The hearth's back stands on an inner wall of its room, and it faces into the room. */
-function hearthOnInnerWall(h: Placed, r: RoomSpec, P: InteriorPlan) {
+function hearthOnInnerWall(h: Placed, r: RoomSpec, P: InteriorPlan, ws?: WindowFace[]) {
   const n = front(h), back: V2 = [h.at[0] + n[0] * h.prop.bounds.min[2], h.at[2] + n[1] * h.prop.bounds.min[2]];
   return wallsOf(r, P).some((w) => {
     const d = (back[0] - w.a[0]) * w.n[0] + (back[1] - w.a[1]) * w.n[1], s = ((back[0] - w.a[0]) * (w.b[0] - w.a[0]) + (back[1] - w.a[1]) * (w.b[1] - w.a[1])) / w.L;
-    return w.inner && Math.abs(d - 0.04) < 0.02 && s > 0 && s < w.L && n[0] * w.n[0] + n[1] * w.n[1] > 0.999;
+    const solid = w.inner || (!!ws && !ws.some((x) => x.room === r.id && x.n[0] * w.n[0] + x.n[1] * w.n[1] > 0.99 && Math.abs((x.c[0] - w.a[0]) * w.n[0] + (x.c[1] - w.a[1]) * w.n[1]) < 0.05));
+    return solid && Math.abs(d - 0.04) < 0.02 && s > 0 && s < w.L && n[0] * w.n[0] + n[1] * w.n[1] > 0.999;
   });
 }
 /** Every armchair and sofa turns to the fire: its front within 50 degrees of the line to the hearth. */
@@ -152,7 +168,7 @@ describe('dressing a small plan', () => {
     const P: InteriorPlan = { rooms: [U], doors: [door('w', ['outside', 'A'], -0.5, 1.5, [1, 0], [0, 1]), door('e', ['A', 'x'], 7.5, 1.5, [1, 0], [0, 1])], stairs: [] };
     for (let seed = 0; seed < 6; seed++) {
       const d = dressRoom(U, P, { seed, make });
-      expect(d.placed.filter((p) => p.prop.kind.blocksNav)).toHaveLength(0);
+      expect(d.placed.filter((p) => p.prop.kind.blocksNav).map((p) => p.prop.kind.name)).toEqual([]);
       expect(d.placed.some((p) => p.prop.kind.name === 'tapestry')).toBe(false);
     }
     expect(dressRoom({ ...U, kind: 'stair' }, P, { make }).placed).toHaveLength(0);
@@ -189,18 +205,22 @@ describe('dressing a small plan', () => {
 });
 
 describe('dressing the castle plan', () => {
-  let P: InteriorPlan, D: Dressing;
-  beforeAll(() => { P = planInterior(); D = dressPlan(P); }, 60_000); // slow next to the walking tests on a loaded machine
+  let P: InteriorPlan, D: Dressing, W: WindowFace[];
+  beforeAll(() => {
+    const X = planInterior();
+    P = X; W = buildShell(X, islandCastle().builder).embrasures.map((e) => e.face);
+    D = dressPlan(P, { windows: W });
+  }, 120_000); // slow next to the walking tests on a loaded machine
 
   it('is deterministic', () => {
-    const E = dressPlan(P);
+    const E = dressPlan(P, { windows: W });
     expect(E.rooms.map((r) => r.placed.map((p) => [p.prop.kind.name, p.at.map((v) => v.toFixed(3)).join()]))).toEqual(D.rooms.map((r) => r.placed.map((p) => [p.prop.kind.name, p.at.map((v) => v.toFixed(3)).join()])));
   });
   it('furnishes most rooms, inside their walls, within budget', () => {
     const furnished = D.rooms.filter((r) => r.placed.length > 0).length;
     expect(furnished).toBeGreaterThan(P.rooms.length * 0.85);
     const tris = D.rooms.reduce((s, r) => s + r.placed.reduce((t, p) => t + p.prop.mesh.triangles, 0), 0);
-    expect(tris).toBeLessThan(1_000_000); // 19th-century rooms: ~940k (was ~740k); culling shows a few groups at a time
+    expect(tris).toBeLessThan(1_250_000); // 19th-century rooms ~960k; + medieval sets, shutters, room roles ~1.19M; culling shows a few groups at a time
     for (const [, placed] of D.byGroup) expect(placed.reduce((t, p) => t + p.prop.mesh.triangles, 0)).toBeLessThan(60_000);
     const rooms = new Map(P.rooms.map((r) => [r.id, r]));
     for (const d of D.rooms) {
@@ -226,12 +246,12 @@ describe('dressing the castle plan', () => {
     const floor = D.rooms.find((r) => r.room === id)!.placed.filter((p) => p.prop.kind.placement === 'floor');
     for (const p of floor) expect(convexOverlap(footRect(p), zone), p.prop.kind.name).toBe(false);
   });
-  it('puts every hearth on an inner wall and turns the seats round it to the fire', () => {
+  it('puts every hearth on a solid wall (no window in it) and turns the seats round it to the fire', () => {
     const rooms = new Map(P.rooms.map((r) => [r.id, r]));
     let withHearth = 0, family = 0;
     for (const d of D.rooms) {
       const r = rooms.get(d.room)!;
-      for (const h of d.placed.filter((p) => HEARTHS.includes(p.prop.kind.name))) expect(hearthOnInnerWall(h, r, P), d.room).toBe(true);
+      for (const h of d.placed.filter((p) => HEARTHS.includes(p.prop.kind.name))) expect(hearthOnInnerWall(h, r, P, W), d.room).toBe(true);
       expect(seatsFaceHearth(d), d.room).toBe(true);
       if (FAMILY.includes(d.role)) { family++; if (d.placed.some((p) => HEARTHS.includes(p.prop.kind.name))) withHearth++; }
     }
@@ -309,9 +329,116 @@ describe('dressing the castle plan', () => {
   });
   it('has the signature rooms', () => {
     const hall = D.rooms.find((r) => r.role === 'hall')!;
-    expect(hall.placed.map((p) => p.prop.kind.name)).toEqual(expect.arrayContaining(['throne', 'trestle-table', 'bench', 'chandelier', 'hooded-hearth', 'armour', 'stag-head']));
-    expect(D.rooms.find((r) => r.role === 'chapel')!.placed.map((p) => p.prop.kind.name)).toContain('altar');
+    expect(hall.placed.map((p) => p.prop.kind.name)).toEqual(expect.arrayContaining(['box-chair', 'refectory-table', 'bench', 'dresser', 'chandelier', 'hooded-hearth', 'armour', 'stag-head']));
+    expect(hall.placed.filter((p) => p.prop.kind.name === 'refectory-table').length).toBeGreaterThanOrEqual(2);
+    expect(D.rooms.find((r) => r.role === 'chapel')!.placed.map((p) => p.prop.kind.name)).toEqual(expect.arrayContaining(['stone-altar', 'prie-dieu'])); // eturret3 is 2.1 m wide, a doorway's clear zone across its middle
+    for (const k of D.rooms.filter((r) => r.role === 'kitchen')) expect(k.placed.map((p) => p.prop.kind.name), k.room).toEqual(expect.arrayContaining(['spit-hearth', 'work-table']));
     const beds = D.rooms.filter((r) => r.role === 'bedchamber');
     expect(beds.filter((r) => r.placed.some((p) => p.prop.kind.name === 'bed' || p.prop.kind.name === 'four-poster')).length).toBeGreaterThan(beds.length * 0.9);
+  });
+
+  // ---------------------------------------------------------------- windows (the shell's embrasures)
+  const facesOf = (p: Placed, ws: WindowFace[]) => {
+    const [fx, fz] = yawXZ(0, 1, p.yaw);
+    return ws.filter((w) => w.n[0] * fx + w.n[1] * fz > 0.999 && Math.abs((p.at[0] - w.c[0]) * w.n[0] + (p.at[2] - w.c[1]) * w.n[1] - 0.01) < 0.012);
+  };
+  const jambErr = (p: Placed, w: WindowFace) => Math.abs(Math.abs((p.at[0] - w.c[0]) * w.t[0] + (p.at[2] - w.c[1]) * w.t[1]) - (p.prop.bounds.max[0] - p.prop.bounds.min[0]) / 2 - w.w / 2);
+  /** The window a shutter leaf is hung at: in its plane, its inner edge nearest a jamb. */
+  const faceOf = (p: Placed, ws: WindowFace[]) => facesOf(p, ws).sort((a, b) => jambErr(p, a) - jambErr(p, b))[0];
+  it('knows where every window opens: on its room\'s wall, facing in, a hole of real size', () => {
+    expect(W.length).toBeGreaterThan(120);
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    for (const w of W) {
+      const r = rooms.get(w.room)!;
+      expect(r, w.room).toBeDefined();
+      expect(pointInPoly(r.poly, w.c[0] + w.n[0] * 0.1, w.c[1] + w.n[1] * 0.1), w.room).toBe(true);
+      expect(w.w).toBeGreaterThan(0.1); expect(w.y0).toBeGreaterThanOrEqual(r.y0 - 1e-6); expect(w.ys).toBeGreaterThan(w.y0); expect(w.y1).toBeLessThanOrEqual(r.y1 + 1e-6);
+      expect(Math.abs(w.n[0] * w.t[0] + w.n[1] * w.t[1])).toBeLessThan(1e-6);
+    }
+  });
+  it('hangs shutters at most windows, each leaf hinged at a jamb of a real window, flat on its wall', () => {
+    let windows = 0, shuttered = 0;
+    for (const d of D.rooms) {
+      const ws = W.filter((w) => w.room === d.room);
+      const leaves = d.placed.filter((p) => p.prop.kind.name === 'shutter');
+      for (const p of leaves) {
+        const w = faceOf(p, ws);
+        expect(w, `${d.room} shutter`).toBeDefined();
+        expect(jambErr(p, w!), d.room).toBeLessThan(0.03); // its inner edge at the jamb
+        expect(p.at[1] + p.prop.bounds.max[1]).toBeLessThanOrEqual(w!.ys + 0.01);
+      }
+      if (d.role === 'empty') continue;
+      for (const w of ws.filter((x) => !x.slit && x.ys - Math.max(x.y0, P.rooms.find((r) => r.id === d.room)!.y0 + 0.45) >= 0.5)) {
+        windows++;
+        if (leaves.some((p) => faceOf(p, [w]))) shuttered++;
+      }
+    }
+    expect(shuttered).toBeGreaterThan(windows * 0.7);
+  });
+  it('keeps shutters and hangings off doorways, window holes and each other, and standing pieces out of the shutters and low niches', () => {
+    const bad: string[] = [];
+    for (const d of D.rooms) {
+      const r = P.rooms.find((x) => x.id === d.room)!, ws = W.filter((w) => w.room === d.room);
+      const leaves = d.placed.filter((p) => p.prop.kind.name === 'shutter');
+      const stand = d.placed.filter((p) => p.prop.kind.placement === 'floor' && !flat(p.prop) && p.at[1] < r.y0 + 0.05);
+      for (const p of leaves) {
+        const f = footRect(p);
+        if (d.keepOut.some((k) => convexOverlap(f, k))) bad.push(`${d.room} shutter in a door zone`);
+        for (const o of stand) if (convexOverlap(f, footRect(o), -0.01)) bad.push(`${d.room} shutter/${o.prop.kind.name}`);
+        for (const q of leaves) if (q !== p && convexOverlap(f, footRect(q), -0.01)) bad.push(`${d.room} shutter/shutter`);
+      }
+      for (const w of ws.filter((x) => x.y0 - r.y0 < 0.6)) {
+        const mouth = strip([w.c[0], w.c[1]], [w.c[0] + w.n[0] * 0.5, w.c[1] + w.n[1] * 0.5], w.w / 2 - 0.02);
+        for (const o of stand) if (convexOverlap(footRect(o), mouth, -0.01)) bad.push(`${d.room} ${o.prop.kind.name} in a low niche`);
+      }
+      // wall pieces (other than shutters) hang clear of every window hole on their wall
+      for (const p of d.placed.filter((x) => x.prop.kind.placement === 'wall' && x.prop.kind.name !== 'shutter')) {
+        for (const w of ws.filter((x) => facesOf({ ...p, at: [p.at[0] - x.n[0] * 0.02, p.at[1], p.at[2] - x.n[1] * 0.02] }, [x]).length)) {
+        const s = (p.at[0] - w.c[0]) * w.t[0] + (p.at[2] - w.c[1]) * w.t[1], hw = (p.prop.bounds.max[0] - p.prop.bounds.min[0]) / 2;
+        const y0 = p.at[1] + p.prop.bounds.min[1], y1 = p.at[1] + p.prop.bounds.max[1];
+        if (Math.abs(s) < w.w / 2 + hw && y0 < w.y1 && y1 > w.y0) bad.push(`${d.room} ${p.prop.kind.name} over a window`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------- roles
+  it('deals the castle its medieval household: every role, two kitchens, far fewer bedchambers', () => {
+    const T = roleTable(P), n = (role: string) => [...T.values()].filter((x) => x.role === role).length;
+    for (const role of ['kitchen', 'buttery', 'pantry', 'brewhouse', 'bakehouse', 'laundry', 'armoury', 'guard', 'wine-cellar', 'dungeon', 'well-room',
+      'lord', 'lady', 'wardrobe', 'garderobe', 'nursery', 'library', 'steward', 'treasury', 'sewing', 'physician', 'mews', 'watch', 'hall', 'chapel']) expect(n(role), role).toBeGreaterThan(0);
+    expect(n('kitchen')).toBeGreaterThanOrEqual(2);
+    for (const one of ['lord', 'lady', 'treasury', 'hall', 'chapel']) expect(n(one), one).toBe(1);
+    expect(n('bedchamber')).toBeLessThan(35);
+    expect(roleTable(P)).toBe(T); // dealt once per plan and seed
+    expect(roleTable(P, 7)).not.toBe(T);
+    // the k numbers count the rooms of each role from 0
+    const ks = new Map<string, number[]>();
+    for (const x of T.values()) ks.set(x.role, [...(ks.get(x.role) ?? []), x.k]);
+    for (const [, v] of ks) expect([...v].sort((a, b) => a - b)).toEqual(v.map((_, i) => i));
+    for (const d of D.rooms) expect(d.role).toBe(T.get(d.room)!.role);
+  });
+  it('furnishes no two rooms of one role with the same set of pieces', () => {
+    const seen = new Map<string, string>(), dup: string[] = [];
+    for (const d of D.rooms) {
+      if (d.role === 'empty' || d.role === 'passage') continue;
+      const sig = `${d.role}|${d.placed.map((p) => p.prop.kind.name).sort().join(',')}`;
+      if (seen.has(sig)) dup.push(`${seen.get(sig)}=${d.room}`); else seen.set(sig, d.room);
+    }
+    expect(dup).toEqual([]);
+  });
+  it('gives every room with a floor at least MIN_PROPS pieces', () => {
+    const low = D.rooms.filter((d) => !UNFLOORED.includes(d.role) && d.placed.length < MIN_PROPS).map((d) => `${d.room} ${d.role} ${d.placed.length}`);
+    expect(low).toEqual([]);
+    expect(D.rooms.find((d) => d.role === 'chapel')!.placed.length).toBeGreaterThanOrEqual(MIN_PROPS);
+  });
+  it('builds each role round its focal piece', () => {
+    const focal: Record<string, string[]> = { kitchen: ['spit-hearth'], buttery: ['cask-rack'], 'wine-cellar': ['cask-rack'], brewhouse: ['mash-tun'], bakehouse: ['bread-oven'], laundry: ['wash-tub'], armoury: ['weapon-rack'],
+      dungeon: ['shackles'], 'well-room': ['well'], lord: ['four-poster'], lady: ['four-poster'], garderobe: ['privy'], nursery: ['cradle'], library: ['bookcase', 'writing-desk'], steward: ['counting-table'],
+      treasury: ['chest'], sewing: ['loom'], mews: ['perch'], watch: ['brazier'], wardrobe: ['drying-rack', 'chest'] };
+    const miss: string[] = [];
+    for (const d of D.rooms) { const f = focal[d.role]; if (f && !d.placed.some((p) => f.includes(p.prop.kind.name))) miss.push(`${d.room} ${d.role}`); }
+    expect(miss).toEqual([]);
   });
 });

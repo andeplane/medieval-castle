@@ -1,6 +1,6 @@
 // The lantern the player carries in the caves (the castle's cellars and tunnels have wall torches; the
-// caves have none). It is one more source of the shared light rig (src/light: LightRig.add as a mobile
-// source), lit while the camera is in a cave room and out elsewhere, held low and to the right.
+// caves have none). It is the interior shader's one carried light (render/interiorLight.ts setCarried),
+// lit while the camera is in a cave room and out elsewhere, held low and to the right.
 import type { LightEmitter, V3 } from '../light/types';
 import type { SpaceId } from '../castle/interior/types';
 
