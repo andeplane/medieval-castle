@@ -144,7 +144,11 @@ export function islandObstacles(spots: RockSpot[], env: Pick<RockEnv, 'sample'>,
   return out;
 }
 
-/** Instanced rocks: one InstancedMesh per shape and detail level. */
+const ROCK_QUARTERS = 4;
+/** The quarter round the castle (0..3, by bearing) a rock at (x, z) is drawn in. */
+export const rockQuarter = (x: number, z: number) => Math.min(ROCK_QUARTERS - 1, Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * ROCK_QUARTERS));
+
+/** Instanced rocks: one InstancedMesh per shape, detail level and quarter. */
 export function buildRocks(material: THREE.Material, env: RockEnv, deps: GenDeps) {
   const SHAPES = ROCK_SHAPES;
   const { near, far } = placeRocks(env, deps);
@@ -152,22 +156,28 @@ export function buildRocks(material: THREE.Material, env: RockEnv, deps: GenDeps
   group.name = 'rocks';
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), pos = new THREE.Vector3(), sc = new THREE.Vector3();
   let tris = 0;
+  // one InstancedMesh per shape, level and quarter round the castle: each quarter's bounding sphere is
+  // its own, so frustum culling skips the quarters out of view (a mesh of all the island's rocks never is)
   const make = (list: Spot[], detail: number, shadows: boolean, tag: string) => {
     for (let sh = 0; sh < SHAPES; sh++) {
-      const mine = list.filter((s) => s.shape === sh);
-      if (!mine.length) continue;
+      const all = list.filter((s) => s.shape === sh);
+      if (!all.length) continue;
       const g = rockGeometry(deps, `rock-shape-${sh}`, detail);
-      const im = new THREE.InstancedMesh(g, material, mine.length);
-      mine.forEach((s, i) => {
-        e.set(s.tx, s.yaw, s.tz, 'YXZ'); q.setFromEuler(e);
-        m.compose(pos.set(s.x, s.y, s.z), q, sc.set(s.s, s.sy, s.s * (0.85 + ((i * 0.618) % 1) * 0.3)));
-        im.setMatrixAt(i, m);
-      });
-      im.computeBoundingSphere();
-      im.castShadow = shadows; im.receiveShadow = true;
-      im.name = `rocks-${tag}-${sh}`;
-      group.add(im);
-      tris += (g.attributes.position.count / 3) * mine.length;
+      for (let qd = 0; qd < ROCK_QUARTERS; qd++) {
+        const mine = all.filter((s) => rockQuarter(s.x, s.z) === qd);
+        if (!mine.length) continue;
+        const im = new THREE.InstancedMesh(g, material, mine.length);
+        mine.forEach((s, i) => {
+          e.set(s.tx, s.yaw, s.tz, 'YXZ'); q.setFromEuler(e);
+          m.compose(pos.set(s.x, s.y, s.z), q, sc.set(s.s, s.sy, s.s * (0.85 + ((i * 0.618) % 1) * 0.3)));
+          im.setMatrixAt(i, m);
+        });
+        im.computeBoundingSphere();
+        im.castShadow = shadows; im.receiveShadow = true;
+        im.name = `rocks-${tag}-${sh}-${qd}`;
+        group.add(im);
+        tris += (g.attributes.position.count / 3) * mine.length;
+      }
     }
   };
   make(near, 2, true, 'near');

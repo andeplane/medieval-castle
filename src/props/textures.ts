@@ -47,7 +47,7 @@ export function woodTex(N = 512): PropTex {
     // scrubbed oak at walking distance, not stripes (Anders, WebGPU 2026-11-08: the old 48 rings/m at
     // high contrast and a stepped pore height read as black-and-white zebra on table tops)
     const warp = n.fbm(u, v, 4, 3) * 0.6 + w * 0.8;
-    const ring = Math.sin((v * 22 + warp * 2) * Math.PI * 2) * 0.5 + 0.5;
+    const ring = Math.sin((v * 22 + warp * 0.8) * Math.PI * 2) * 0.5 + 0.5; // nearly straight: quarter-sawn boards
     const lane = (Math.floor(v * 256) + 0.5) / 256, pores = n.n(u, lane, 32) * 0.5 + 0.5; // fine streaks along the grain
     const blot = n.fbm(u + 0.3, v + 0.7, 2, 3) * 0.5 + 0.5;
     const k = (0.84 + 0.1 * ring * ring + 0.06 * pores) * (0.88 + 0.22 * blot) * (1 - w * 0.4);
