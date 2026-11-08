@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three';
-import { cameraSpaces, createVisibility, shadowInView, tagBoxes, doorwaySpaces, drawnSpaces, roomGraph, spaceShown, visibleSet, windowLinks, type VisContext } from '../src/world/visibility';
+import { cameraSpaces, createVisibility, shadowInView, sightSpaces, outsideOpenings, tagBoxes, doorwaySpaces, drawnSpaces, roomGraph, spaceShown, visibleSet, windowLinks, type VisContext } from '../src/world/visibility';
 import type { DoorSpec, InteriorGroup, InteriorPlan, RoomSpec, V3 } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
 import type { Aperture } from '../src/render/interiorMath';
@@ -172,6 +172,61 @@ describe('createVisibility', () => {
     expect(vis.state.inside).toBe(false);
     expect(vis.update()).toMatchObject({ inside: false, from: ['outside'] });
     expect(vis.isRoomVisible('A')).toBe(true);
+  });
+});
+
+describe('what a line of sight can reach (for the water)', () => {
+  test('open doorways and stairs as far as they lead, rooms whose windows look onto the start; no shut leaf', () => {
+    // A: its shut doors stop it; the gate (no leaf) and the cellar stair
+    // (and from the outside through the grille into the tunnel)
+    expect(ids(sightSpaces(graph, ['A']))).toEqual(['A', 'cellar', 'outside', 'tunnel']);
+    expect(ids(sightSpaces(graph, ['A'], (d) => d === 'A>B'))).toEqual(['A', 'B', 'C', 'cellar', 'outside', 'tunnel']);
+    // from the courtyard: in at C's window (and on through its open arch to B), not through its shut door to A
+    expect(ids(sightSpaces(graph, ['courtyard']))).toEqual(['B', 'C', 'courtyard']);
+    expect(ids(sightSpaces(graph, ['ghost']))).toEqual([]);
+  });
+  test('the windows of those rooms that face out, and their open doorways onto the outside', () => {
+    const aps = [
+      { id: 'w0', kind: 'glass', c: [5, 5, -0.5], n: [0, 0, -1], w: 1, h: 2, outer: 0.3, room: 0 },  // A, facing out
+      { id: 'w1', kind: 'glass', c: [-0.5, 5, 4], n: [-1, 0, 0], w: 1, h: 2, outer: 0.3, room: 0 },  // A, onto the courtyard
+      { id: 'w2', kind: 'glass', c: [15, 5, -0.5], n: [0, 0, -1], w: 1, h: 2, outer: 0.3, room: 1 }, // B: not in sight
+      { id: 'd', kind: 'open', c: [10.5, 4, 4], n: [1, 0, 0], w: 1, h: 2, outer: 0.5, room: 0, door: 'A>B' },
+      { id: 'p', kind: 'portal', c: [0, 0, 0], n: [1, 0, 0], w: 1, h: 2, outer: 0, room: 0 },
+      { id: 'g', kind: 'glass', c: [0, 0, 0], n: [1, 0, 0], w: 1, h: 2, outer: 0, room: 99 },
+    ] as unknown as Aperture[];
+    const o = JSON.parse(JSON.stringify(outsideOpenings(plan, aps, (x) => x < 0, new Set(['A', 'tunnel']))));
+    expect(o).toEqual([
+      { c: [5, 5, -0.5], n: [0, 0, -1], w: 1, h: 2, ahead: 0.3 },
+      { c: [5, 3 + 1.25, -0.5], n: [0, 0, -1], w: 1, h: 2.5, ahead: 0.5 }, // the gate, out toward spaces[0]
+      { c: [2, -6 + 1.25, 40.5], n: [0, 0, 1], w: 1, h: 2.5, ahead: 0.5 },  // the grille (no leaf to shut), toward spaces[1]
+    ]);
+    const leafy: InteriorPlan = { ...plan, doors: [door('out', ['A', 'outside'], [10.5, 3, 4])] };
+    expect(outsideOpenings(leafy, [], () => false, new Set(['A']))).toEqual([]);
+    expect(outsideOpenings(leafy, [], () => false, new Set(['A']), () => true)).toHaveLength(1);
+  });
+  test('createVisibility draws the water only when a line of sight can reach it', () => {
+    const mkGroups = (): InteriorGroup[] => [['N:0', ['A', 'B']]].map(([key, r]) => ({ key: key as string, zone: '', floor: 0, rooms: r as string[], bounds: {} as never, object: { visible: true } as never }));
+    const named: Record<string, { name: string; visible: boolean }> = { water: { name: 'water', visible: true } };
+    const camera = { position: { x: 5, y: 4.6, z: 4 } };
+    const aps = [{ id: 'w0', kind: 'glass', c: [5, 5, -0.5], n: [0, 0, -1], w: 1, h: 2, outer: 0.3, room: 0 }] as unknown as Aperture[];
+    let planes: { normal: { x: number; y: number; z: number }; constant: number }[] = [];
+    const ground = (_x: number, z: number) => (z < -3 ? -1 : 2.6); // the moat 3 m south of A
+    const vis = createVisibility(camera, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] }, apertures: aps, ground, court: (x) => x < 0, frustum: () => ({ planes, corners: [[0, -0.2, -1]] }) });
+    vis.update();
+    expect(named.water.visible).toBe(true);  // in A, looking out of its south window and the gate down to the moat
+    planes = [{ normal: { x: 0, y: 0, z: 1 }, constant: -2 }]; // looking north (z ≥ 2 only)
+    vis.update();
+    expect(named.water.visible).toBe(false);
+    camera.position = { x: 5, y: 4.6, z: -20 }; // outdoors: the frustum's corners look down
+    vis.update();
+    expect(named.water.visible).toBe(true);
+    // no frustum given: the water is left as the outdoors decide
+    const plain = createVisibility({ position: { x: 5, y: 4.6, z: 4 } }, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] } });
+    plain.update();
+    expect(named.water.visible).toBe(true);
+    const noGround = createVisibility({ position: { x: 5, y: 4.6, z: 4 } }, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] }, frustum: () => ({ planes: [], corners: [] }) });
+    noGround.update();
+    expect(named.water.visible).toBe(true); // the gate's lines reach y 0 over no ground
   });
 });
 
