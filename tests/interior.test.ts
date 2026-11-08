@@ -335,9 +335,14 @@ describe('interior camera bookmarks', () => {
   it('derives the interior views from the plan', () => {
     const v = interiorViews(P);
     const names = v.map((x) => x.name);
-    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar']) expect(names).toContain(n);
+    for (const n of ['gatepass', 'hall', 'chamber', 'towerroom', 'undercroft', 'tunnel', 'cellar', 'cave-entrance', 'cave-squeeze', 'cave-drop', 'caves', 'cave-exit']) expect(names).toContain(n);
     for (const x of v) { expect(x.mode).toBe('fly'); expect(x.clamp).toBe(false); expect(x.pos.every(Number.isFinite)).toBe(true); }
     expect(interiorViews({ ...P, rooms: [], doors: [], sallyPort: null })).toEqual([]);
+    // the caves' views stand where a player stands: in their rooms
+    const C = P.caves!, cav = C.chambers.find((k) => k.id === 'cave-cavern')!, cv = v.find((x) => x.name === 'caves')!;
+    expect(cv.pos[1]).toBeCloseTo(cav.y + 1.65, 6);
+    const caveOnly = interiorViews({ ...P, rooms: P.rooms.filter((r) => r.zone === 'cave'), doors: [] }).map((x) => x.name).filter((n) => n.startsWith('cave'));
+    expect(caveOnly).toEqual(['cave-squeeze', 'cave-drop', 'caves']); // no doorways: no views from the cellars
   });
 });
 
