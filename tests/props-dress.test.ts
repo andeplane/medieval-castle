@@ -4,7 +4,7 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, characterOf, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, NT, LAYOUTS, DECOR, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, characterOf, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, NT, LAYOUTS, DECOR, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, FIRESIDE, flat, type Dressing, type RoomDressing } from '../src/props/dress';
 import { layoutTokens, roleSimilarity, emptyQuarters } from './helpers/variety';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
@@ -490,5 +490,33 @@ describe('dressing the castle plan', () => {
     const miss: string[] = [];
     for (const d of D.rooms) { const f = focal[d.role]; if (f && !d.placed.some((p) => f.includes(p.prop.kind.name))) miss.push(`${d.room} ${d.role}`); }
     expect(miss).toEqual([]);
+  });
+  // the skin rug (period.ts skin): never layered with another textile (fur and pile would cross in depth),
+  // never run under the hearth, and nothing but a fireside seat stands on it
+  it('a skin never lies on or under another floor textile', () => {
+    let skins = 0;
+    const bad: string[] = [];
+    for (const rd of D.rooms) for (const p of rd.placed) if (p.prop.kind.name === 'skin') {
+      skins++;
+      for (const q of rd.placed) if (q !== p && flat(q.prop) && convexOverlap(footRect(p), footRect(q))) bad.push(`${rd.room}: skin on ${q.prop.kind.name}`);
+    }
+    expect(skins).toBeGreaterThan(5);
+    expect(bad).toEqual([]);
+  });
+
+  it('a skin lies on its room floor, clear of the hearth and of everything standing but the fireside seats', () => {
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    const bad: string[] = [];
+    let seats = 0;
+    for (const rd of D.rooms) for (const p of rd.placed) if (p.prop.kind.name === 'skin') {
+      expect(p.at[1]).toBe(rooms.get(rd.room)!.y0);
+      for (const q of rd.placed) {
+        if (q === p || flat(q.prop) || (q.prop.kind.placement !== 'floor' && !q.prop.kind.blocksNav)) continue;
+        if (!convexOverlap(footRect(p), footRect(q), -0.01)) continue;
+        if (FIRESIDE.has(q.prop.kind.name)) seats++; else bad.push(`${rd.room}: skin under ${q.prop.kind.name}`);
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(seats).toBeGreaterThan(0); // armchairs drawn up to the fire may stand on its edge
   });
 });

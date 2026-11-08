@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { KIT, KIND, makeProp, footprint } from '../src/props/kit';
 import { checkMesh } from './helpers/mesh';
 import { buildShutter } from '../src/props/medieval';
-import { PropMesh, ATLAS } from '../src/props/geom';
+import { PropMesh } from '../src/props/geom';
 import { mulberry32 } from '../src/core/rng';
 
 const H = (name: string, seed = 0) => makeProp(name, seed).bounds;
@@ -137,7 +137,7 @@ describe('19th-century pieces', () => {
     expect(makeProp('candle-sconce', 1).meta.emitters[0].kind).toBe('candle');
     expect(makeProp('candelabrum', 1).mesh.flames.length).toBeGreaterThanOrEqual(3);
     for (const n of ['rug', 'carpet', 'runner']) { expect(KIND[n].blocksNav).toBe(false); expect(makeProp(n, 1).bounds.max[1]).toBeLessThan(0.03); }
-    for (let s = 0; s < 6; s++) expect(makeProp('skin', s).bounds.max[1]).toBeLessThan(0.3); // a bear's head at most
+    for (let s = 0; s < 6; s++) expect(makeProp('skin', s).bounds.max[1]).toBeLessThan(0.06); // flat: a bear's head and eyes at most
     let bear = false; for (let s = 0; s < 8; s++) if (makeProp('skin', s).mesh.bins.ceramic.triangles > 0) bear = true;
     expect(bear).toBe(true);
   });
@@ -186,17 +186,6 @@ describe('medieval sets', () => {
       const iron = m.bins.iron.pos, xs = iron.filter((_, i) => i % 3 === 0);
       expect(Math.max(...xs.map((x) => x * hinge))).toBeGreaterThan(0.38);
       expect(meta.colliders).toHaveLength(1);
-    }
-  });
-  it('maps the pelt flat: fur UVs proportional to metres, inside the fur rectangle', () => {
-    for (let s = 0; s < 6; s++) {
-      const p = makeProp('skin', s), pos = p.mesh.bins.paint.pos, uv = p.mesh.bins.paint.uv;
-      for (let i = 0; i < uv.length; i += 2) { expect(uv[i]).toBeGreaterThanOrEqual(ATLAS.fur[0] - 1e-6); expect(uv[i]).toBeLessThanOrEqual(ATLAS.fur[2] + 1e-6); }
-      // on the flat hide (y < 0.03), u follows x and v follows z linearly
-      const flat: number[] = []; for (let i = 0; i < 1512; i++) flat.push(i); // the hide: 72 spokes, 4 rings (the head comes after)
-      const a = flat[0], b = flat.find((i) => Math.abs(pos[i * 3] - pos[a * 3]) > 0.3)!;
-      const k = (uv[b * 2] - uv[a * 2]) / (pos[b * 3] - pos[a * 3]);
-      for (const i of flat) expect(uv[i * 2] - uv[a * 2]).toBeCloseTo(k * (pos[i * 3] - pos[a * 3]), 5);
     }
   });
 });

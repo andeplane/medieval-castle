@@ -32,6 +32,7 @@ const SHARED: Record<string, string> = {
   'src/castle/interior/caveGeom.ts FUNGI_ROOMS': 'constant', 'src/castle/interior/caveGeom.ts STONE_ROOMS': 'constant',
   'src/castle/interior/plan.ts SWING_OUT': 'constant', 'src/player/setup.ts LOCKED_DOORS': 'constant', 'src/player/input.ts GAME_KEYS': 'constant',
   'src/props/dress.ts TONED': 'constant', 'src/props/dress.ts DECOR': 'constant', 'src/props/dress.ts TOPS': 'constant',
+  'src/props/dress.ts FIRESIDE': 'constant',
   'tests/helpers/worldViews.ts OUTDOOR': 'constant',
 };
 // module level: a declaration at column 0 binding something that can change (WeakMaps and WeakSets are keyed by
