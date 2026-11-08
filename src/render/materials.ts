@@ -6,7 +6,7 @@
 import * as THREE from 'three/webgpu';
 import {
   texture, uv, positionWorld, normalWorld, mix, vec2, vec3, vec4, float, int, color, smoothstep, normalMap, clamp, fract, floor, round, abs, min, max, sin, cos, time, fwidth,
-  positionLocal, instanceIndex, positionView, cameraPosition, reflect, mx_noise_float, mx_noise_vec3, mx_worley_noise_vec2, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If, bumpMap, pow,
+  positionLocal, instanceIndex, positionView, normalView, faceDirection, cameraPosition, reflect, mx_noise_float, mx_noise_vec3, mx_worley_noise_vec2, normalViewGeometry, cameraViewMatrix, cameraNear, cameraFar, viewZToPerspectiveDepth, uniform, hash, select, Fn, Loop, Break, If, pow,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import { LITHS, LITH_DETAIL, DETAIL_TILE, RUBBLE, ASHLAR, DRESSED, COBBLES, FLAGS, type TexSet } from './texgen';
@@ -490,6 +490,18 @@ export function windOffset(strength = 0.15) {
 export { abs };
 
 /**
+ * A view-space normal bumped by a height field `h` (metres) that is a function of position, not of uvs:
+ * Mikkelsen's surface gradient from the screen derivatives of the height and the position, unnormalised, so
+ * the slope is the height's own (dh / dx in metres per metre).
+ */
+function rockBump(h: Node<'float'>) {
+  const P = positionView, sx = P.dFdx(), sy = P.dFdy(), N = normalView;
+  const R1 = sy.cross(N), R2 = N.cross(sx), det = sx.dot(R1).mul(faceDirection);
+  const grad = det.sign().mul(R1.mul(h.dFdx()).add(R2.mul(h.dFdy())));
+  return det.abs().mul(N).sub(grad).normalize();
+}
+
+/**
  * The caves' materials. Rock: no masonry; the macro noise and the detail grain projected on the three world
  * planes (triplanar) and 3D noise in world space, as bedded limestone: colour bands by bed (grey, buff, dark
  * shale, rust), joints and fine cracks (worley cell edges) and bedding lines cut into the bump, grit at arm's
@@ -505,7 +517,7 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const w = pow(an, vec3(4)), wn = w.div(w.x.add(w.y).add(w.z));
   const tri = (tx: THREE.Texture, s: number) => texture(tx, p.zy.mul(s)).mul(wn.x).add(texture(tx, p.xz.mul(s)).mul(wn.y)).add(texture(tx, p.xy.mul(s)).mul(wn.z));
   const big = tri(macro, 1 / 9), mid = tri(macro, 1 / 2.3), grain = tri(detail, 1.1).r;
-  const near = float(1).sub(smoothstep(2.5, 9, dist)), close = float(1).sub(smoothstep(1, 4, dist));
+  const near = float(1).sub(smoothstep(2, 7, dist)), close = float(1).sub(smoothstep(1, 4, dist));
   const det6 = tri(detail, 5.3), det17 = tri(detail, 17);
   const rock = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
   rock.name = 'cave-rock';
@@ -519,7 +531,7 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const parting = float(1).sub(smoothstep(0.0, 0.035, bedF)).add(smoothstep(0.975, 1, bedF)).clamp(0, 1);
   // laminae inside a bed and a gentle, much less cloudy drift
   const lam = sin(p.y.mul(38).add(mid.r.mul(9))).mul(0.5).add(0.5);
-  let col = mix(bedCol(bedId), bedCol(bedId.add(1)), smoothstep(0.88, 1, bedF)).mul(float(0.9).add(lam.mul(0.12))).mul(float(0.85).add(mid.r.mul(0.3)));
+  let col = mix(bedCol(bedId), bedCol(bedId.add(1)), smoothstep(0.7, 1, bedF)).mul(float(0.9).add(lam.mul(0.12))).mul(float(0.85).add(mid.r.mul(0.3)));
   col = col.mul(float(1).sub(parting.mul(0.55)));
   // joints (a few big ones) and fine cracks (many, only in patches), wiggled by a little noise
   const warp = mx_noise_vec3(p.mul(2.1)).mul(0.07);
@@ -539,16 +551,15 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   col = col.mul(float(0.82).add(grain.mul(0.36))).mul(float(1).add(det6.g.sub(0.5).mul(0.35).mul(near))).mul(float(1).add(det17.g.sub(0.5).mul(0.25).mul(close)));
   // damp patches: darker and glossier
   const damp = smoothstep(0.52, 0.72, mid.b.mul(0.6).add(big.b.mul(0.4)));
-  col = col.mul(float(1).sub(damp.mul(0.35)));
+  col = col.mul(float(1).sub(damp.mul(0.2)));
   // the pool: dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it
   const P4 = shade.pool, pd = p.xz.sub(P4.xz).length(), byPool = float(1).sub(smoothstep(P4.w, P4.w.add(1.6), pd)), h = p.y.sub(P4.y);
   const under = float(1).sub(smoothstep(-0.02, 0.01, h)).mul(byPool);
-  const rim = float(1).sub(smoothstep(0.015, 0.07, abs(h.sub(0.035)))).mul(byPool);
+  const rim = float(1).sub(smoothstep(0.008, 0.03, abs(h.sub(0.02)))).mul(byPool);
   const splash = float(1).sub(smoothstep(0.08, 0.7, h)).mul(byPool).mul(float(1).sub(under));
   col = mix(col, col.mul(0.45), under);
   col = mix(col, col.mul(0.62), splash.mul(0.8));
-  col = mix(col, vec3(0.62, 0.6, 0.55), rim.mul(0.75));
-  rock.colorNode = col;
+  col = mix(col, vec3(0.52, 0.5, 0.46), rim.mul(0.6));
   const wet = max(splash, under);
   rock.roughnessNode = float(0.92).sub(max(damp.mul(0.5), wet).mul(0.6)).clamp(0.25, 1);
   // recesses: the baked openness (shelf undersides, niches, the wall's foot, narrow passages)
@@ -559,20 +570,31 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const Rr = reflect(V.negate(), normalWorld), spec = max(Rr.dot(Lf.div(dF)), 0);
   const glint = pow(spec, 24).mul(wet).mul(F4.w.mul(1.2)).div(dF.mul(dF).add(1));
   rock.emissiveNode = col.mul(vec3(0.15, 0.8, 0.6)).mul(gl.mul(0.22)).add(vec3(1, 0.62, 0.32).mul(glint));
-  // the bump: broad swells, grit, and the fine relief that only shows close: noise, joints, cracks, partings
+  // the relief, as a height in metres: broad swells, sharp ridged knuckles and two finer octaves (only near),
+  // joints, cracks and partings cut in. World-space noise, so not bumpMap (which re-samples its height at
+  // offset uvs: noise of the position would give it no slope at all); rockBump takes the height's own
+  // screen derivatives instead
   const ridge = float(1).sub(abs(mx_noise_float(p.mul(2.7).add(warp)))).pow(3);
-  const fineH = ridge.mul(0.03).add(mx_noise_float(p.mul(7.5)).mul(0.012)).add(mx_noise_float(p.mul(19)).mul(0.004)).add(det17.g.mul(0.003)).mul(near).sub(joint.mul(0.012)).sub(crack.mul(0.006)).sub(parting.mul(0.008).mul(near));
-  rock.normalNode = bumpMap(big.r.mul(0.4).add(mid.g.mul(0.4)).add(grain.mul(0.2)).add(det6.g.mul(0.03).mul(near)).add(fineH), float(2.6));
+  // (not the grit textures: their sub-millimetre detail turns to pixel noise in the derivatives)
+  const relief = big.r.mul(0.15).add(mid.g.mul(0.06))
+    .add(ridge.mul(0.03).add(mx_noise_float(p.mul(7.5)).mul(0.01)).add(mx_noise_float(p.mul(19)).mul(0.003)).mul(near))
+    .sub(joint.mul(0.008)).sub(crack.mul(0.004)).sub(parting.mul(0.006).mul(near));
+  rock.normalNode = rockBump(relief);
+  // and the hollows of that relief a little darker, so it reads under the lantern's frontal light too
+  rock.colorNode = col.mul(mix(float(0.8).add(ridge.mul(0.3)), float(1), float(1).sub(near)));
 
   // the still water: very dark, its reflection the dark roof plus the fire's glint, broken by slow ripples
-  const pool = new THREE.MeshStandardNodeMaterial({ color: 0x020405, roughness: 0.05, metalness: 0, transparent: true });
+  const pool = new THREE.MeshPhysicalNodeMaterial({ color: 0x020405, roughness: 1, metalness: 0, specularIntensity: 0, transparent: true });
   pool.name = 'cave-pool';
   const rip = mx_noise_vec3(vec3(p.x.mul(2.2), p.z.mul(2.2), time.mul(0.18))).mul(0.035).add(mx_noise_vec3(vec3(p.x.mul(7), p.z.mul(7), time.mul(0.4))).mul(0.012));
   const Nw = vec3(rip.x, 1, rip.y).normalize(), cosV = max(V.dot(Nw), 0);
   const fres = float(0.02).add(float(0.98).mul(pow(float(1).sub(cosV), 5)));
   const Rw = reflect(V.negate(), Nw), sw = max(Rw.dot(Lf.div(dF)), 0);
   const fireRefl = pow(sw, 600).mul(6).add(pow(sw, 60).mul(0.5)).add(pow(sw, 8).mul(0.04)).mul(F4.w).mul(float(8).div(dF.mul(dF).add(4)));
-  pool.emissiveNode = vec3(0.012, 0.016, 0.018).mul(fres).add(vec3(1, 0.6, 0.3).mul(fireRefl).mul(fres.mul(0.8).add(0.2)));
+  // what it reflects besides the flame: the roof, dim and warmer near the fire; the
+  // ripples break it into slow moving sheen
+  const roof = vec3(0.012, 0.016, 0.018).add(vec3(0.05, 0.03, 0.015).mul(F4.w).div(dF.mul(dF).add(4))).mul(float(0.55).add(rip.z.mul(25).clamp(-0.45, 0.45)));
+  pool.emissiveNode = roof.mul(fres.mul(0.85).add(0.15)).add(vec3(1, 0.6, 0.3).mul(fireRefl).mul(fres.mul(0.8).add(0.2)));
   pool.opacityNode = mix(float(0.9), float(0.99), fres);
 
   const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
