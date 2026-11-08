@@ -516,7 +516,12 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const p = positionWorld, an = abs(normalWorld), dist = positionView.length();
   const w = pow(an, vec3(4)), wn = w.div(w.x.add(w.y).add(w.z));
   const tri = (tx: THREE.Texture, s: number) => texture(tx, p.zy.mul(s)).mul(wn.x).add(texture(tx, p.xz.mul(s)).mul(wn.y)).add(texture(tx, p.xy.mul(s)).mul(wn.z));
-  const big = tri(macro, 1 / 9), mid = tri(macro, 1 / 2.3), grain = tri(detail, 1.1).r;
+  // the broad variation from 3D noise of the position, not the triplanar macro texture: its three projections
+  // differ, and where the normal turns from one to the next they met in hard, lighter or darker patches
+  const n01 = (s: number, o: number) => mx_noise_float(p.mul(s).add(o)).mul(0.8).add(0.5).clamp(0, 1);
+  const oct = (s: number, o: number) => n01(s, o).mul(0.65).add(n01(s * 2.1, o + 7.3).mul(0.35));
+  const big = vec3(oct(1 / 9, 0), oct(1 / 9, 31), oct(1 / 9, 57)), mid = vec3(oct(1 / 2.3, 13), oct(1 / 2.3, 71), n01(1 / 2.3, 97));
+  const grain = tri(detail, 1.1).r;
   const near = float(1).sub(smoothstep(2, 7, dist)), close = float(1).sub(smoothstep(1, 4, dist));
   const det6 = tri(detail, 5.3), det17 = tri(detail, 17);
   const rock = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });

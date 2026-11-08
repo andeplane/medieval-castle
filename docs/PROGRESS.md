@@ -15,6 +15,7 @@ From the coordinator's WebGPU captures after #72 on Anders' Mac: the cavern was 
 - Pale flowstone and iron streaks run down the walls.
 - Relief as a height in metres: broad swells, sharp ridged knuckles (2.7/m) and octaves at 7.5 and 19/m, all within about 7 m, with the joints, cracks and partings cut in. The darker hollows of that relief show under the lantern's frontal light too. Grit in the colour at 1.1, 5.3 and 17 cycles/m.
 - **Why the squeeze was smooth clay:** three's `bumpMap` takes its slope by sampling the height again at uvs offset by a pixel. A height made from world-position noise does not change with uv, so it got no slope at all, and only the texture terms bumped. Now `rockBump` takes the height's own screen derivatives: Mikkelsen's surface gradient, unnormalised, so the slope is the height's own in metres per metre. The grit textures stay out of the relief because their sub-millimetre detail turned into pixel noise.
+- The broad variation (bed warp, drift, damp) comes from 3D noise of the position. The triplanar macro texture's three projections differ, and on the curved rock they met in hard-edged lighter and darker patches wherever the normal turned. That was much of the "cloudy" look.
 - Darker, glossier damp patches.
 - Round the pool (uniforms from `caveShading`): dark wet stone under the water, a pale calcite rim at the waterline, a wet splash zone above it that glints with the fire.
 
