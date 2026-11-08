@@ -612,13 +612,15 @@ export const skin: PropKind = {
   name: 'skin', placement: 'floor', blocksNav: false,
   build(m, r) {
     const bear = r() < 0.5, L = bear ? range(r, 1.8, 2.2) : range(r, 1.3, 1.6), W = L * 0.62;
-    const tint = bear ? jitterTint(r, [0.55, 0.45, 0.38], 0.1) : jitterTint(r, [0.95, 0.75, 0.55], 0.08);
+    const tint = bear ? jitterTint(r, [0.55, 0.45, 0.38], 0.1) : jitterTint(r, [0.74, 0.56, 0.4], 0.08);
     // outline in polar form from the middle (head toward +z): an oval body, four legs, a head and a tail
-    const lobe = (th: number, c: number, w: number) => { const d = Math.atan2(Math.sin(th - c), Math.cos(th - c)); return Math.exp(-((d / w) ** 2)); };
-    const legs = [0.85, -0.85, 2.3, -2.3].map((c) => c + range(r, -0.06, 0.06));
+    // super-Gaussian lobes: square-ended legs (paws), not the points of a star
+    const lobe = (th: number, c: number, w: number, p = 2) => { const d = Math.atan2(Math.sin(th - c), Math.cos(th - c)); return Math.exp(-(Math.abs(d / w) ** p)); };
+    const legs = [0.9, -0.9, 2.25, -2.25].map((c) => c + range(r, -0.06, 0.06));
     const R = (th: number) => {
-      const body = 1 / Math.hypot(Math.sin(th) / (W * 0.3), Math.cos(th) / (L * 0.32));
-      return body + legs.reduce((s, c, i) => s + lobe(th, c, 0.12) * L * (i < 2 ? 0.27 : 0.25), 0) + lobe(th, 0, 0.2) * L * (bear ? 0.1 : 0.17) + lobe(th, Math.PI, 0.06) * L * (bear ? 0.05 : 0.1);
+      const body = 1 / Math.hypot(Math.sin(th) / (W * 0.34), Math.cos(th) / (L * 0.33));
+      return body + legs.reduce((s, c, i) => s + lobe(th, c, 0.19, 4) * L * (i < 2 ? 0.2 : 0.19), 0) + lobe(th, 0, 0.22, 3) * L * (bear ? 0.1 : 0.14)
+        + (bear ? 0 : (lobe(th, 0.3, 0.06) + lobe(th, -0.3, 0.06)) * L * 0.1) + lobe(th, Math.PI, 0.08) * L * (bear ? 0.05 : 0.07);
     };
     const N = 72, rings = [0, 0.4, 0.75, 0.93, 1], lift = [0.024, 0.023, 0.019, 0.012, 0.003];
     const pts = rings.map((f, k) => Array.from({ length: N }, (_, i) => { const th = (i / N) * Math.PI * 2, rr = R(th) * f; return [Math.sin(th) * rr, lift[k], Math.cos(th) * rr] as V3; }));
