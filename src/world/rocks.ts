@@ -7,6 +7,7 @@ import { mergeVertices, toCreasedNormals } from 'three/addons/utils/BufferGeomet
 import { type Rng } from '../core/rng';
 import { type V2, pointInPoly } from '../core/math2d';
 import type { GenDeps } from './deps';
+import { UNDRAWN_LAYER } from '../render/passLayers';
 
 export interface RockEnv {
   sample(x: number, z: number): { h: number; zone: string; dEdge: number; face?: number };
@@ -144,7 +145,31 @@ export function islandObstacles(spots: RockSpot[], env: Pick<RockEnv, 'sample'>,
   return out;
 }
 
-/** Instanced rocks: one InstancedMesh per shape and detail level. */
+/** Rock levels of detail by how big a rock looks from the eye: its width (2 × its size, m) over its
+ * distance, the first level whose `above` it passes. ≈ 60 and 12 px tall at 1440p: past 60 px a 320-triangle
+ * rock, then 80, and under 12 px the bare 20-face shape (render/passLayers.ts: how, never whether). */
+export const ROCK_LOD = [{ detail: 2, above: 0.043 }, { detail: 1, above: 0.0087 }, { detail: 0, above: -1 }] as const;
+
+/** Which ROCK_LOD level a rock of size s at distance d gets. */
+export function rockLevel(s: number, d: number): number {
+  const k = (2 * s) / Math.max(d, 1e-3);
+  return ROCK_LOD.findIndex((l) => k > l.above);
+}
+
+export interface RockLod {
+  /** Put every rock in the level its size and distance from the eye give (does nothing until the eye has moved 1 m). */
+  update(eye: { x: number; y: number; z: number }): void;
+  /** Rocks drawn at each level (hi to lo). */
+  counts(): number[];
+}
+
+/**
+ * Instanced rocks. The rocks are drawn by level of detail: for each shape one InstancedMesh per ROCK_LOD
+ * level, refilled as the eye moves (userData.lod), the same rocks in every pass. The near rocks' whole
+ * detailed set (`rocks-near-*`) stays, undrawn, for the physics (player/setup.ts) and the island's obstacles.
+ * Before 2026-11-08 the 385 near rocks were always drawn at 320 triangles and the far ones at 80, all of
+ * them in every pass (one mesh's bounds span the land): 176 k triangles a pass, four passes a frame.
+ */
 export function buildRocks(material: THREE.Material, env: RockEnv, deps: GenDeps) {
   const SHAPES = ROCK_SHAPES;
   const { near, far } = placeRocks(env, deps);
@@ -152,26 +177,66 @@ export function buildRocks(material: THREE.Material, env: RockEnv, deps: GenDeps
   group.name = 'rocks';
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), pos = new THREE.Vector3(), sc = new THREE.Vector3();
   let tris = 0;
-  const make = (list: Spot[], detail: number, shadows: boolean, tag: string) => {
-    for (let sh = 0; sh < SHAPES; sh++) {
-      const mine = list.filter((s) => s.shape === sh);
-      if (!mine.length) continue;
-      const g = rockGeometry(deps, `rock-shape-${sh}`, detail);
-      const im = new THREE.InstancedMesh(g, material, mine.length);
-      mine.forEach((s, i) => {
-        e.set(s.tx, s.yaw, s.tz, 'YXZ'); q.setFromEuler(e);
-        m.compose(pos.set(s.x, s.y, s.z), q, sc.set(s.s, s.sy, s.s * (0.85 + ((i * 0.618) % 1) * 0.3)));
-        im.setMatrixAt(i, m);
-      });
-      im.computeBoundingSphere();
-      im.castShadow = shadows; im.receiveShadow = true;
-      im.name = `rocks-${tag}-${sh}`;
-      group.add(im);
-      tris += (g.attributes.position.count / 3) * mine.length;
-    }
+  const matrixOf = (s: Spot, i: number) => {
+    e.set(s.tx, s.yaw, s.tz, 'YXZ'); q.setFromEuler(e);
+    return m.compose(pos.set(s.x, s.y, s.z), q, sc.set(s.s, s.sy, s.s * (0.85 + ((i * 0.618) % 1) * 0.3)));
   };
-  make(near, 2, true, 'near');
-  make(far, 1, false, 'far');
-  group.userData = { count: near.length + far.length, near: near.length, far: far.length, triangles: Math.round(tris), obstacles: islandObstacles(near, env) };
+  // the near rocks as physics reads them: detail 2, every instance, never drawn
+  for (let sh = 0; sh < SHAPES; sh++) {
+    const mine = near.filter((s) => s.shape === sh);
+    if (!mine.length) continue;
+    const g = rockGeometry(deps, `rock-shape-${sh}`, 2);
+    const im = new THREE.InstancedMesh(g, material, mine.length);
+    mine.forEach((s, i) => im.setMatrixAt(i, matrixOf(s, i)));
+    im.computeBoundingSphere();
+    im.castShadow = true; im.receiveShadow = true;
+    im.name = `rocks-near-${sh}`;
+    im.layers.set(UNDRAWN_LAYER);
+    group.add(im);
+    tris += (g.attributes.position.count / 3) * mine.length;
+  }
+  tris += far.length * 80; // the far rocks at detail 1, as reported before the levels
+  // the drawn rocks: per shape and level, with room for all of that shape
+  const lod = Array.from({ length: SHAPES }, (_, sh) => {
+    const nearOnes = near.filter((s) => s.shape === sh), farOnes = far.filter((s) => s.shape === sh);
+    // (each list's own index shapes the rock's depth, as when near and far were meshes of their own)
+    const mine = [...nearOnes, ...farOnes].map((s) => ({ s }));
+    const mats = [...nearOnes.map((s, i) => matrixOf(s, i).clone()), ...farOnes.map((s, i) => matrixOf(s, i).clone())];
+    const levels = ROCK_LOD.map((l, li) => {
+      const im = new THREE.InstancedMesh(rockGeometry(deps, `rock-shape-${sh}`, l.detail), material, Math.max(1, mine.length));
+      im.count = 0; im.visible = false;
+      im.castShadow = true; im.receiveShadow = true;
+      im.name = `rocks-lod${li}-${sh}`;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      group.add(im);
+      return im;
+    });
+    return { mine, mats, levels };
+  });
+  let last: { x: number; y: number; z: number } | null = null;
+  const counts = ROCK_LOD.map(() => 0);
+  const rockLod: RockLod = {
+    update(eye) {
+      if (last && Math.hypot(eye.x - last.x, eye.y - last.y, eye.z - last.z) < 1) return;
+      last = { x: eye.x, y: eye.y, z: eye.z };
+      counts.fill(0);
+      for (const { mine, mats, levels } of lod) {
+        const n = levels.map(() => 0);
+        mine.forEach(({ s }, i) => {
+          const li = rockLevel(s.s, Math.hypot(s.x - eye.x, s.y - eye.y, s.z - eye.z));
+          levels[li].setMatrixAt(n[li]++, mats[i]);
+        });
+        levels.forEach((im, li) => {
+          im.count = n[li]; im.visible = n[li] > 0; counts[li] += n[li];
+          im.instanceMatrix.needsUpdate = true;
+          // bounds of the rocks it now holds: three culls the mesh by them
+          if (n[li]) im.computeBoundingSphere();
+        });
+      }
+    },
+    counts: () => [...counts],
+  };
+  rockLod.update({ x: 0, y: 60, z: 0 });
+  group.userData = { count: near.length + far.length, near: near.length, far: far.length, triangles: Math.round(tris), obstacles: islandObstacles(near, env), lod: rockLod };
   return group;
 }

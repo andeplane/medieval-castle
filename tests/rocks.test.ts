@@ -2,7 +2,8 @@
 // rising fields outside, so every placement rule can be checked by radius.
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { placeRocks, buildRocks, rockGeometry, islandObstacles, ROCK_SHAPES, type RockEnv } from '../src/world/rocks';
+import { placeRocks, buildRocks, rockGeometry, rockLevel, islandObstacles, ROCK_SHAPES, ROCK_LOD, type RockEnv, type RockLod } from '../src/world/rocks';
+import { UNDRAWN_LAYER } from '../src/render/passLayers';
 import type { V2 } from '../src/core/math2d';
 import { fakeDeps } from './fakes';
 
@@ -85,13 +86,62 @@ describe('rock meshes', () => {
     expect(g.boundingBox!.min.y).toBeGreaterThan(-0.6);
   });
 
-  it('instances one mesh per shape and detail level', () => {
+  it('keeps the near rocks whole for the physics, undrawn', () => {
     const group = buildRocks(new THREE.MeshBasicMaterial(), env, fakeDeps());
-    const meshes = group.children as THREE.InstancedMesh[];
-    expect(meshes.length).toBeGreaterThan(ROCK_SHAPES);
-    expect(meshes.reduce((n, m) => n + m.count, 0)).toBe(group.userData.count);
-    expect(meshes.filter((m) => m.name.startsWith('rocks-near')).every((m) => m.castShadow)).toBe(true);
+    const near = (group.children as THREE.InstancedMesh[]).filter((m) => m.name.startsWith('rocks-near'));
+    expect(near.length).toBe(ROCK_SHAPES);
+    expect(near.reduce((n, m) => n + m.count, 0)).toBe(group.userData.near);
+    expect(near.every((m) => m.castShadow && m.layers.isEnabled(UNDRAWN_LAYER) && !m.layers.isEnabled(0))).toBe(true);
     expect(group.userData.triangles).toBeGreaterThan(0);
     expect(group.userData.obstacles.length).toBeGreaterThan(0);
+  });
+
+  it('draws every rock once, at the level its size and distance give, wherever the eye goes', () => {
+    const { near, far } = placeRocks(env, fakeDeps());
+    const all = [...near, ...far];
+    const group = buildRocks(new THREE.MeshBasicMaterial(), env, fakeDeps());
+    const lod = group.userData.lod as RockLod;
+    const levels = (group.children as THREE.InstancedMesh[]).filter((m) => m.name.startsWith('rocks-lod'));
+    expect(levels.length).toBe(ROCK_SHAPES * ROCK_LOD.length);
+    const detail = (li: number) => rockGeometry(fakeDeps(), 'rock-shape-0', ROCK_LOD[li].detail).attributes.position.count / 3;
+    expect(detail(0)).toBeGreaterThan(detail(1));
+    expect(detail(1)).toBeGreaterThan(detail(2));
+    const at = new THREE.Vector3(), m = new THREE.Matrix4();
+    for (const eye of [{ x: 0, y: 60, z: 0 }, { x: 81, y: 3, z: 0 }, { x: -300, y: 20, z: 50 }, { x: 81.4, y: 3, z: 0.3 }]) {
+      lod.update(eye);
+      const counts = lod.counts();
+      expect(counts.reduce((a, b) => a + b, 0)).toBe(all.length);
+      // each drawn instance is a placed rock, in the level rockLevel gives it, and each rock is drawn once
+      const seen = new Set<number>();
+      for (const im of levels) {
+        const li = Number(im.name.slice('rocks-lod'.length, im.name.lastIndexOf('-'))), sh = Number(im.name.slice(im.name.lastIndexOf('-') + 1));
+        expect(im.visible).toBe(im.count > 0);
+        expect(im.castShadow).toBe(true);
+        expect(im.layers.mask).toBe(1); // every pass
+        for (let i = 0; i < im.count; i++) {
+          im.getMatrixAt(i, m); at.setFromMatrixPosition(m);
+          const k = all.findIndex((s, j) => !seen.has(j) && s.shape === sh && Math.hypot(s.x - at.x, s.y - at.y, s.z - at.z) < 1e-4);
+          expect(k).toBeGreaterThanOrEqual(0);
+          seen.add(k);
+          expect(rockLevel(all[k].s, Math.hypot(all[k].x - eye.x, all[k].y - eye.y, all[k].z - eye.z))).toBe(li);
+          // three culls the mesh by bounds that hold every instance it draws
+          expect(im.boundingSphere!.distanceToPoint(at)).toBeLessThanOrEqual(0);
+        }
+      }
+      expect(seen.size).toBe(all.length);
+    }
+    // from the shore the nearest rocks are detailed, from far off none are
+    lod.update({ x: 81, y: 3, z: 0 });
+    expect(lod.counts()[0]).toBeGreaterThan(0);
+    lod.update({ x: 2000, y: 300, z: 0 });
+    expect(lod.counts()).toEqual([0, 0, all.length]);
+  });
+
+  it('picks a level by how big a rock looks', () => {
+    expect(rockLevel(1, 10)).toBe(0);
+    expect(rockLevel(1, 100)).toBe(1);
+    expect(rockLevel(1, 1000)).toBe(2);
+    expect(rockLevel(2, 80)).toBe(0); // twice the size, twice as far
+    expect(rockLevel(1, 0)).toBe(0);
   });
 });

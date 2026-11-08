@@ -21,6 +21,7 @@ import { buildTerrain, prepareTerrain, ISLAND, MOAT_OUTER, heightAt, footDist, d
 import { rngFor } from './core/rng';
 import { makeSky } from './world/sky';
 import { makeWater, cameraFrustum } from './world/water';
+import type { RockLod } from './world/rocks';
 import { buildVegetation, type Vegetation } from './world/vegetation';
 import { CameraRig, VIEWS, spawnPoint } from './camera/controls';
 import { outerPoly, gatehouseFrame, courtyard } from './castle/layout';
@@ -66,6 +67,8 @@ import { wireGameHud } from './ui/gameHud';
 import { showBootError } from './ui/error';
 import { createStatsOverlay } from './ui/statsOverlay';
 import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
+import { VIEW_MASK } from './render/passLayers';
+import { aoCamera, AO_FADE } from './render/aoCamera';
 import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
 import { CAVE_ZONE } from './castle/interior/caves';
@@ -108,6 +111,7 @@ async function main() {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.25, 30000);
+  camera.layers.mask = VIEW_MASK; // full detail; the water's reflection draws stand-ins (render/passLayers.ts)
 
   await say('Cutting the stone…');
   const t0 = performance.now();
@@ -187,13 +191,14 @@ async function main() {
   // no ground in the rooms: world/terrain.ts groundHole, plus the interior's own (the sally port's housing)
   const terrain = buildTerrain(M.terrain, undefined, { holes: interior?.groundHoles.terrain });
   scene.add(terrain);
+  const rockLod = terrain.getObjectByName('rocks')!.userData.lod as RockLod; // rocks by size on screen (world/rocks.ts)
   await breathe();
   if (revetment) {
     // turf over the rim, with the same noise as the terrain's ground weights (world/terrain.ts 'terrain-b')
     const rimNoise = defaultTerrain().deps.noise2('terrain-b');
     scene.add(rimTurfMesh(rimTurf(revetment, heightAt, rimMask({ footDist, noise: rimNoise, gate: gatehouseFrame() })), M.terrain));
   }
-  const water = makeWater(sky.sunDir, interior?.groundHoles.water);
+  const water = makeWater(sky.sunDir, interior?.groundHoles.water, camera);
   scene.add(water);
 
   // interior light (render/interiorLight.ts): the shell's meshes switch to the sun-only interior
@@ -274,13 +279,19 @@ async function main() {
   let aoTex: THREE.Node | null = null;
   let prePass: ReturnType<typeof pass> | null = null;
   if (params.get('ao') !== '0') {
-    const pre = pass(scene, camera, { samples: 0 });
+    // the pre-pass sees no further than the AO can show (aoFar below fades it out by AO_FADE): its camera is the
+    // view's with a nearer far plane, so whatever lies wholly beyond is not drawn into it (render/aoCamera.ts)
+    const preCamera = new THREE.PerspectiveCamera();
+    aoCamera(camera, preCamera);
+    const pre = pass(scene, preCamera, { samples: 0 });
+    const preUpdate = pre.updateBefore.bind(pre);
+    pre.updateBefore = (frame) => { aoCamera(camera, preCamera); return (preUpdate as (f: unknown) => unknown)(frame) as never; };
     pre.setMRT(mrt({ output: normalView }));
     // the AO is computed at half resolution, so its normal/depth pre-pass needs no more (it was a full
     // second drawing of the scene at full size: ~7 ms of a 20 ms frame on an M4 at retina 2×)
     pre.setResolutionScale(0.5);
     prePass = pre;
-    const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), camera);
+    const aoPass = ao(pre.getTextureNode('depth'), pre.getTextureNode(), preCamera);
     aoPass.resolutionScale = 0.5;
     // the AO target must be texel for texel the pre-pass (GTAONode rounds where PassNode floors: a seam
     // down the middle of the screen at odd buffer widths, render/resolution.ts passTexels)
@@ -291,7 +302,7 @@ async function main() {
     const aoNode = aoPass.getTextureNode();
     aoTex = aoNode;
     // half-res AO turns to noise far away; fade it out with distance (the textures carry their own AO)
-    const aoFar = smoothstep(110, 260, positionView.z.negate());
+    const aoFar = smoothstep(110, AO_FADE, positionView.z.negate());
     scenePass.contextNode = builtinAOContext(mix(aoNode.sample(screenUV).r, float(1), aoFar));
   }
   if (params.get('grade') !== '0') {
@@ -542,7 +553,7 @@ async function main() {
   // shaders in pieces (render/precompile.ts): each pass compiles for its own target, then two warm-up
   // frames build what that cannot reach, first without the water (shadow maps, post passes), then with
   // it (its reflection of the scene), drawn whether or not it can be seen from here (vis hides it then)
-  const frameState = () => { stones.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
+  const frameState = () => { stones.update(camera.position); rockLod.update(camera.position); veg?.update(camera); vis.update(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); };
   const pre = prePass;
   const nestedRenders = { rendered: 0, skipped: 0 };
   let deferred = null as DeferredPipelines | null;
@@ -564,7 +575,7 @@ async function main() {
   const hooks = installHooks({
     renderer, camera, rig, setTime, getTime: () => sky.hours, tick,
     // captures wait for the furniture of every room they show (settle), before the frame's counters reset
-    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); veg?.update(camera); vis.update(); sunCasters(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
+    renderNow: async () => { if (furnStream) { vis.update(); furnStream.setWanted(wanted.wantedRooms()); await furnStream.settle(); syncFires?.(); } info.reset(); stones.update(camera.position, Infinity); rockLod.update(camera.position); veg?.update(camera); vis.update(); sunCasters(); updateFire(1 / 60); exposure.update(1 / 60, vis.state); pipeline.render(); },
     physics, player, input: scripted, course: course?.info ?? null, interior: null, // set below
     probes: { island: ISLAND, boundary: play.boundary, outer: outerPoly(), court: courtyard(), gate: { ...gatehouseFrame(), project: GATEHOUSE.project }, bridge: bridge ? bridgeInfo(bridge.walkable, bridge.d) : null, spawn: spawnPoint(), gateDoors: gateSpecs },
     use: () => interaction.use(),
@@ -654,6 +665,7 @@ async function main() {
     }
     tick(dt);
     stones.update(camera.position);
+    rockLod.update(camera.position);
     veg?.update(camera);
     vis.update();
     updateFurniture();
