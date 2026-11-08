@@ -24,7 +24,7 @@ import * as THREE from 'three/webgpu';
 import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
-import { stairOpts, type PlanX } from '../src/castle/interior/plan';
+import { stairOpts, leafSwingFits, type PlanX } from '../src/castle/interior/plan';
 import { placeLeaves, leafPoint, leafSwing, leafDepth, leafHead, headRise, leafClassFor, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
@@ -556,7 +556,10 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const n = id('court>N0-4'), st = id('court>stairtower'), e = id('court>E0-2'), w = id('court>W0-2');
     const lean = (n.centre[0] - st.centre[0]) * n.along[0] + (n.centre[2] - st.centre[2]) * n.along[1];
     n.centre[0] -= n.along[0] * (lean - 1.0); n.centre[2] -= n.along[1] * (lean - 1.0);
-    id('N0-2>N0-3').hinge = id('N0-2>N0-3').hinge === 'left' ? 'right' : 'left';
+    // a door whose leaf, hung on its other jamb, would swing into a room's side wall
+    const flip = (d: DoorSpec) => ({ ...d, hinge: d.hinge === 'left' ? 'right' as const : 'left' as const });
+    const cramped = Q.doors.find((d) => d.leaf && d.kind === 'plank' && !leafSwingFits(Q, flip(d)))!;
+    cramped.hinge = flip(cramped).hinge;
     const k = walls.findIndex((x) => crossing(x, st, 0, st.centre[1] + 1)), x = crossing(walls[k], st, 0, st.centre[1] + 1)!;
     const twin = walls.map((v, i) => (i === k ? { ...v, openings: [...v.openings, { pts: [[x.s - 0.3, st.centre[1] + 1], [x.s + 0.3, st.centre[1] + 1], [x.s + 0.3, st.centre[1] + 1.5], [x.s - 0.3, st.centre[1] + 1.5]] as V2[], depth: 0.5, fill: 'wood' as const, reveal: 'trim' as const }] } : v));
     const slab = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
@@ -567,7 +570,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(f.some((x) => x.startsWith('cut twice:') && x.endsWith('court>stairtower'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>E0-2: castle surface left in the doorway'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>W0-2: its hole in the castle face is bigger than its outline'))).toBe(true);
-    expect(f.some((x) => x.startsWith('N0-2>N0-3: leaf swings through the wall of'))).toBe(true);
+    expect(f.some((x) => x.startsWith(`${cramped.id}: leaf swings through the wall of`))).toBe(true);
     // a courtyard door's outward seat (it opens away from someone inside) with its sill sunk into the paving
     const R = structuredClone(P), sunk = R.doors.find((d) => d.id === 'court>E0-2')!;
     expect(sunk.swingsBack).toBe(true);
@@ -595,6 +598,10 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     for (let i = 0; i <= N; i++) { const x = pl.width * (1 - i / N); ring.push(leafPoint(pl, M, [x, top(cls.sOff + x) - sill, z])); }
     const c = [0, 1, 2].map((k) => ring.reduce((s, p) => s + p[k], 0) / ring.length) as V3;
     const tris = ring.map((p, i) => mkTri(c, p, ring[(i + 1) % ring.length]));
+    // and its rim, as thick as its boards (a ray slipping past the edge at a slant meets it)
+    const at = (p: V3, dz: number): V3 => { const n = pl.eV; return [p[0] + n[0] * dz, p[1], p[2] + n[1] * dz]; };
+    const half = (zFront - zBack) / 2;
+    ring.forEach((p, i) => { const q = ring[(i + 1) % ring.length]; tris.push(mkTri(at(p, -half), at(q, -half), at(q, half)), mkTri(at(p, -half), at(q, half), at(p, half))); });
     const t = (ring[0][0] - d.centre[0]) * d.normal[0] + (ring[0][2] - d.centre[2]) * d.normal[1];
     return { tris, ring, t, sill };
   };

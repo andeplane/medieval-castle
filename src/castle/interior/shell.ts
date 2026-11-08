@@ -269,10 +269,10 @@ export function buildShell(P: PlanX, ext: Builder, deps: ShellDeps = {}): ShellR
     else {
       // who sees each stretch: the rebate is the swing face's (in front of the shut leaf), the clear rest the
       // other side's; a step faces into the bigger stretch: the stop behind a one-way leaf is seen past it from
-      // the swing side. A back-swinging leaf's recess and its steps are seen from the other side, and from the
-      // swing side through the hair's gap round the shut leaf (its boards stop 1 cm under the head): both.
+      // the swing side. A back-swinging leaf has no stop: its rebate and recess, and their steps, are seen from
+      // either side (past the shut leaf, through the FIT round it): both.
       const k = d.swingInto, rank = { clear: 0, reb: 1, sweep: 2 } as const;
-      const bandOwners = (b: Cut['band']) => (b === 'reb' ? [k] : b === 'sweep' ? [0, 1] : [1 - k]);
+      const bandOwners = (b: Cut['band']) => (b === 'sweep' || (b === 'reb' && d.swingsBack) ? [0, 1] : b === 'reb' ? [k] : [1 - k]);
       const stepOwners = (a: Cut['band'], b: Cut['band']) => (a === 'sweep' || b === 'sweep' ? [0, 1] : [k]);
       cuts.forEach((cut, i) => {
         const tA = i === 0 ? (u: number) => depthOn(0, u) : () => cut.t0, tB = i === cuts.length - 1 ? (u: number) => depthOn(1, u) : () => cut.t1;

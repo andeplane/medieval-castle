@@ -160,8 +160,10 @@ export function doorCuts(d: DoorSpec, rise?: number): Cut[] {
   return sg > 0 ? cuts.reverse() : cuts;
 }
 
-/** Just in front of a back-swinging leaf's back face (toward its swing face): where its rebate ends. */
-export const REAR_STEP = 0.01;
+/** How far behind a back-swinging leaf's back face its rebate runs on before the recess opens out: far enough
+ *  that a slanting look through the FIT round the shut leaf meets the rebate, short enough that the leaf's
+ *  head, turning back, barely brushes it (doors.test.ts: ≤ 6 mm). */
+export const REAR_STEP = 0.02;
 /** Room left between the back sweep's reach and the far face for a stop; less, and the recess runs through. */
 export const MIN_STOP = 0.06;
 
@@ -173,7 +175,7 @@ export function backReach(d: DoorSpec): { rear: number; end: number; through: bo
   const kind = d.kind as LeafKind, f = doorFrame(d, kind), back = f.pivotDepth - leafDepth(kind).zBack;
   const cls = leafClassFor(d, kind), radius = Math.hypot(cls.width, -leafDepth(kind).zBack);
   const end = back + radius + 0.02;
-  return { rear: back - REAR_STEP, end, through: end > d.wall - MIN_STOP };
+  return { rear: Math.min(back + REAR_STEP, d.wall), end, through: end > d.wall - MIN_STOP };
 }
 
 /**
