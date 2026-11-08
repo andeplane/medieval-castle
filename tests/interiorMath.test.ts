@@ -261,5 +261,11 @@ describe('outdoor doorway reveals', () => {
     const d2 = door({ id: 'H>court', spaces: ['H', 'courtyard'], centre: [12.7, 0, 5], normal: [1, 0], along: [0, 1], wall: 1.4 });
     expect(outdoorRevealTest([d2])([13.2, 1, 5])).toBe(true);
     expect(outdoorRevealTest([door({})])([13.2, 1, 5])).toBe(false);
+    // a leaf shut against a rebate 0.1 m in from the hall's face: the stone up to the leaf is the courtyard's
+    const leafy = outdoorRevealTest([{ ...d, leaf: true, swingInto: 1, rebate: 0.1 }]);
+    expect(leafy([12.2, 1, 5])).toBe(true);
+    expect(leafy([12.05, 1, 5])).toBe(false);                    // behind the leaf
+    expect(leafy([12.12, 1, 5], [1, 0, 0])).toBe(true);          // the stop, facing the courtyard
+    expect(leafy([12.12, 1, 5], [-1, 0, 0])).toBe(false);        // facing the hall
   });
 });

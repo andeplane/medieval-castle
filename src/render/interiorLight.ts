@@ -235,7 +235,7 @@ export interface InteriorBake {
  * same walk, each mesh is frustum culled by its rooms' boxes instead of one sphere round the group
  * (world/visibility.ts tagBoxes); which groups are drawn stays the room graph's.
  */
-export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'], index: Map<SpaceId, number>, maxWall: number, outdoor?: (p: V3) => boolean) {
+export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'], index: Map<SpaceId, number>, maxWall: number, outdoor?: (p: V3, n: V3) => boolean) {
   let tris = 0;
   for (const g of groups) {
     const prefer = new Set(g.rooms.map((id) => index.get(id)).filter((i): i is number => i !== undefined));

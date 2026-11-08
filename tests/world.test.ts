@@ -884,9 +884,9 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   // Anders, 2026-11-08 (live, WebGPU): the reveal of a courtyard door rendered pitch black beside the daylit
   // wall. Its outer half was tagged to the room behind, so it got that room's daylight through the shut
   // door (none) and no sun (the outdoor doorways use the underground set). Over every outdoor door of the
-  // castle: the interior stone in the outer half of the passage takes the sky (OUTDOOR_TAG), the inner
-  // half its room.
-  it('lights the outer half of every outdoor doorway from the sky, the inner half from its room', () => {
+  // castle: the interior stone between the shut leaf (or the mid plane) and the courtyard takes the sky
+  // (OUTDOOR_TAG), the stone behind the leaf its room.
+  it('lights every outdoor doorway from the sky up to its leaf, and from its room behind it', () => {
     baked();
     const faults: string[] = [];
     let outer = 0, inside = 0;
@@ -899,16 +899,17 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
         const c: V3 = [0, 1, 2].map((k) => (pos.getComponent(i, k) + pos.getComponent(i + 1, k) + pos.getComponent(i + 2, k)) / 3) as V3;
         for (const d of outdoorDoors) {
           const s = OUTDOOR.has(d.spaces[0]) ? -1 : 1, dx = c[0] - d.centre[0], dz = c[2] - d.centre[2];
+          const leaf = d.leaf ? s * (d.swingInto === 1 ? 1 : -1) * (d.wall / 2 - d.rebate) : 0; // the shut leaf, outward from the mid plane
           const through = (dx * d.normal[0] + dz * d.normal[1]) * s, across = dx * d.along[0] + dz * d.along[1];
           if (Math.abs(across) > d.width / 2 + 0.05 || c[1] < d.centre[1] + 0.05 || c[1] > d.centre[1] + d.height) continue;
-          if (through > 0.1 && through < d.wall / 2 - 0.02) { outer++; if (tag.getX(i) !== OUTDOOR_TAG) faults.push(`${d.id}: outer reveal tagged ${tag.getX(i)}`); }
-          if (through < -0.1 && through > -d.wall / 2 + 0.02) { inside++; if (tag.getX(i) < 0) faults.push(`${d.id}: inner reveal tagged ${tag.getX(i)}`); }
+          if (through > leaf + 0.1 && through < d.wall / 2 - 0.02) { outer++; if (tag.getX(i) !== OUTDOOR_TAG) faults.push(`${d.id}: outer reveal tagged ${tag.getX(i)}`); }
+          if (through < leaf - 0.1 && through > -d.wall / 2 + 0.02) { inside++; if (tag.getX(i) < 0) faults.push(`${d.id}: inner reveal tagged ${tag.getX(i)}`); }
         }
       }
     });
     expect(faults.slice(0, 10)).toEqual([]);
-    expect(outer).toBeGreaterThan(30);
-    expect(inside).toBeGreaterThan(30);
+    expect(outer).toBeGreaterThan(10);
+    expect(inside).toBeGreaterThan(10);
   }, 120_000);
 
   it('lays no real stone, at any level of detail, in a doorway', () => {
