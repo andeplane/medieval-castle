@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-11-08: the cavern's fire burns with furniture on; the caves a little less black (branch `claude/project-thread-ns4g2v-caves4`)
+
+From the coordinator's WebGPU capture of #78 on Anders' Mac (`castle-plan/caves3/webgpu-caves-after-78.jpg`): in the `caves` bookmark the smugglers' fire showed only as logs. It had no flame and no light, and the cavern was black but for the fungi. The hall's candle lit its wall, so that was furniture mode (`?furniture=1`).
+
+**Cause: with furniture on, the caves' fires were never lit.** main.ts added the caves' fires (the cavern fire and the smugglers' lantern on its crate) to the wall torches only. With furniture the wall torches are off, the fire sources start empty, and the rooms' fires stream in with their furniture. The caves have no furniture (`dress.ts`: cave rooms are empty), so their fires never came: no table row, no flame sprite. That was true of the crate lantern since #72 too. It was not WebGPU, and it was not the room assignment or the brazier's strength. The headless captures were all taken without furniture, where the fire burns.
+
+Fix (`main.ts`): the caves' fires are made once, whatever the mode. Without furniture they join the wall torches as before. With furniture they are the fixed fire sources, in their rooms' rows of the fire table (by position, `firesByRoom`). Their flames stay in front of the streamed rooms' flames whenever those change. Streaming never touches the cave rows: cave rooms bring no emitters, and `RoomFires.clear` only clears the rooms it set. `caves.test.ts`: every cave fire goes to the cave room it stands in, and the cavern's brazier to `cave-cavern`.
+
+**A little less black.** `CAVE_FLOOR` goes from a quarter of the readability floor to a half, so walls and stalactites away from the fire read as dim shapes. The cavern fire goes from 1.3 to 1.6 (`fireEmitter`), so its light reaches a little further into a 21 × 16 m cavern.
+
+Checked: build, coverage. Headless WebGPU on SwiftShader with `?furniture=1` reports the fires in (`state().fire`: source furniture, 5 flames in 4 rooms at the caves bookmark), but its screenshots come out blank (the device is dropped), so the look is checked in WebGL2 with `?furniture=1` (`castle-plan/caves4/`: caves 26 draw calls, cave-pool 22, walk-squeeze 25, cave-cache 22, cave-wall 20, hall 352). Not checked: the Mac.
+
 ## 2026-11-08: a lit heart in the great cavern; bedded, cracked rock; soft fungi light; water that reflects; the way down stands open (branch `claude/project-thread-ns4g2v-caves3`)
 
 From the coordinator's WebGPU captures after #72 on Anders' Mac: the cavern was one flat, foggy grey; the fungi halos showed as hard cyan polygons; the pool was a black disc; the squeeze was smooth brown clay up close; and Anders never found the cellar that leads to the caves.

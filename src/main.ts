@@ -143,10 +143,11 @@ async function main() {
   await breathe();
   const iplan = params.get('interior') === '0' || test === 'stairs' ? null : planInterior();
   const torches = iplan && params.get('furniture') !== '1' ? wallTorches(iplan, (id) => groupKey(iplan.rooms.find((r) => r.id === id)!)) : null;
-  // the caves' own fire: the smugglers' lantern on its crate (its body is cave geometry, not a torch holder)
-  if (torches && iplan?.caves) {
-    const cf = caveFires(iplan.caves, groupKey(iplan.rooms.find((r) => r.zone === CAVE_ZONE)!));
-    torches.emitters.push(...cf.emitters); torches.flames.push(...cf.flames); torches.group.push(...cf.group);
+  // the caves' own fires: the smugglers' lantern on its crate and their fire in the great cavern (their
+  // bodies are cave geometry, not torch holders or furniture), lit with or without furniture
+  const caveFire = iplan?.caves ? caveFires(iplan.caves, groupKey(iplan.rooms.find((r) => r.zone === CAVE_ZONE)!)) : null;
+  if (torches && caveFire) {
+    torches.emitters.push(...caveFire.emitters); torches.flames.push(...caveFire.flames); torches.group.push(...caveFire.group);
   }
   // the caves' rock is meshed in a worker (castle/interior/caveOffThread.ts) and waits in caveRock's cache
   if (iplan?.caves) await caveRockOffThread(iplan.caves, iplan.seed, browserCaveWorker());
@@ -393,7 +394,8 @@ async function main() {
   for (const g of lit.groups) for (const id of g.rooms) groupOf.set(id, g.key);
   // (?test=room brings its own plan: its torches have no holders)
   // (streamed furniture brings its fires room by room, below)
-  const fire: FireSources = furnMats ? { emitters: [], flames: [], group: [], holders: [] } : torches && lit.plan === iplan ? torches : wallTorches(lit.plan, (id) => groupOf.get(id));
+  // with furniture, the rooms' fires stream in with it (below); the caves' stay, they have no furniture
+  const fire: FireSources = furnMats ? { emitters: [...caveFire?.emitters ?? []], flames: [...caveFire?.flames ?? []], group: [...caveFire?.group ?? []], holders: [] } : torches && lit.plan === iplan ? torches : wallTorches(lit.plan, (id) => groupOf.get(id));
   // each room's fires light that room, every one of them, wherever the camera is (light/roomLight.ts):
   // one row per room in a table the interior shader sums per pixel; no point lights, so nothing is picked
   // by distance and nothing shines through a wall into the next room
@@ -406,6 +408,7 @@ async function main() {
   const caveRooms = new Set(lit.plan.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id));
   const lookDir = new THREE.Vector3();
   let flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
+  const fixedFlames = furnMats ? flames : []; // the caves' with furniture: streamed rooms' flames join them
   const sprites = makeFlameSprites(flames, furnMats ? 256 : 0);
   scene.add(sprites.group);
   let fireT = 0;
@@ -426,7 +429,7 @@ async function main() {
     const [{ createFurnitureStreamer }, { createRoomSink }] = await Promise.all([import('./props/streamer'), import('./props/roomMeshes')]);
     const groupByKey = new Map(interior.groups.map((g) => [g.key, g]));
     const roomOrder = new Map(interior.plan.rooms.map((r, i) => [r.id, i]));
-    const fires = createRoomFires(fireTable, roomBox, (fs: FlameInstance[]) => { flames = fs; flameK = new Float32Array(fs.length); sprites.set(fs); });
+    const fires = createRoomFires(fireTable, roomBox, (fs: FlameInstance[]) => { flames = [...fixedFlames, ...fs]; flameK = new Float32Array(flames.length); sprites.set(flames); });
     syncFires = fires.sync;
     const fm = furnMats;
     furnStream = createFurnitureStreamer({
