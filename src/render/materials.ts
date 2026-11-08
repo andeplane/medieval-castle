@@ -505,11 +505,13 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   let col = mix(vec3(0.25, 0.235, 0.21), vec3(0.36, 0.34, 0.305), big.g).mul(float(0.84).add(bed.mul(0.18))).mul(float(0.76).add(mid.r.mul(0.48)));
   const iron = smoothstep(0.66, 0.84, big.b).mul(0.4);
   col = mix(col, col.mul(vec3(1.18, 0.95, 0.75)), iron);
-  col = col.mul(float(0.8).add(grain.mul(0.4)));
+  col = col.mul(float(0.8).add(grain.mul(0.4))).mul(float(0.72).add(smoothstep(0.25, 0.7, mid.g).mul(0.32))); // grit, and darker hollows
   rock.colorNode = col;
   // damp: wetter, shinier low down and on the floors
   rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).clamp(0.4, 1);
-  rock.normalNode = bumpMap(big.r.mul(0.45).add(mid.g.mul(0.45)).add(grain.mul(0.18)), float(2.2));
+  // a fine octave too, so the rock still has grit at arm's length
+  const fine = texture(detail, p.zy.mul(3.7)).g.mul(wn.x).add(texture(detail, p.xz.mul(3.7)).g.mul(wn.y)).add(texture(detail, p.xy.mul(3.7)).g.mul(wn.z));
+  rock.normalNode = bumpMap(big.r.mul(0.4).add(mid.g.mul(0.4)).add(grain.mul(0.2)).add(fine.mul(0.08)), float(2.6));
   const pool = new THREE.MeshStandardNodeMaterial({ color: 0x0b1719, roughness: 0.06, metalness: 0, transparent: true, opacity: 0.62 });
   pool.name = 'cave-pool';
   const glow = new THREE.MeshStandardNodeMaterial({ color: 0x0b1210, roughness: 0.7, metalness: 0 });
@@ -521,6 +523,6 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   halo.name = 'cave-halo';
   const d = uv().mul(2).sub(1).length();
   halo.colorNode = vec3(0.1, 0.55, 0.42);
-  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2).mul(0.32);
+  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2.5).mul(0.2);
   return { rock, pool, glow, halo };
 }

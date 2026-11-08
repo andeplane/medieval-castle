@@ -24,7 +24,7 @@ const EXT_CHAMBER = 1.0, EXT_PORTAL = 0.6;
 /** How far a chamber wall's ledges stand out (m). */
 const LEDGE = 0.5;
 /** How much of a rock triangle's shading normal is its facet's (the rest is the field's smooth normal). */
-const FACETED = 0.6;
+const FACETED = 0.35;
 
 type Bin = Builder['bins'][BinKey];
 interface Prim { lo: V3; hi: V3; f: (x: number, y: number, z: number, n: number) => number }
@@ -198,12 +198,15 @@ export function buildCaves(B: Builder, P: CavePlan, seed: number, portals: CaveP
   };
   for (let t = 0; t < R.tris.length; t += 3) {
     const ids = [R.tris[t], R.tris[t + 1], R.tris[t + 2]], p = ids.map(fix), n = ids.map(nrm);
-    // face the air: wind the triangle along its vertices' normals
-    const e1 = sub3(p[1], p[0]), e2 = sub3(p[2], p[0]), fn = cross3(e1, e2);
+    // face the air: surface nets wind every quad the same way round (into the rock), so reversing all of them
+    // is consistent over the whole closed surface. (Winding each triangle by its vertices' normals instead
+    // flipped ~150 triangles at sharp creases, where the field's gradient points across the fold: they were
+    // culled and showed as slivers of nothing.)
+    const e1 = sub3(p[2], p[0]), e2 = sub3(p[1], p[0]), fn = cross3(e1, e2);
     const ns: V3 = [n[0][0] + n[1][0] + n[2][0], n[0][1] + n[1][1] + n[2][1], n[0][2] + n[1][2] + n[2][2]];
-    const tri = dot3(fn, ns) < 0 ? [0, 2, 1] : [0, 1, 2];
-    // mostly the facet's own normal: crisp broken faces, a little of the field's so they do not read as low-poly
-    const face = norm3(dot3(fn, ns) < 0 ? [-fn[0], -fn[1], -fn[2]] : fn);
+    const tri = [0, 2, 1];
+    // partly the facet's own normal: crisper broken faces, most of the field's so they do not read as low-poly
+    const face = norm3(fn);
     const facet = (v: V3) => norm3([face[0] * FACETED + v[0] * (1 - FACETED), face[1] * FACETED + v[1] * (1 - FACETED), face[2] * FACETED + v[2] * (1 - FACETED)]);
     rock.triN(tri.map((i) => p[i]), tri.map((i) => facet(n[i])), tri.map((i) => uvOf(p[i], ns)));
   }
@@ -309,7 +312,7 @@ function fungi(bin: Bin, halo: Bin, R: CaveSoup, P: CavePlan, seed: number) {
   for (const s of fungiSpots(R, P, seed)) {
     const n = norm3(s.n), t1 = norm3(cross3(n, [0, 1, 0])), t2 = cross3(n, t1);
     const at = (u: number, v: number, w: number): V3 => [s.p[0] + t1[0] * u + t2[0] * v + n[0] * w, s.p[1] + t1[1] * u + t2[1] * v + n[1] * w, s.p[2] + t1[2] * u + t2[2] * v + n[2] * w];
-    const hs = 0.28 + r() * 0.2, q = [at(-hs, -hs, 0.04), at(hs, -hs, 0.04), at(hs, hs, 0.04), at(-hs, hs, 0.04)];
+    const hs = 0.35 + r() * 0.25, q = [at(-hs, -hs, 0.04), at(hs, -hs, 0.04), at(hs, hs, 0.04), at(-hs, hs, 0.04)];
     halo.tri(q[0], q[1], q[2], n, [0, 0], [1, 0], [1, 1]); halo.tri(q[0], q[2], q[3], n, [0, 0], [1, 1], [0, 1]);
     const caps = 6 + Math.floor(r() * 9);
     for (let c = 0; c < caps; c++) {
@@ -489,7 +492,7 @@ export function caveFires(P: CavePlan, group: string): { emitters: LightEmitter[
   for (const f of P.features) if (f.kind === 'lantern') {
     const b = cacheLayout(f.at, f.dir).lantern, base: V3 = [b[0], b[1] + 0.06, b[2]];
     out.flames.push({ kind: 'lantern', base, height: 0.09 });
-    out.emitters.push({ kind: 'lantern', position: [base[0], base[1] + 0.08, base[2]], colour: [1, 0.93, 0.82], intensity: 1.6, flicker: 0.35 });
+    out.emitters.push({ kind: 'lantern', position: [base[0], base[1] + 0.08, base[2]], colour: [1, 0.93, 0.82], intensity: 0.6, flicker: 0.35 });
     out.group.push(group);
   }
   return out;
@@ -512,6 +515,5 @@ export function caveRampSoups(P: CavePlan): { id: string; soup: number[] }[] {
 }
 
 const sub3 = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const dot3 = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross3 = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm3 = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };

@@ -11,6 +11,7 @@ import { caveSpan, caveWalk, passageFrame, passageFloor, ellipseRadius, poolDept
 import { caveField, caveRock, behindPortal, surfaceNets, poolDisc, stepBlocks, caveFires, caveRampSoups, cacheLayout, fungiSpots, fallenBlocks, speleothems, buildCaves, primeCaveRock, CAVE_CELL, TIP_CLEAR } from '../src/castle/interior/caveGeom';
 import { caveRockOffThread, packCaveRock, type CaveWorker } from '../src/castle/interior/caveOffThread';
 import { Builder } from '../src/castle/builder';
+import { interiorViews } from '../src/camera/interiorViews';
 import { navGraph, findPath } from '../src/castle/interior/nav';
 import { roomGraph, drawnSpaces } from '../src/world/visibility';
 import { islandOutline, moatOuter } from '../src/castle/layout';
@@ -183,6 +184,21 @@ describe('cave rock', () => {
     const g = res.groups.find((x) => x.key === 'cave:-1')!;
     expect(g.rooms.sort()).toEqual(P.rooms.filter(isCave).map((r) => r.id).sort());
     expect((g.object.children as THREE.Mesh[]).map((m) => m.name).sort()).toEqual(['glow', 'halo', 'iron', 'pool', 'rock', 'trim', 'wood'].map((k) => `interior-cave:-1-${k}`));
+  }, 120_000);
+
+  it('shows no gap from any cave view: every ray of a 64 × 36 grid meets a front face (no culled slivers)', () => {
+    const meshes: T3.Object3D[] = [];
+    for (const g of res.groups) g.object.traverse((o) => { if ((o as T3.Mesh).isMesh) meshes.push(o); });
+    const rc = new T3.Raycaster(), missed: string[] = [];
+    for (const v of interiorViews(P).filter((x) => ['caves', 'cave-wall', 'cave-squeeze', 'cave-drop', 'cave-steps', 'cave-ossuary', 'cave-cache', 'cave-pool'].includes(x.name))) {
+      const cam = new T3.PerspectiveCamera(55, 16 / 9, 0.05, 500);
+      cam.position.set(...v.pos); cam.lookAt(...v.target); cam.updateMatrixWorld();
+      for (let i = 0; i < 64; i++) for (let j = 0; j < 36; j++) {
+        rc.setFromCamera(new T3.Vector2(((i + 0.5) / 64) * 2 - 1, ((j + 0.5) / 36) * 2 - 1), cam);
+        if (!rc.intersectObjects(meshes, false).length) missed.push(`${v.name} (${i}, ${j})`);
+      }
+    }
+    expect(missed).toEqual([]);
   }, 120_000);
 
   it('surface nets: a sphere is closed and the right size', () => {
