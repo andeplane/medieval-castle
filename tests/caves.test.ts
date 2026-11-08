@@ -130,7 +130,7 @@ describe('cave rock', () => {
     const soup: number[] = [];
     g.object.updateMatrixWorld(true);
     const add = (a: ArrayLike<number>) => { for (let i = 0; i < a.length; i++) soup.push(a[i]); };
-    for (const m of g.object.children as THREE.Mesh[]) if (!/pool|glow/.test(m.name)) add(m.geometry.attributes.position.array);
+    for (const m of g.object.children as THREE.Mesh[]) if (!/pool|glow|halo/.test(m.name)) add(m.geometry.attributes.position.array);
     for (const c of res.collision) if (c.name.startsWith('ramp:cave')) add(c.attributes.position.array);
     const geo = new T3.BufferGeometry(); geo.setAttribute('position', new T3.BufferAttribute(new Float32Array(soup), 3));
     bvh = new MeshBVH(geo);
@@ -187,19 +187,22 @@ describe('cave rock', () => {
   }, 120_000);
 
   it('shows no gap from any cave view: every ray of a 64 × 36 grid meets a front face (no culled slivers)', () => {
-    const meshes: T3.Object3D[] = [];
-    for (const g of res.groups) g.object.traverse((o) => { if ((o as T3.Mesh).isMesh) meshes.push(o); });
-    const rc = new T3.Raycaster(), missed: string[] = [];
+    // what the renderer draws of the caves, front faces only (the halos are additive glow, not a surface)
+    const g = res.groups.find((x) => x.key === 'cave:-1')!, soup: number[] = [];
+    for (const m of g.object.children as THREE.Mesh[]) if (!/halo/.test(m.name)) { const a = m.geometry.attributes.position.array; for (let i = 0; i < a.length; i++) soup.push(a[i]); }
+    const geo = new T3.BufferGeometry(); geo.setAttribute('position', new T3.BufferAttribute(new Float32Array(soup), 3));
+    const seen = new MeshBVH(geo), missed: string[] = [];
     for (const v of interiorViews(P).filter((x) => ['caves', 'cave-wall', 'cave-squeeze', 'cave-drop', 'cave-steps', 'cave-ossuary', 'cave-cache', 'cave-pool'].includes(x.name))) {
       const cam = new T3.PerspectiveCamera(55, 16 / 9, 0.05, 500);
       cam.position.set(...v.pos); cam.lookAt(...v.target); cam.updateMatrixWorld();
+      const rc = new T3.Raycaster();
       for (let i = 0; i < 64; i++) for (let j = 0; j < 36; j++) {
         rc.setFromCamera(new T3.Vector2(((i + 0.5) / 64) * 2 - 1, ((j + 0.5) / 36) * 2 - 1), cam);
-        if (!rc.intersectObjects(meshes, false).length) missed.push(`${v.name} (${i}, ${j})`);
+        if (!seen.raycastFirst(rc.ray, T3.FrontSide, 0, 200)) missed.push(`${v.name} (${i}, ${j})`);
       }
     }
     expect(missed).toEqual([]);
-  }, 120_000);
+  });
 
   it('surface nets: a sphere is closed and the right size', () => {
     const S = surfaceNets((x, y, z) => Math.hypot(x, y, z) - 2, [-2.5, -2.5, -2.5], [2.5, 2.5, 2.5], 0.25);
@@ -267,8 +270,8 @@ describe('the carried lantern', () => {
     const p = lanternAt([0, 1.6, 0], [0, -0.3, -2]); // looking north
     expect(p[0]).toBeGreaterThan(0.1); // east = right
     expect(p[2]).toBeLessThan(0);
-    expect(p[1]).toBeCloseTo(1.15, 6);
-    expect(lanternAt([0, 0, 0], [0, 1, 0])[1]).toBeCloseTo(-0.45, 6); // straight up: no plan direction, still placed
+    expect(p[1]).toBeCloseTo(1.05, 6);
+    expect(lanternAt([0, 0, 0], [0, 1, 0])[1]).toBeCloseTo(-0.55, 6); // straight up: no plan direction, still placed
     const caves = new Set(['cave-hall']);
     expect(lanternLit(['cave-hall'], caves)).toBe(true);
     expect(lanternLit(['N-c1'], caves)).toBe(false);

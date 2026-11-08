@@ -502,10 +502,10 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   rock.name = 'cave-rock';
   // strata: gently wavy beds a few decimetres thick
   const bed = sin(p.y.mul(5.3).add(big.r.mul(6)).add(mid.g.mul(1.5))).mul(0.5).add(0.5);
-  let col = mix(vec3(0.25, 0.235, 0.21), vec3(0.36, 0.34, 0.305), big.g).mul(float(0.84).add(bed.mul(0.18))).mul(float(0.76).add(mid.r.mul(0.48)));
+  let col = mix(vec3(0.235, 0.23, 0.22), vec3(0.34, 0.335, 0.315), big.g).mul(float(0.84).add(bed.mul(0.18))).mul(float(0.76).add(mid.r.mul(0.48)));
   const iron = smoothstep(0.66, 0.84, big.b).mul(0.4);
   col = mix(col, col.mul(vec3(1.18, 0.95, 0.75)), iron);
-  col = col.mul(float(0.8).add(grain.mul(0.4))).mul(float(0.72).add(smoothstep(0.25, 0.7, mid.g).mul(0.32))); // grit, and darker hollows
+  col = col.mul(float(0.8).add(grain.mul(0.4))); // grit
   rock.colorNode = col;
   // damp: wetter, shinier low down and on the floors
   rock.roughnessNode = float(0.92).sub(smoothstep(0.55, 0.8, mid.b).mul(0.35)).clamp(0.4, 1);
@@ -523,6 +523,6 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   halo.name = 'cave-halo';
   const d = uv().mul(2).sub(1).length();
   halo.colorNode = vec3(0.1, 0.55, 0.42);
-  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2.5).mul(0.2);
+  halo.opacityNode = float(1).sub(d).clamp(0, 1).pow(2.5).mul(0.12);
   return { rock, pool, glow, halo };
 }

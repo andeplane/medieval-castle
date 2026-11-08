@@ -1,6 +1,6 @@
 // The lantern the player carries in the caves (the castle's cellars and tunnels have wall torches; the
 // caves have none). It is one more source of the shared light rig (src/light: LightRig.add as a mobile
-// source), lit while the camera is in a cave room and out elsewhere, held low and to the right.
+// source), lit while the camera is in a cave room and out elsewhere, held low and to the right, so its light rakes across the rock.
 import type { LightEmitter, V3 } from '../light/types';
 import type { SpaceId } from '../castle/interior/types';
 
@@ -13,7 +13,7 @@ export const CARRIED_LANTERN: LightEmitter = { kind: 'lantern', position: [0, -1
 /** Where the lantern hangs for an eye looking along `fwd` (any length; only its plan direction counts). */
 export function lanternAt(eye: V3, fwd: V3): V3 {
   const l = Math.hypot(fwd[0], fwd[2]) || 1, f = [fwd[0] / l, fwd[2] / l], right = [-f[1], f[0]];
-  return [eye[0] + f[0] * 0.3 + right[0] * 0.22, eye[1] - 0.45, eye[2] + f[1] * 0.3 + right[1] * 0.22];
+  return [eye[0] + f[0] * 0.3 + right[0] * 0.3, eye[1] - 0.55, eye[2] + f[1] * 0.3 + right[1] * 0.3];
 }
 
 /** Lit while any of the camera's spaces is a cave room. */

@@ -24,7 +24,7 @@ const EXT_CHAMBER = 1.0, EXT_PORTAL = 0.6;
 /** How far a chamber wall's ledges stand out (m). */
 const LEDGE = 0.5;
 /** How much of a rock triangle's shading normal is its facet's (the rest is the field's smooth normal). */
-const FACETED = 0.35;
+const FACETED = 0.15;
 
 type Bin = Builder['bins'][BinKey];
 interface Prim { lo: V3; hi: V3; f: (x: number, y: number, z: number, n: number) => number }

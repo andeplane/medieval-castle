@@ -22,7 +22,7 @@ export default defineConfig({
         'src/render/texgen.ts': { lines: 95, functions: 95, branches: 85, statements: 95 },
         // measured 99.8 / 100 / 89.6 / 98.0
         'src/castle/interior/{stairs,stairprobe}.ts': { lines: 99, functions: 100, branches: 88, statements: 97 },
-        'src/castle/interior/{plan,shell,nav,geom,carve,tunnel,index,caves,caveGeom}.ts': { lines: 98, functions: 95, branches: 85, statements: 97 },
+        'src/castle/interior/{plan,shell,nav,geom,carve,tunnel,index,caves,caveGeom,caveOffThread}.ts': { lines: 98, functions: 95, branches: 85, statements: 97 },
         'src/camera/interiorViews.ts': { lines: 100, functions: 90, branches: 90, statements: 95 },
         // measured: doorParts 98.9 / 87.8 / 100 / 100, doors 100 / 95.0 / 100 / 100, portcullis + doorGeom + doorBatch 100
         'src/castle/interior/{doors,doorGeom,doorParts,doorBatch,portcullis}.ts': { lines: 99, functions: 100, branches: 94, statements: 98 },
