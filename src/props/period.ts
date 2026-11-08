@@ -3,7 +3,7 @@
 // as kit.ts: pure generators of (mesh, rng, variant), local frame on the floor (or wall) at the centre of
 // the footprint, front +z, metres. Detail goes into textures (the paint atlas: carpets, canvases, pelts)
 // and vertex tints rather than triangles.
-import { PropMesh, translate, rotX, rotY, rotZ, compose, ATLAS, type RGB, type V3 } from './geom';
+import { PropMesh, translate, rotX, rotY, rotZ, compose, applyP, applyD, v3, ATLAS, type RGB, type V3 } from './geom';
 import { range, pick, type Rng } from '../core/rng';
 import { IRON, FLAME, jitterTint, boxCollider, hull, none, candle, type PropKind, type Emitter } from './parts';
 
@@ -611,43 +611,137 @@ export const runner: PropKind = {
   },
 };
 
-/** Animal skin by the fire: a bear or deer hide laid flat, its outline the classic rug's (four splayed legs
- * with paws, a head, a short tail), a little thickness that rolls down to soft edges, fur from the paint
- * atlas mapped flat in metres (no stretching into the legs); a raised bear's head one time in two. */
+/** Hide species: a bear or a deer hide with its head, four legs and tail, or a plainer sheepskin. */
+export type HideKind = 'bear' | 'deer' | 'sheep';
+/** Metres per fur tile across (u) and along (v): the fur rectangle of the atlas is 1:4, so 2 mm a pixel both ways. */
+export const FUR_TILE: [number, number] = [0.25, 1];
+/** Grid step of the hide mesh; divides both FUR_TILE sides, so a tile seam falls on a cell edge. */
+export const HIDE_STEP = 0.05;
+
+const smin = (a: number, b: number, k: number) => { const h = Math.max(0, Math.min(1, 0.5 + 0.5 * (b - a) / k)); return b + (a - b) * h - k * h * (1 - h); };
+const sstep = (e0: number, e1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+/** Distance to an ellipse (approximate, exact on the axes). */
+const ellipse = (x: number, z: number, cx: number, cz: number, rx: number, rz: number) => (Math.hypot((x - cx) / rx, (z - cz) / rz) - 1) * Math.min(rx, rz);
+/** Distance to a segment a-b whose radius goes from ra to rb. */
+const limb = (x: number, z: number, a: [number, number], b: [number, number], ra: number, rb: number) => {
+  const dx = b[0] - a[0], dz = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz)));
+  return Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t) - (ra + (rb - ra) * t);
+};
+
+/**
+ * The outline of a flat hide as a signed distance (negative inside), head toward +z, in metres, and
+ * where its parts are (the nose for its dark tip, the head for its rise). L: nose to tail.
+ */
+export function hideShape(kind: HideKind, L: number, r: Rng) {
+  const j = () => range(r, -0.03, 0.03) * L; // a hide is never cut symmetric
+  const parts: ((x: number, z: number) => number)[] = [];
+  let nose: [number, number], head: [number, number, number]; // head: centre x, z and radius of its rise
+  if (kind === 'sheep') {
+    // a sheepskin: the fleece of the back, a short neck flap and four stubby leg flaps
+    parts.push((x, z) => ellipse(x, z, 0, 0, L * 0.31, L * 0.44));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const a: [number, number] = [sx * L * 0.2, sz * L * 0.26], b: [number, number] = [sx * L * 0.4 + j(), sz * L * 0.36 + j()]; parts.push((x, z) => limb(x, z, a, b, L * 0.09, L * 0.06)); }
+    parts.push((x, z) => limb(x, z, [0, L * 0.35], [j() * 0.5, L * 0.5], L * 0.1, L * 0.07));
+    nose = [0, L * 0.5]; head = [0, L * 0.45, 0];
+  } else {
+    const bear = kind === 'bear';
+    const bw = bear ? 0.26 : 0.2, bl = bear ? 0.3 : 0.31;   // body half-width and half-length / L
+    parts.push((x, z) => ellipse(x, z, 0, -L * 0.04, L * bw, L * bl));
+    // head on a neck: a rounded skull, a snout narrowing to the nose, ears
+    const hz = L * (bear ? 0.33 : 0.35), hr = L * (bear ? 0.095 : 0.075), nz = L * 0.5;
+    parts.push((x, z) => limb(x, z, [0, L * 0.16], [0, hz], L * (bear ? 0.12 : 0.1), hr * 0.9)); // neck
+    parts.push((x, z) => ellipse(x, z, 0, hz, hr, hr * 1.05));
+    parts.push((x, z) => limb(x, z, [0, hz], [0, nz - L * 0.025], hr * 0.75, L * (bear ? 0.04 : 0.028)));
+    for (const sx of [-1, 1]) parts.push(bear
+      ? (x, z) => ellipse(x, z, sx * hr * 0.95, hz + hr * 0.6, L * 0.032, L * 0.03)
+      : (x, z) => limb(x, z, [sx * hr * 0.6, hz + hr * 0.3], [sx * L * 0.16, hz + L * 0.03], L * 0.035, L * 0.02));
+    // legs: shoulder → elbow out to the side → paw, front ones reaching forward, hind ones back
+    for (const sx of [-1, 1]) for (const front of [true, false]) {
+      const sz = front ? 1 : -1, s: [number, number] = [sx * L * 0.14, L * (front ? 0.13 : -0.18)];
+      const e: [number, number] = [sx * L * (bear ? 0.36 : 0.32) + j(), L * (front ? 0.16 : -0.24) + j()];
+      const p: [number, number] = [sx * L * (bear ? 0.44 : 0.4) + j(), e[1] + sz * L * (bear ? 0.13 : 0.17) + j()];
+      const w0 = L * (bear ? 0.085 : 0.065), w1 = L * (bear ? 0.06 : 0.04), w2 = L * (bear ? 0.055 : 0.026);
+      parts.push((x, z) => limb(x, z, s, e, w0, w1), (x, z) => limb(x, z, e, p, w1, w2));
+      if (bear) parts.push((x, z) => ellipse(x, z, p[0], p[1], L * 0.06, L * 0.05)); // the broad paw
+    }
+    // tail: a stub on a bear, a short flag on a deer
+    parts.push((x, z) => limb(x, z, [0, -L * 0.3], [0, -L * (bear ? 0.4 : 0.44)], L * 0.04, L * (bear ? 0.025 : 0.03)));
+    nose = [0, nz]; head = [0, hz, hr * 1.4];
+  }
+  const k = L * 0.035, ph = r() * 6.28;
+  const d = (x: number, z: number) => {
+    let v = parts[0](x, z);
+    for (let i = 1; i < parts.length; i++) v = smin(v, parts[i](x, z), k);
+    return v + 0.004 * Math.sin(x * 37 + z * 23 + ph) + 0.003 * Math.sin(x * 61 - z * 53 + 2 * ph); // a ragged cut edge
+  };
+  return { d, nose, head };
+}
+
+/** Marching squares on one grid cell: the parts inside (value < 0) of the square with corners c (in order
+ * round it) and values v there, cut points on the edges by interpolation. One polygon, or two triangles
+ * when two opposite corners are inside alone (a saddle). */
+export function clipCell(c: [number, number][], v: number[]): [number, number][][] {
+  const poly: [number, number][] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = c[i], b = c[(i + 1) % 4], da = v[i], db = v[(i + 1) % 4];
+    if (da < 0) poly.push(a);
+    if ((da < 0) !== (db < 0)) { const t = da / (da - db); poly.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+  }
+  if (v.filter((x) => x < 0).length !== 2 || (v[0] < 0) !== (v[2] < 0)) return [poly];
+  return [0, 2].map((k) => { const p = poly.indexOf(c[v[k] < 0 ? k : k + 1]), n = poly.length; return [poly[p], poly[(p + 1) % n], poly[(p + n - 1) % n]]; });
+}
+
+/** Animal skin by the fire: a flat bear or deer hide (head with snout and ears, four splayed legs, tail)
+ * or a sheepskin. The pelt is a height field over a 5 cm grid clipped to the outline (marching squares),
+ * so the cut edge is exact and nothing overlaps: thin at the edge, a little fur thickness inside, the
+ * head raised. Fur from the paint atlas tiled in metres (hair along the body, head to tail), darker
+ * along the spine and at the cut rim, a dark nose; glass eyes on the bear. */
 export const skin: PropKind = {
   name: 'skin', placement: 'floor', blocksNav: false,
   build(m, r) {
-    const bear = r() < 0.5, L = bear ? range(r, 1.8, 2.2) : range(r, 1.3, 1.6), W = L * 0.62;
-    const tint = bear ? jitterTint(r, [0.55, 0.45, 0.38], 0.1) : jitterTint(r, [0.74, 0.56, 0.4], 0.08);
-    // outline in polar form from the middle (head toward +z): an oval body, four legs, a head and a tail
-    // super-Gaussian lobes: square-ended legs (paws), not the points of a star
-    const lobe = (th: number, c: number, w: number, p = 2) => { const d = Math.atan2(Math.sin(th - c), Math.cos(th - c)); return Math.exp(-(Math.abs(d / w) ** p)); };
-    const legs = [0.9, -0.9, 2.25, -2.25].map((c) => c + range(r, -0.06, 0.06));
-    const R = (th: number) => {
-      const body = 1 / Math.hypot(Math.sin(th) / (W * 0.34), Math.cos(th) / (L * 0.33));
-      return body + legs.reduce((s, c, i) => s + lobe(th, c, 0.19, 4) * L * (i < 2 ? 0.2 : 0.19), 0) + lobe(th, 0, 0.22, 3) * L * (bear ? 0.1 : 0.14)
-        + (bear ? 0 : (lobe(th, 0.3, 0.06) + lobe(th, -0.3, 0.06)) * L * 0.1) + lobe(th, Math.PI, 0.08) * L * (bear ? 0.05 : 0.07);
+    const q = r(), kind: HideKind = q < 0.45 ? 'bear' : q < 0.8 ? 'deer' : 'sheep';
+    const L = kind === 'bear' ? range(r, 1.6, 1.85) : kind === 'deer' ? range(r, 1.35, 1.55) : range(r, 1.0, 1.2); // nose to tail; as wide with the legs
+    const base: RGB = kind === 'bear' ? jitterTint(r, [0.3, 0.2, 0.13], 0.12) : kind === 'deer' ? jitterTint(r, [0.62, 0.42, 0.27], 0.08) : jitterTint(r, [1.5, 1.42, 1.22], 0.05);
+    const { d, nose, head } = hideShape(kind, L, r);
+    const pile = kind === 'sheep' ? 0.026 : kind === 'bear' ? 0.02 : 0.012, rise = kind === 'bear' ? 0.022 : kind === 'deer' ? 0.012 : 0;
+    // height: 4 mm at the cut edge rolling up to the pile over 10 cm; the head domed above that
+    const height = (x: number, z: number) => {
+      const e = sstep(0, 0.1, -d(x, z)), hd = head[2] ? Math.max(0, 1 - Math.hypot(x - head[0], (z - head[1]) * 0.8) / head[2]) : 0;
+      return 0.004 + (pile - 0.004) * e + rise * hd * hd * (3 - 2 * hd) * e;
     };
-    const N = 72, rings = [0, 0.4, 0.75, 0.93, 1], lift = [0.024, 0.023, 0.019, 0.012, 0.003];
-    const pts = rings.map((f, k) => Array.from({ length: N }, (_, i) => { const th = (i / N) * Math.PI * 2, rr = R(th) * f; return [Math.sin(th) * rr, lift[k], Math.cos(th) * rr] as V3; }));
-    const X = W * 0.9, Z = L * 0.6, uv = (p: V3): [number, number] => [ATLAS.fur[0] + (ATLAS.fur[2] - ATLAS.fur[0]) * (p[0] / (2 * X) + 0.5), ATLAS.fur[1] + (ATLAS.fur[3] - ATLAS.fur[1]) * (p[2] / (2 * Z) + 0.5)];
-    m.tinted(tint, () => {
-      for (let k = 0; k < rings.length - 1; k++) for (let i = 0; i < N; i++) {
-        const j = (i + 1) % N, a = pts[k][i], b = pts[k][j], c = pts[k + 1][j], d = pts[k + 1][i];
-        const nn = (p: V3, q: V3, s: V3): V3 => { const u: V3 = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], v: V3 = [s[0] - p[0], s[1] - p[1], s[2] - p[2]]; const c3: V3 = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; const l = Math.hypot(...c3) || 1; return c3[1] < 0 ? [-c3[0] / l, -c3[1] / l, -c3[2] / l] : [c3[0] / l, c3[1] / l, c3[2] / l]; };
-        if (k > 0) { const n1 = nn(a, c, b); m.tri('paint', [a, b, c], [n1, n1, n1], [uv(a), uv(b), uv(c)]); }
-        const n2 = nn(a, d, c); m.tri('paint', [a, c, d], [n2, n2, n2], [uv(a), uv(c), uv(d)]);
+    const normal = (x: number, z: number): V3 => { const h = 0.025, gx = (height(x + h, z) - height(x - h, z)) / (2 * h), gz = (height(x, z + h) - height(x, z - h)) / (2 * h); const l = Math.hypot(gx, 1, gz); return [-gx / l, 1 / l, -gz / l]; };
+    const colour = (x: number, z: number): RGB => {
+      // colour changes over 10 cm or more (the grid is 5 cm): a darker cut rim, spine and nose, a deer's paler flanks
+      const inside = -d(x, z), rim = 0.68 + 0.32 * sstep(0, 0.09, inside);
+      const spine = kind === 'sheep' ? 1 : 1 - 0.2 * Math.exp(-((x / (L * 0.08)) ** 2)) * sstep(L * 0.45, L * 0.3, z);
+      const n = Math.hypot(x - nose[0], z - nose[1]), muzzle = kind === 'sheep' ? 1 : 0.25 + 0.75 * sstep(L * 0.03, L * 0.07, n);
+      const pale = kind === 'deer' ? 0.3 * sstep(L * 0.07, L * 0.2, Math.abs(x)) : 0;
+      const f = rim * spine * muzzle;
+      return [(base[0] + (0.9 - base[0]) * pale) * f, (base[1] + (0.8 - base[1]) * pale) * f, (base[2] + (0.65 - base[2]) * pale) * f];
+    };
+    // the grid: aligned to the fur tiles, so each cell lies in one tile and a seam falls on cell edges
+    // the fur tile repeats (it is painted tileable), seams half a tile off the spine and the middle, sampled
+    // from 2 texels in from the rectangle's sides (its neighbours in the atlas), the same scale both ways
+    const s = HIDE_STEP, [TU, TV] = FUR_TILE, F = ATLAS.fur, eu = 2 / 128, ev = eu;
+    const nx = Math.ceil(L * 0.62 / TU) * TU + TU / 2, nz = Math.ceil(L * 0.62 / TV) * TV + TV / 2;
+    const P = m.bins.paint, xf = m.xf;
+    const push = (pts: [number, number][], tu: number, tv: number) => {
+      const vs = pts.map(([x, z]) => ({ p: [x, height(x, z), z] as V3, n: normal(x, z), c: colour(x, z), uv: [F[0] + (F[2] - F[0]) * (eu + (1 - 2 * eu) * (x - tu * TU - TU / 2) / TU), F[1] + (F[3] - F[1]) * (ev + (1 - 2 * ev) * (z - tv * TV - TV / 2) / TV)] }));
+      for (let i = 1; i + 1 < vs.length; i++) {
+        const a = vs[0], b = vs[i], c = vs[i + 1], up = (b.p[2] - a.p[2]) * (c.p[0] - a.p[0]) - (b.p[0] - a.p[0]) * (c.p[2] - a.p[2]);
+        for (const v of up > 0 ? [a, b, c] : [a, c, b]) { P.pos.push(...applyP(xf, v.p)); P.nor.push(...v3.norm(applyD(xf, v.n))); P.uv.push(v.uv[0], v.uv[1]); P.col.push(...v.c); }
       }
-    });
-    const before = m.bins.paint.uv.length;
-    if (bear) m.tinted(tint, () => m.with(translate(0, 0.06, R(0) - 0.12), () => {
-      m.tube('paint', [[0, 0.04, -0.12], [0, 0.11, 0.0], [0, 0.1, 0.16], [0, 0.07, 0.27]], [0.1, 0.13, 0.09, 0.05], 10);
-      for (const sx of [-1, 1]) m.with(translate(sx * 0.08, 0.17, -0.04), () => m.lathe('paint', [[0.001, 0], [0.035, 0.01], [0.03, 0.035], [0.001, 0.045]], 6));
-      m.tinted([0.15, 0.12, 0.1], () => m.with(translate(0, 0.07, 0.31), () => m.lathe('ceramic', [[0.001, -0.02], [0.025, -0.01], [0.022, 0.015], [0.001, 0.02]], 6)));
-    }));
-    // the head's metre UVs folded into the fur's corner of the atlas
-    const uvs = m.bins.paint.uv, fr = (x: number) => x - Math.floor(x);
-    for (let i = before; i < uvs.length; i += 2) { uvs[i] = ATLAS.fur[0] + (ATLAS.fur[2] - ATLAS.fur[0]) * fr(uvs[i] * 2); uvs[i + 1] = ATLAS.fur[1] + (ATLAS.fur[3] - ATLAS.fur[1]) * 0.5 * fr(uvs[i + 1] * 2); }
+    };
+    for (let i = 0; i < Math.round(2 * nx / s); i++) for (let k = 0; k < Math.round(2 * nz / s); k++) {
+      const x0 = -nx + i * s, z0 = -nz + k * s;
+      const c: [number, number][] = [[x0, z0], [x0 + s, z0], [x0 + s, z0 + s], [x0, z0 + s]], v = c.map(([x, z]) => d(x, z));
+      if (v.every((a) => a >= 0)) continue;
+      const tu = Math.floor((x0 + s / 2 - TU / 2) / TU), tv = Math.floor((z0 + s / 2 - TV / 2) / TV); // tile indices
+      for (const poly of clipCell(c, v)) push(poly, tu, tv);
+    }
+    if (kind === 'bear') for (const sx of [-1, 1]) { // glass eyes on the head
+      const ex = head[0] + sx * L * 0.035, ez = head[1] + L * 0.025;
+      m.tinted([0.06, 0.04, 0.03], () => m.with(translate(ex, height(ex, ez) - 0.003, ez), () => m.lathe('ceramic', [[0.001, 0], [0.011, 0.003], [0.009, 0.008], [0.001, 0.011]], 6)));
+    }
     return { colliders: [hull(m)], emitters: [] };
   },
 };

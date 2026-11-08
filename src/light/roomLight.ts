@@ -6,7 +6,8 @@
 // its own room is also what stops a hearth shining through the wall into the next room.
 // Pure: the shader reads `FireTable.data` (one row per room) and `FireTable.flick` (one flicker value
 // per fire, written every frame).
-import type { FlameKind, LightEmitter, RGB, V3 } from './types';
+import type { Flame, FlameKind, LightEmitter, RGB, V3 } from './types';
+import { linkFlames, type FlameInstance } from './flames';
 import { PROFILES, flicker, flickerAmount, seedOf } from './flicker';
 import { kelvinToLinear, seenKelvin } from './blackbody';
 import { WARM_INTERIOR } from './look';
@@ -184,4 +185,20 @@ export class FireTable {
     for (const fs of this.rows) if (fs) { rooms++; fires += fs.length; candela += fs.reduce((a, f) => a + f.candela, 0); }
     return { rooms, fires, candela: Math.round(candela) };
   }
+}
+
+/** Fires for the whole castle: each emitter's owner room (a torch's holder, a furniture fire's room;
+ * undefined: the room it stands in), and every flame. */
+export interface CastleFireSources { emitters: LightEmitter[]; flames: Flame[]; owners: ({ room: string } | undefined)[] }
+
+/**
+ * The fire table and flame instances for every room at once, as main.ts makes them before the first
+ * frame: each room's row holds all its fires (roomFires) and every flame is linked to its light. Built
+ * once and never changed by where the camera is or what has streamed in (tests/world-views.test.ts walks it).
+ * `room(id)`: the room's row and box; rooms it does not know light nothing.
+ */
+export function lightCastle(rooms: (RoomBox & { id: string })[], src: CastleFireSources, room: (id: string) => { row: number; box: RoomBox } | undefined, maxRooms: number): { table: FireTable; flames: FlameInstance[] } {
+  const table = new FireTable(maxRooms);
+  for (const [id, es] of firesByRoom(rooms, src.emitters, src.owners)) { const r = room(id); if (r) table.set(r.row, roomFires(r.box, es)); }
+  return { table, flames: linkFlames(src.flames, src.emitters) };
 }

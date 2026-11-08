@@ -23,6 +23,49 @@ So the slope, turned up toward the windows, gets a little more light than the wa
 Before: 56 of 69 fail, the hall's hood 1.96 ×, worst 1.96. After: none fail, the hall's hood 1.21, worst 1.21. Firelight is left out on both sides; the fire on a hearth's own front is `roomLight.test`'s rule. A second test keeps the stone's mean between the rubble and the ashlar. `interiorMath.test.ts` checks `tableDaylight` against the exact form factor of a pane seen square on.
 
 Not checked: the Mac (WebGPU). `WALL_STONE` is a measurement: if the wall shader changes, it must be re-measured.
+## 2026-11-08: with furniture, every room's fires are lit from the first frame, not when its furniture streams in (branch `claude/project-thread-ns4g2v-lights`)
+
+Anders: "light in next room off. then i walk a bit, then on".
+
+**Cause: with `?furniture=1` a room's fires came with its furniture.** Furniture streams in by room (`props/streamer.ts`): a room is wanted once the room graph draws it, furnished in a worker and added a few rooms a frame; its fires went into the fire table only then (`roomMeshes.ts` → `light/roomFires.ts`), and out again 5 s after it stopped being wanted. So a room seen through a doorway was drawn with no firelight and no flames until its furniture had loaded, and it went dark again after you left it for a while. Without furniture nothing depended on distance (the wall torches are all set at load, since #71).
+
+Fix: fires no longer stream.
+- `props/roomFurniture.ts roomFireLists`: every room's fires (emitters and flames) by dressing the room without building its triangles (`place.ts placedFires`, the same as `mergePlaced` gives). It runs in a furnish worker at load (the `fires` job, ~0.9 s for 221 rooms in node, alongside the prop textures), and main awaits it before the first frame.
+- `render/interiorFire.ts furnitureFires` turns the lists into fire sources owned by their room; `light/roomLight.ts lightCastle` builds the fire table and the linked flames once, for both modes (main.ts used to do this inline). The streamer's sink no longer touches fires; `light/roomFires.ts` is gone.
+- Side effect: windows of furnished rooms glow at night from the start, not once their furniture has loaded.
+- **Assumption / known look:** a room's flame (and its light) now shows from the first frame even if the candlestick or hearth under it has not streamed in yet. On a jump to a far bookmark that can be a flame in mid-air for the few frames the furniture takes. Not fixed here (the furniture streaming is not this change's area); prefetching rooms one step beyond the drawn set would hide it.
+
+Checked the rest of the list for anything distance-dependent: the flame sprites are one instanced mesh with every flame, not culled or faded by distance (`light/three.ts`); there are no outdoor torches; `LightRig` and `light/budget.ts` (the nearest-8 pool with its 0.35 s fade) are only used by `props.html` and `lights.html`, not the game; the 12-fire cap keeps the brightest 12 of a room (the busiest furnished room has 8), not the nearest; a room seen through an open door uses its own row, which does not depend on the camera.
+
+Test (`world-views.test.ts`, replacing the old one which set the table once and never ran the streamer): in both modes (wall torches; furniture, with the furniture streamer running as main runs it, the graph's drawn rooms wanted, loads finishing between steps and rooms unloaded behind you), stepping the camera from 15 m out through every doorway, doors shut and then open (> 2000 poses, both modes at each): every room the graph draws has all its fires, the same row as at the first frame (its firelight summed every 16th pose), and the fire table and the flames are byte-identical to the first frame. With the old wiring put back, 481,417 of 8.8 M drawn-room checks failed (e.g. `gate-0: 0 of 2 fires lit from -15.35 m off N0-0>N0-1`). `props-stream.test.ts`: the fire lists equal the furnished rooms' emitters and flames, through the worker too. `roomLight.test.ts`: `lightCastle` by owner and position.
+
+Checked: build, `npm test`, coverage (thresholds pass). Not checked: the look with furniture in a browser. The headless WebGL2 page with `?furniture=1` crashed its renderer during load four times on the shared machine, on main and on this branch alike, so there are no furniture captures. Only `hall` without furniture was captured (`castle-plan/fix-lights/`: 312 draw calls, 2.30 M triangles; that path did not change). Not checked on WebGPU or the Mac. The added load time with furniture (the `fires` job in a worker, before the first frame) was not measured in a browser.
+
+## 2026-11-08: the skin rug is a hide, not an orange blob (branch `claude/project-thread-ns4g2v-rug`)
+
+Anders on the skin rug: "wtf is this". After #70 it was still a polar star of 72 spokes: legs too narrow for the spokes to draw, so it read as a blob; the whole fur rectangle of the atlas (128 × 512 px) stretched over the hide, 4× coarser across than along; a saturated orange from the tint on a brown texture; a faceted box head on half the bears.
+
+**Rebuilt** (`period.ts skin`, `hideShape`): three hides, chosen by seed. A bear (1.6-1.85 m nose to tail, dark brown, broad paws, round ears, a domed head with glass eyes), a deer (1.35-1.55 m, fawn with paler flanks, long thin legs, pointed ears, a short tail) or a sheepskin (1.0-1.2 m, cream, stubby flaps), the plainer variant.
+- The outline is a signed distance (body, neck, head and snout, ears, legs from shoulder to elbow to paw, tail, smoothly joined, with a slightly ragged cut edge).
+- The mesh is a height field on a 5 cm grid clipped to that outline by marching squares, so the edge is exact and no two faces overlap. It is 4 mm at the cut edge and rolls up over 10 cm to the pile (12-26 mm). The head is domed.
+- The fur tile is 0.25 × 1 m repeated in metres, the same 2 mm a pixel both ways. Its seams are half a tile off the spine and the middle, sampled 2 texels in from the rectangle's sides.
+- `furPx` is now near-grey fine hairs lying head to tail, in locks. The colour is the vertex tint: darker along the spine, at the cut rim and at the nose.
+- 575-1600 triangles a hide (mean 980; before 500-690). That is about +6.5 k over the 16 skins in the castle.
+
+**Placement** (`dress.ts fits`, variety's file, two rules for the skin only):
+- A skin is never laid over or under another textile. Before, 7 of 20 skins lay on a rug, and the fur and pile crossed in depth.
+- A skin is laid clear of the blockers already there (the hearth), and afterwards nothing stands on it but the fireside seats (`FIRESIDE`: armchair, sofa, footstool). Before, desks, cupboards and cradles stood on hides.
+- 16 skins in the castle (20 before).
+
+**Tests**:
+- `tests/props-skin.test.ts`: the hide lies flat (4 mm edge, under 6 cm, every face up), its outline has legs and a head (cut in and out round a circle), and the fur is unstretched (du/dx = dv/dz per triangle, no shear, inside the rectangle).
+- `tests/props-dress.test.ts`: over the dressed castle, a skin is on no other textile and is clear of all standing furniture but fireside seats.
+- `props-zfight` covers the new mesh (kit and shell).
+
+Captures (props.html, WebGL2; before/after) are in `castle-plan/fix-rug/`.
+- The props page's hall now shows a bear (seed 4); its chamber shows a sheepskin and its gallery cell a deer.
+- `props.html` gained `__game.lookFrom(pos, target)` for close-ups.
+- Not captured: the castle itself with `?furniture=1`. Its headless page was killed by the container's memory limit three times on the shared machine.
 
 ## 2026-11-08: the cavern's fire burns with furniture on; the caves a little less black (branch `claude/project-thread-ns4g2v-caves4`)
 

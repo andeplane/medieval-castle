@@ -7,7 +7,7 @@ import { DOM_TESTS } from './tests/dom-files.ts';
 // none is left running alone at the end, and CI's two shards (--shard=1/2, 2/2) get about the same work. A file
 // not listed counts 0.5 s; a stale entry only unbalances the shards, it never drops or repeats a file.
 const SECONDS: Record<string, number> = {
-  world: 36, 'world-views': 43, interior: 33, doorswing: 27, 'props-stream': 17.5, stairwalk: 15.3, island: 15.2,
+  world: 36, 'world-views': 48, interior: 33, doorswing: 27, 'props-stream': 17.5, stairwalk: 15.3, island: 15.2,
   'props-zfight': 13.7, hearthStone: 10, 'props-dress': 13.6, sunLeak: 13.1, 'stones-offthread': 12.5, openings: 11.4, keypaths: 11.1,
   doors: 10.6, groundInRooms: 10.5, 'props-kit': 10.3, 'light/roomLight': 9.7, caves: 8.6, interiorLightShell: 7.6,
   texgen: 6.5, torches: 6.4, paving: 5.5, stairs: 3.9, terrain: 3.1, 'props-render': 2.8, doorLight: 2.7,
