@@ -12,6 +12,7 @@ import { hoodedHearth } from './period';
 const PEWTER: RGB = [0.62, 0.62, 0.6];
 const STONE_GREY: RGB = [0.82, 0.8, 0.76];
 const DEAL: RGB = [1.15, 1.05, 0.88]; // scrubbed table tops
+const EMBERS: RGB = [1.6, 0.9, 0.5]; // wax tint above 1 glows (render.ts): live coals
 
 // ---------- windows ----------
 /**
@@ -246,4 +247,275 @@ export const workTable: PropKind = {
   },
 };
 
-export const MEDIEVAL: readonly PropKind[] = [shutter, refectoryTable, boxChair, dresser, stoneAltar, prieDieu, spitHearth, workTable];
+// ---------- service rooms, cellars, chambers and towers (one focal piece per room role, dress.ts) ----------
+/** Staves round a lathe profile, with iron hoops: casks, tubs and vats. */
+function staved(m: PropMesh, r: Rng, prof: [number, number][], hoops: number[], seg = 14) {
+  m.tinted(woodTint(r), () => m.lathe('wood', prof, seg, { grainUp: true, wobble: (th) => 1 + Math.sin(th * seg) * 0.012 }));
+  const R = (y: number) => { for (let i = 1; i < prof.length; i++) if (prof[i][1] >= y) { const [r0, y0] = prof[i - 1], [r1, y1] = prof[i]; return r0 + (r1 - r0) * (y - y0) / Math.max(1e-6, y1 - y0); } return prof[prof.length - 1][0]; };
+  m.tinted(IRON, () => { for (const y of hoops) m.with(translate(0, y, 0), () => m.lathe('iron', [[R(y) + 0.006, -0.02], [R(y) + 0.008, 0], [R(y) + 0.006, 0.02]], seg)); });
+}
+
+/** A stillage: a low timber cradle with two or three casks lying on it, ends to the room. */
+export const caskRack: PropKind = {
+  name: 'cask-rack', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const n = r() < 0.5 ? 2 : 3, R = range(r, 0.3, 0.36), L = range(r, 0.8, 0.95), gap = 2 * R + 0.08, W = n * gap;
+    m.tinted(woodTint(r), () => { for (const sz of [-1, 1]) m.box('wood', [0, 0.08, sz * L * 0.32], [W + 0.1, 0.16, 0.12], { bevel: 0.01, noBottom: true }); });
+    for (let i = 0; i < n; i++) m.with(compose(translate(-W / 2 + gap * (i + 0.5), 0.16 + R * 0.92, -L / 2), rotX(Math.PI / 2)), () =>
+      staved(m, r, [[R * 0.86, 0], [R, L * 0.25], [R * 1.04, L * 0.5], [R, L * 0.75], [R * 0.86, L]], [0.06, L * 0.3, L * 0.7, L - 0.06]));
+    m.tinted(IRON, () => m.tube('iron', [[-W / 2 + gap * 0.5, 0.16 + R, L / 2], [-W / 2 + gap * 0.5, 0.16 + R, L / 2 + 0.07], [-W / 2 + gap * 0.5, 0.16 + R - 0.04, L / 2 + 0.08]], 0.012, 5)); // a tap
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A brewer's mash tun: a big staved vat on blocks, a wooden lid half off, a mash paddle. */
+export const mashTun: PropKind = {
+  name: 'mash-tun', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.55, 0.7), H = range(r, 0.9, 1.05);
+    m.tinted(woodTint(r), () => { for (const sx of [-1, 1]) m.box('wood', [sx * R * 0.5, 0.06, 0], [0.14, 0.12, R * 1.8], { bevel: 0.01, noBottom: true }); });
+    m.with(translate(0, 0.12, 0), () => staved(m, r, [[R * 0.92, 0], [R, H * 0.5], [R * 1.04, H]], [0.1, H * 0.5, H - 0.08], 18));
+    m.tinted([0.45, 0.33, 0.18], () => m.with(translate(0, 0.12 + H * 0.8, 0), () => m.lathe('ceramic', [[0, 0], [R * 0.98, 0]], 18, { capTop: true })));
+    m.tinted(woodTint(r), () => {
+      m.with(translate(R * 0.35, 0.12 + H + 0.02, -R * 0.2), () => m.box('wood', [0, 0, 0], [R * 1.1, 0.04, R * 0.9], { bevel: 0.008 }));
+      m.tube('wood', [[-R * 0.3, 0.12 + H * 0.7, 0.1], [-R * 0.6, 0.12 + H + 0.6, 0.25]], 0.025, 6);
+    });
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A bread oven: a domed stone oven on a plinth with an arched mouth, an iron door leaning by it and a
+ * peel. Cold (it is not baking now). */
+export const breadOven: PropKind = {
+  name: 'bread-oven', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const W = range(r, 1.4, 1.7), D = range(r, 1.1, 1.3), P = 0.8, st = jitterTint(r, STONE_GREY, 0.06);
+    m.tinted(st, () => {
+      m.box('stone', [0, P / 2, 0], [W, P, D], { bevel: 0.02, noBottom: true });
+      m.with(compose(translate(0, P, 0), rotX(0)), () => m.lathe('stone', [[W * 0.46, 0], [W * 0.45, 0.25], [W * 0.36, 0.5], [W * 0.2, 0.68], [0.001, 0.72]], 16));
+    });
+    m.tinted([0.08, 0.07, 0.06], () => m.box('stone', [0, P + 0.18, D / 2 - 0.02], [0.42, 0.32, 0.03]));
+    m.tinted(IRON, () => m.with(compose(translate(W * 0.36, P * 0.5, D / 2 + 0.05), rotX(-0.25)), () => m.box('iron', [0, 0, 0], [0.4, 0.34, 0.02], { bevel: 0.005 })));
+    m.tinted(woodTint(r), () => m.tube('wood', [[-W * 0.45, 0.02, D / 2 + 0.05], [-W * 0.4, P + 0.9, D / 2 + 0.02]], 0.018, 5));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A laundry tub: a low staved tub half full of water, a washboard leaning in it, linen over the rim. */
+export const washTub: PropKind = {
+  name: 'wash-tub', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.4, 0.5), H = range(r, 0.4, 0.5);
+    staved(m, r, [[R * 0.88, 0], [R, H]], [0.06, H - 0.05], 16);
+    m.tinted([0.5, 0.55, 0.55], () => m.with(translate(0, H * 0.7, 0), () => m.lathe('ceramic', [[0, 0], [R * 0.95, 0]], 16, { capTop: true })));
+    m.tinted(woodTint(r), () => m.with(compose(translate(R * 0.3, 0.36, 0), rotZ(0.4)), () => m.box('wood', [0, 0, 0], [0.04, 0.6, 0.35], { bevel: 0.004 })));
+    m.tinted(jitterTint(r, CLOTH.linen, 0.04), () => m.sheet('cloth', (s, t) => [(s - 0.5) * 0.45, H + 0.01 - Math.max(0, t - 0.4) * 0.5, -R + 0.15 - t * 0.3], 4, 4, [0.45, 0.5]));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A drying rack: two A-frame ends and three rails with linens (or gowns, in a wardrobe) hung over them. */
+export const dryingRack: PropKind = {
+  name: 'drying-rack', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const L = range(r, 1.4, 1.9), H = range(r, 1.4, 1.65);
+    m.tinted(woodTint(r), () => {
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) m.tube('wood', [[sx * L / 2, 0, sz * 0.3], [sx * L / 2, H, 0]], 0.022, 5);
+      for (const y of [H * 0.55, H]) m.tube('wood', [[-L / 2 - 0.05, y, 0], [L / 2 + 0.05, y, 0]], 0.018, 5);
+    });
+    const cols: RGB[] = [CLOTH.linen, CLOTH.undyed, CLOTH.madder, CLOTH.woad, CLOTH.green, CLOTH.weld];
+    let x = -L / 2 + 0.1;
+    while (x < L / 2 - 0.3) {
+      const w = range(r, 0.3, 0.55), drop = range(r, 0.5, 0.9), c = jitterTint(r, pick(r, cols), 0.08);
+      if (x + w > L / 2 - 0.05) break;
+      m.tinted(c, () => m.sheet('cloth', (s, t) => { const a = t * Math.PI; return [x + s * w, H - Math.sin(a) * 0.02 - Math.max(0, Math.abs(t - 0.5) - 0.05) * drop * 2, Math.cos(a) * 0.04]; }, 3, 6, [w, drop]));
+      x += w + range(r, 0.03, 0.1);
+    }
+    return { colliders: [boxCollider([-L / 2 - 0.05, 0, -0.32], [L / 2 + 0.05, H, 0.32])], emitters: [] };
+  },
+};
+
+/** A grindstone: a sandstone wheel in a timber frame with a crank and a water trough. */
+export const grindstone: PropKind = {
+  name: 'grindstone', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.3, 0.38), L = 1.0;
+    m.tinted(woodTint(r), () => {
+      for (const sz of [-1, 1]) m.box('wood', [0, 0.35, sz * 0.18], [L, 0.08, 0.08], { bevel: 0.008 });
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) m.box('wood', [sx * 0.42, 0.18, sz * 0.18], [0.07, 0.36, 0.07], { bevel: 0.006, grain: 1, noBottom: true });
+      m.box('wood', [0, 0.47, 0], [0.5, 0.14, 0.3], { bevel: 0.01 });
+    });
+    m.tinted(jitterTint(r, [1.0, 0.85, 0.68], 0.05), () => m.with(compose(translate(0, 0.42 + R * 0.75, 0), rotX(Math.PI / 2)), () => m.lathe('stone', [[0.001, -0.06], [R, -0.06], [R + 0.005, 0], [R, 0.06], [0.001, 0.06]], 18)));
+    m.tinted(IRON, () => m.tube('iron', [[0, 0.42 + R * 0.75, -0.25], [0, 0.42 + R * 0.75, 0.28], [0, 0.42 + R * 0.75 - 0.15, 0.3], [0.08, 0.42 + R * 0.75 - 0.15, 0.32]], 0.012, 5));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A well head: a ring of dressed stone with a coping, two posts and a windlass with rope and bucket. */
+export const wellHead: PropKind = {
+  name: 'well', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.6, 0.75), H = range(r, 0.7, 0.85), st = jitterTint(r, STONE_GREY, 0.05);
+    m.tinted(st, () => m.lathe('stone', [[R, 0], [R, H - 0.1], [R + 0.06, H - 0.08], [R + 0.06, H], [R - 0.2, H], [R - 0.2, 0.2]], 18));
+    m.tinted([0.05, 0.06, 0.07], () => m.with(translate(0, H - 0.25, 0), () => m.lathe('ceramic', [[0, 0], [R - 0.2, 0]], 16, { capTop: true }))); // the dark water far down
+    m.tinted(woodTint(r), () => {
+      for (const sx of [-1, 1]) m.box('wood', [sx * (R + 0.02), H + 0.55, 0], [0.1, 1.1, 0.1], { bevel: 0.01, grain: 1 });
+      m.with(compose(translate(0, H + 0.95, 0), rotZ(Math.PI / 2)), () => m.lathe('wood', [[0.07, -R], [0.08, 0], [0.07, R]], 10, { capTop: true, capBottom: true }));
+      m.box('wood', [0, H + 1.15, 0], [2 * R + 0.3, 0.06, 0.2], { bevel: 0.01 });
+    });
+    m.tinted(IRON, () => m.tube('iron', [[R + 0.08, H + 0.95, 0], [R + 0.2, H + 0.95, 0], [R + 0.2, H + 0.75, 0.05]], 0.012, 5));
+    m.tinted(jitterTint(r, CLOTH.undyed, 0.06), () => m.tube('cloth', [[0.05, H + 0.95, 0.07], [0.05, H + 0.35, 0.07]], 0.01, 4));
+    m.with(translate(0.05, H + 0.15, 0.07), () => staved(m, r, [[0.1, 0], [0.13, 0.22]], [0.03, 0.19], 10));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** Shackles on the wall: an iron plate with a ring, two chains hanging to cuffs. */
+export const shackles: PropKind = {
+  name: 'shackles', placement: 'wall', mount: 1.4, blocksNav: false,
+  build(m, r) {
+    const sp = range(r, 0.45, 0.6);
+    m.tinted(IRON, () => {
+      for (const sx of [-1, 1]) {
+        m.box('iron', [sx * sp / 2, 0, 0.01], [0.12, 0.12, 0.02], { bevel: 0.004 });
+        const drop = range(r, 0.45, 0.7), path: V3[] = Array.from({ length: 7 }, (_, i) => { const t = i / 6; return [sx * sp / 2 + Math.sin(t * Math.PI) * 0.03 * sx, -t * drop, 0.03 + Math.sin(t * Math.PI) * 0.04]; });
+        m.tube('iron', path, 0.01, 4, [false, false]);
+        m.with(compose(translate(sx * sp / 2, -drop - 0.04, 0.05), rotX(Math.PI / 2)), () => m.lathe('iron', [[0.045, -0.02], [0.05, 0], [0.045, 0.02]], 10));
+      }
+    });
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A garderobe seat: a boarded box against the wall with a round hole in a lid, a bucket of water by it. */
+export const privy: PropKind = {
+  name: 'privy', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const W = range(r, 0.8, 1.0), D = 0.55, H = 0.46;
+    m.tinted(woodTint(r), () => { m.box('wood', [0, H / 2, 0], [W, H, D], { bevel: 0.01, grain: 0, noBottom: true }); m.box('wood', [0, H + 0.015, 0], [W + 0.04, 0.03, D + 0.02], { bevel: 0.008 }); });
+    m.tinted([0.04, 0.035, 0.03], () => m.with(translate(0, H + 0.032, 0.03), () => m.lathe('ceramic', [[0, 0], [0.13, 0]], 14, { capTop: true })));
+    m.with(translate(W / 2 + 0.25, 0, 0.05), () => staved(m, r, [[0.14, 0], [0.17, 0.3]], [0.04, 0.26], 10));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A rocking cradle: a boarded box on curved rockers, a hood at the head, a blanket. */
+export const cradle: PropKind = {
+  name: 'cradle', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const L = range(r, 0.85, 1.0), W = 0.45, H = 0.45;
+    m.tinted(woodTint(r), () => {
+      for (const sz of [-1, 1]) m.tube('wood', Array.from({ length: 7 }, (_, i) => { const a = (i / 6 - 0.5) * 1.2; return [Math.sin(a) * 0.45, 0.04 + (1 - Math.cos(a)) * 0.45, sz * L * 0.35] as V3; }), 0.025, 5);
+      m.box('wood', [0, 0.1 + H / 2, 0], [W, H, L], { bevel: 0.01, grain: 2 });
+      m.box('wood', [0, 0.1 + H + 0.12, -L / 2 + 0.15], [W + 0.04, 0.24, 0.3], { bevel: 0.01 });
+    });
+    m.tinted(jitterTint(r, pick(r, [CLOTH.woad, CLOTH.madder, CLOTH.weld]), 0.06), () => m.box('cloth', [0, 0.1 + H + 0.01, 0.1], [W - 0.04, 0.05, L * 0.6], { bevel: 0.02 }));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** A scribe's desk: a sloped writing board on a stand with a book open on it, an inkhorn and a quill, a
+ * shelf under the slope with more books. */
+export const writingDesk: PropKind = {
+  name: 'writing-desk', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const W = range(r, 0.8, 1.0), D = 0.6, H = range(r, 0.85, 0.95);
+    m.tinted(woodTint(r), () => {
+      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.04), H / 2, 0], [0.06, H, D - 0.1], { bevel: 0.008, grain: 1, noBottom: true });
+      m.box('wood', [0, 0.35, 0], [W - 0.08, 0.03, D - 0.15], { bevel: 0.004 });
+      m.with(compose(translate(0, H + 0.08, 0), rotX(0.35)), () => m.box('wood', [0, 0, 0], [W + 0.04, 0.035, D], { bevel: 0.008 }));
+    });
+    m.with(compose(translate(0, H + 0.105, 0.03), rotX(0.35)), () => {
+      m.tinted([0.95, 0.88, 0.72], () => { for (const sx of [-1, 1]) m.sheet('wax', (s, t) => [sx * (0.005 + s * 0.22), 0.012 + Math.sin(s * Math.PI) * 0.012, (t - 0.5) * 0.3], 5, 2, [0.22, 0.3]); });
+      m.tinted(jitterTint(r, CLOTH.leather), () => m.box('cloth', [0, 0.004, 0], [0.47, 0.008, 0.32], { bevel: 0.002 }));
+    });
+    m.tinted([0.15, 0.12, 0.1], () => m.with(translate(W / 2 - 0.08, H + 0.18, -D / 2 + 0.05), () => m.lathe('ceramic', [[0.001, 0], [0.03, 0], [0.025, 0.06], [0.012, 0.07]], 8)));
+    m.tinted([0.92, 0.9, 0.85], () => m.tube('cloth', [[W / 2 - 0.08, H + 0.24, -D / 2 + 0.05], [W / 2 - 0.02, H + 0.42, -D / 2 + 0.02]], [0.004, 0.012], 4));
+    m.tinted(jitterTint(r, CLOTH.madder), () => { for (let i = 0; i < 4; i++) m.box('cloth', [-W / 2 + 0.12 + i * 0.06, 0.365 + 0.12, -0.05], [0.045, 0.24, 0.2]); });
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** The steward's counting table: a table under a chequered cloth (the exchequer board), stacks of coin,
+ * a tally box and a pair of scales. */
+export const countingTable: PropKind = {
+  name: 'counting-table', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const L = range(r, 1.5, 1.8), W = range(r, 0.8, 0.9), H = 0.76;
+    m.tinted(woodTint(r), () => {
+      m.box('wood', [0, H - 0.025, 0], [L, 0.05, W], { bevel: 0.01 });
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) m.box('wood', [sx * (L / 2 - 0.08), (H - 0.05) / 2, sz * (W / 2 - 0.08)], [0.07, H - 0.05, 0.07], { bevel: 0.006, grain: 1, noBottom: true });
+    });
+    const nx = 8, nz = 4, cw = (L - 0.2) / nx, cd = (W - 0.2) / nz;
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) m.tinted((i + j) % 2 ? CLOTH.green : CLOTH.black, () => m.box('cloth', [-L / 2 + 0.1 + cw * (i + 0.5), H + 0.002, -W / 2 + 0.1 + cd * (j + 0.5)], [cw, 0.004, cd], { noBottom: true }));
+    m.tinted([0.85, 0.7, 0.35], () => { for (let k = 0; k < 6; k++) { const h = range(r, 0.01, 0.05); m.with(translate(range(r, -L / 2 + 0.2, L / 2 - 0.2), H + 0.004, range(r, -W / 2 + 0.15, W / 2 - 0.15)), () => m.lathe('brass', [[0.001, 0], [0.012, 0], [0.012, h], [0.001, h]], 8)); } });
+    m.tinted(IRON, () => m.with(translate(L * 0.3, H, -W * 0.3), () => {
+      m.box('iron', [0, 0.18, 0], [0.015, 0.36, 0.015]); m.box('iron', [0, 0.35, 0], [0.32, 0.012, 0.012]);
+      for (const sx of [-1, 1]) m.with(translate(sx * 0.15, 0.2, 0), () => m.lathe('iron', [[0.001, 0], [0.06, 0.02], [0.065, 0.025]], 8));
+    }));
+    m.tinted(woodTint(r), () => m.box('wood', [-L * 0.32, H + 0.06, -W * 0.25], [0.3, 0.12, 0.2], { bevel: 0.008 }));
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** An upright loom: two uprights leaning on the wall, a cloth beam at the top, the warp hanging down
+ * weighted by a row of clay loom weights, and woven cloth growing at the top. */
+export const loom: PropKind = {
+  name: 'loom', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const W = range(r, 1.3, 1.6), H = range(r, 1.9, 2.1), lean = 0.35, c = jitterTint(r, pick(r, [CLOTH.madder, CLOTH.woad, CLOTH.undyed, CLOTH.green]), 0.06);
+    m.tinted(woodTint(r), () => {
+      for (const sx of [-1, 1]) m.tube('wood', [[sx * W / 2, 0, lean], [sx * W / 2, H, 0]], 0.035, 6);
+      m.tube('wood', [[-W / 2 - 0.08, H - 0.12, 0.03], [W / 2 + 0.08, H - 0.12, 0.03]], 0.05, 8);
+      m.tube('wood', [[-W / 2, H * 0.55, lean * 0.45 + 0.02], [W / 2, H * 0.55, lean * 0.45 + 0.02]], 0.02, 5);
+    });
+    const top = H - 0.12, woven = range(r, 0.4, 0.8);
+    m.tinted(c, () => m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.15), top - t * woven, 0.03 + (t * woven / H) * lean + 0.03], 4, 3, [W, woven]));
+    m.tinted(jitterTint(r, [0.85, 0.8, 0.68], 0.05), () => m.sheet('cloth', (s, t) => [(s - 0.5) * (W - 0.15), top - woven - t * (top - woven - 0.3), 0.06 + ((woven + t * (top - woven - 0.3)) / H) * lean], 4, 3, [W, 1]));
+    m.tinted(jitterTint(r, [0.62, 0.42, 0.3], 0.08), () => { for (let i = 0; i < 9; i++) m.with(translate(-W / 2 + 0.12 + i * ((W - 0.24) / 8), 0.24, 0.06 + ((top - 0.3) / H) * lean), () => m.lathe('ceramic', [[0.001, 0], [0.05, 0.02], [0.04, 0.09], [0.001, 0.1]], 6)); });
+    return { colliders: [boxCollider([-W / 2 - 0.1, 0, -0.05], [W / 2 + 0.1, H, lean + 0.05])], emitters: [] };
+  },
+};
+
+/** A falconer's perch: a padded bow perch on a block and a T-perch on a post, hooded hawks on both. */
+export const perch: PropKind = {
+  name: 'perch', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const W = range(r, 1.1, 1.4);
+    m.tinted(woodTint(r), () => {
+      m.box('wood', [0, 0.05, 0], [W, 0.1, 0.4], { bevel: 0.01, noBottom: true });
+      for (const sx of [-1, 1]) m.box('wood', [sx * (W / 2 - 0.1), 0.6, 0], [0.06, 1.0, 0.06], { bevel: 0.006, grain: 1 });
+      m.tube('wood', [[-W / 2 + 0.05, 1.1, 0], [W / 2 - 0.05, 1.1, 0]], 0.025, 6);
+    });
+    m.tinted(jitterTint(r, CLOTH.undyed, 0.05), () => m.tube('cloth', [[-W / 2 + 0.12, 1.1, 0], [W / 2 - 0.12, 1.1, 0]], 0.034, 6));
+    const birds = 1 + Math.floor(r() * 2);
+    for (let i = 0; i < birds; i++) {
+      const x = (i - (birds - 1) / 2) * 0.45, plum = jitterTint(r, pick(r, [[0.42, 0.33, 0.24], [0.55, 0.5, 0.45], [0.3, 0.25, 0.2]] as RGB[]), 0.08);
+      m.with(translate(x, 1.13, 0), () => {
+        m.tinted(plum, () => { m.with(rotX(0.15), () => m.lathe('cloth', [[0.001, 0], [0.06, 0.04], [0.08, 0.15], [0.06, 0.25], [0.001, 0.29]], 10)); m.tube('cloth', [[0, 0.06, -0.05], [0, -0.12, -0.12]], [0.04, 0.015], 5); });
+        m.tinted(CLOTH.leather, () => m.with(translate(0, 0.3, 0.02), () => m.lathe('cloth', [[0.045, 0], [0.05, 0.04], [0.03, 0.08], [0.008, 0.11]], 8)));
+        m.tinted([0.85, 0.75, 0.3], () => { for (const sx of [-1, 1]) m.tube('brass', [[sx * 0.025, 0.01, 0.02], [sx * 0.03, -0.03, 0.04]], 0.006, 4); });
+      });
+    }
+    return { colliders: [hull(m)], emitters: [] };
+  },
+};
+
+/** An iron brazier of coals on a tripod: the watch's fire, glowing coals and a low flame. */
+export const brazier: PropKind = {
+  name: 'brazier', placement: 'floor', blocksNav: true,
+  build(m, r) {
+    const R = range(r, 0.26, 0.32), H = range(r, 0.62, 0.72);
+    m.tinted(IRON, () => {
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; m.tube('iron', [[Math.cos(a) * R * 1.1, 0, Math.sin(a) * R * 1.1], [Math.cos(a) * R * 0.6, H * 0.6, Math.sin(a) * R * 0.6], [Math.cos(a) * R * 0.9, H, Math.sin(a) * R * 0.9]], 0.016, 5); }
+      m.with(translate(0, H * 0.75, 0), () => m.lathe('iron', [[0.001, 0], [R * 0.6, 0.03], [R, H * 0.25], [R * 1.05, H * 0.27]], 14));
+    });
+    m.tinted(EMBERS, () => m.with(translate(0, H * 0.75 + H * 0.2, 0), () => m.lathe('wax', [[0.001, 0.04], [R * 0.6, 0.02], [R * 0.95, 0]], 12)));
+    m.tinted([0.15, 0.12, 0.1], () => { for (let i = 0; i < 5; i++) { const a = r() * 6.28, d = range(r, 0, R * 0.6); m.with(translate(Math.cos(a) * d, H * 0.97, Math.sin(a) * d), () => m.box('stone', [0, 0, 0], [0.07, 0.04, 0.06], { bevel: 0.01 })); } });
+    m.addFlame('brazier', [0, H * 0.98, 0], 0.32);
+    return { colliders: [hull(m)], emitters: [{ kind: 'brazier', position: [0, H + 0.25, 0], colour: [1, 1, 1], intensity: 1.6, flicker: 0.3 }] };
+  },
+};
+
+export const MEDIEVAL: readonly PropKind[] = [shutter, refectoryTable, boxChair, dresser, stoneAltar, prieDieu, spitHearth, workTable,
+  caskRack, mashTun, breadOven, washTub, dryingRack, grindstone, wellHead, shackles, privy, cradle, writingDesk, countingTable, loom, perch, brazier];

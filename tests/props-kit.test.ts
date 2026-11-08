@@ -6,7 +6,7 @@ import { PropMesh, ATLAS } from '../src/props/geom';
 import { mulberry32 } from '../src/core/rng';
 
 const H = (name: string, seed = 0) => makeProp(name, seed).bounds;
-const FIXTURES = ['stone-altar', 'spit-hearth', 'candlestick', 'sconce', 'chandelier', 'altar', 'chimneypiece', 'hooded-hearth', 'candle-sconce', 'oil-lamp', 'candelabrum'];
+const FIXTURES = ['stone-altar', 'spit-hearth', 'brazier', 'candlestick', 'sconce', 'chandelier', 'altar', 'chimneypiece', 'hooded-hearth', 'candle-sconce', 'oil-lamp', 'candelabrum'];
 
 describe('prop kit', () => {
   it('has the families the brief needs, with unique names', () => {
@@ -63,7 +63,7 @@ describe('prop kit', () => {
       if (FIXTURES.includes(k.name)) {
         expect(e.length).toBeGreaterThan(0);
         expect(p.mesh.flames.length).toBeGreaterThan(0);
-        for (const x of e) { expect(x.colour[0]).toBeGreaterThanOrEqual(x.colour[2]); expect(x.intensity).toBeGreaterThan(0); expect(x.flicker).toBeGreaterThan(0); expect(['candle', 'torch', 'lantern', 'hearth']).toContain(x.kind); }
+        for (const x of e) { expect(x.colour[0]).toBeGreaterThanOrEqual(x.colour[2]); expect(x.intensity).toBeGreaterThan(0); expect(x.flicker).toBeGreaterThan(0); expect(['candle', 'torch', 'lantern', 'hearth', 'brazier']).toContain(x.kind); }
         expect(p.mesh.bins.flame.triangles).toBe(0); // flames are sprites now (src/light)
       } else { expect(e).toEqual([]); expect(p.mesh.flames).toEqual([]); }
     }
