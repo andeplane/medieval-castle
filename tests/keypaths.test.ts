@@ -94,7 +94,11 @@ describe('key paths', { timeout: 120_000 }, () => {
 
   const path = (from: string, to: string, allowLocked = false, open = true) => {
     const p = findPath(G, from, to, { allowLocked })!;
-    if (open) for (const id of p.doors) if (doors.state()[id] !== undefined) doors.setOpen(id, true, true); // E on each door on the way
+    // E on each door on the way, from the side the path comes from (a leaf swings away from whoever opens it)
+    if (open) for (const id of p.doors) if (doors.state()[id] !== undefined) {
+      const at = p.nodes.indexOf(`door:${id}`), from = G.nodes.get(p.nodes[Math.max(0, at - 1)])!.pos;
+      doors.setOpen(id, true, true, { pos: { x: from[0], y: from[1] + 1, z: from[2] } });
+    }
     return p;
   };
   const room = (id: string) => plan.rooms.find((r) => r.id === id)!;
