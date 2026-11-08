@@ -1,25 +1,36 @@
-name: CI
-
-# One fast job on pull requests: typecheck, tests with coverage thresholds, production build.
-# Keep the whole run under ~1-2 minutes: one OS, one Node version, no browser matrix.
+name: CI A/B
+# Experiment: main and this branch's coverage run on the same runner, one after the other, timed.
 on:
-  pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
+  ab:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: nproc; grep -m1 'model name' /proc/cpuinfo; free -g | head -2
       - run: npm ci --no-audit --no-fund
-      - run: npm run coverage
-      - run: npm run build
+      - name: branch, coverage
+        run: s=$(date +%s); npm run coverage > /tmp/b1.log 2>&1; echo "rc=$? branch1 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b1.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/b1.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: main, coverage
+        run: |
+          git worktree add -q /tmp/main origin/main && cd /tmp/main && npm ci --no-audit --no-fund > /dev/null 2>&1
+          s=$(date +%s); npm run coverage > /tmp/m1.log 2>&1; echo "rc=$? main1 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/m1.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/m1.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: branch again, coverage
+        run: s=$(date +%s); npm run coverage > /tmp/b2.log 2>&1; echo "rc=$? branch2 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b2.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/b2.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: main again, coverage
+        run: cd /tmp/main && s=$(date +%s); npm run coverage > /tmp/m2.log 2>&1; echo "rc=$? main2 $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/m2.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/m2.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: branch, coverage, 3 threads
+        run: s=$(date +%s); npx vitest run --coverage --maxWorkers=3 > /tmp/b4.log 2>&1; echo "rc=$? branch-3threads $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b4.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/b4.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: branch, coverage, 3 forks
+        run: s=$(date +%s); npx vitest run --coverage --pool=forks --maxWorkers=3 > /tmp/b5.log 2>&1; echo "rc=$? branch-3forks $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b5.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/b5.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: branch, no coverage
+        run: s=$(date +%s); npx vitest run > /tmp/b3.log 2>&1; echo "rc=$? branch-nocov $(( $(date +%s) - s )) s"; grep -E "Duration|Tests  " /tmp/b3.log; sed "s/\x1b\[[0-9;]*m//g" /tmp/b3.log | grep -E "^ (✓|❯|×) tests/" | sed -E "s/.*(tests\/\S+) .* ([0-9]+)ms.*/\2 \1/" | sort -n | tail -8
+      - name: build
+        run: s=$(date +%s); npm run build > /tmp/build.log 2>&1; echo "rc=$? build $(( $(date +%s) - s )) s"
