@@ -775,14 +775,24 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     const meshes: THREE.Mesh[] = [];
     for (const g of inner.groups) g.object.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh); });
     const outside: string[] = [], v = new THREE.Vector3();
+    // every mesh's vertices in world space, once (flat loops: the vertex checks below run ~4× faster under coverage)
+    const world = new Map(meshes.map((m) => {
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute, w = new Float64Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); w[i * 3] = v.x; w[i * 3 + 1] = v.y; w[i * 3 + 2] = v.z; }
+      return [m, w];
+    }));
     let boxes = 0;
     for (const m of meshes) {
-      const bs = m.userData.roomBoxes as THREE.Box3[];
+      const bs = m.userData.roomBoxes as THREE.Box3[], w = world.get(m)!;
       boxes += bs.length;
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-        if (!bs.some((b) => b.distanceToPoint(v) < 1e-4)) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
+      for (let i = 0; i < w.length / 3; i++) {
+        const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
+        let inside = false;
+        for (const b of bs) { // Box3.distanceToPoint < 1e-4
+          const dx = Math.max(b.min.x - x, 0, x - b.max.x), dy = Math.max(b.min.y - y, 0, y - b.max.y), dz = Math.max(b.min.z - z, 0, z - b.max.z);
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 1e-4) { inside = true; break; }
+        }
+        if (!inside) { outside.push(`${m.name}: vertex ${i} outside its rooms' boxes`); break; }
       }
     }
     expect(meshes.length).toBeGreaterThan(250);
@@ -798,8 +808,11 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
         for (const m of meshes) {
           if (m.intersectsFrustum(fr)) continue;
           culled++;
-          const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
-          for (let i = 0; i < pos.count; i++) if (fr.containsPoint(v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld))) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
+          const w = world.get(m)!, pl = fr.planes;
+          for (let i = 0; i < w.length / 3; i++) { // Frustum.containsPoint: on the inner side of all six planes
+            const x = w[i * 3], y = w[i * 3 + 1], z = w[i * 3 + 2];
+            if (pl.every((q) => q.normal.x * x + q.normal.y * y + q.normal.z * z + q.constant >= 0)) { culledInView.push(`${m.name} culled with a vertex in view from ${label}`); break; }
+          }
         }
       }
     });

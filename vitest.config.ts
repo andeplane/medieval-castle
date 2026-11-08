@@ -4,6 +4,9 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     // generation tests build real terrain and vegetation; give them room on a loaded machine
     testTimeout: 30000,
+    // one worker per core (vitest's default leaves one idle): the whole-castle files are CPU-bound, and the
+    // 4-core CI runner otherwise runs them three at a time
+    maxWorkers: '100%',
     coverage: {
       provider: 'v8',
       // modules with tests; add each new module here as it gets tests (target: ~100 %).
