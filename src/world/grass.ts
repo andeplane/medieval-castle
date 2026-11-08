@@ -356,7 +356,10 @@ export function buildGroundCover(terrain: THREE.Mesh, macro: THREE.Texture): Gro
   // the reflection's near tufts: the same blades (same seed and draws), one segment each instead of two
   const nearMirror = grassClump('grass-near', { blades: 10, radius: 0.2, width: 0.04, lean: [0.08, 0.5], hMin: 0.45, segs: 1 });
   const near = new ScatterLayer('grass-near', nearB, vegMaterial('grass', fNear, macro), fNear, 9000, tufts('gn', 7.0, grassAccept(1)), nearMirror);
-  const far = new ScatterLayer('grass-far', farB, vegMaterial('grass', fFar, macro), fFar, 16000, tufts('gf', 2.8, grassAccept(1.1)));
+  // the reflection's far tufts (9 m and more away, one segment a blade already): the first half of the
+  // same blades (the clump draws them in turn from one seed)
+  const farMirror = grassClump('grass-far', { blades: 4, radius: 0.24, width: 0.07, lean: [0.1, 0.45], hMin: 0.5, segs: 1 });
+  const far = new ScatterLayer('grass-far', farB, vegMaterial('grass', fFar, macro), fFar, 16000, tufts('gf', 2.8, grassAccept(1.1)), farMirror);
   const flowers = new ScatterLayer('flowers', flowerClump(), vegMaterial('flowers', fFlower, macro), fFlower, 3000,
     tufts('fl', 1.6, (x, z, w, r) => {
       const n = flowerN(x / 16, z / 16) + 0.25 * flowerN(x / 4, z / 4);

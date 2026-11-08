@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
   UNDRAWN_LAYER,
-  createTerrain, defaultTerrain, buildTerrain, nearGrid, mirrorIndex, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
+  createTerrain, defaultTerrain, buildTerrain, nearGrid, mirrorIndex, polarMirrorIndex, prepareTerrain, OutlineField, MAX_WALK_SLOPE, RELIEF_TEX,
   ISLAND, MOAT_OUTER, BRIDGE_END, sample, heightAt, hedgerowLines, fieldAt, streamLine, farmland,
   islandWalkable, footDist, moatSigned, COURT_BED, type Terrain,
 } from '../src/world/terrain';
@@ -250,8 +250,8 @@ describe('meshes', () => {
       for (let t = 0; t < idx.length; t += 3) want.add(tri(idx, t));
       const got: string[] = [], v = new THREE.Vector3();
       for (const m of tiles) {
-        // the view draws the near tiles (their stand-ins draw the reflection), every pass the far ones
-        expect(m.layers.isEnabled(name === 'terrain-near' ? VIEW_LAYER : 0)).toBe(true);
+        // the view draws the tiles (their stand-ins draw the reflection)
+        expect(m.layers.mask).toBe(1 << VIEW_LAYER);
         expect(m.geometry.attributes.position).toBe(whole.geometry.attributes.position); // shared, not copied
         expect(m.receiveShadow).toBe(whole.receiveShadow);
         const ti = m.geometry.index!.array, box = m.geometry.boundingBox!.clone().expandByScalar(1e-3);
@@ -297,6 +297,14 @@ describe('meshes', () => {
     for (const m of mirror) { const ix = m.geometry.index!.array; for (let t = 0; t < ix.length; t += 3) coarse.add(key(ix, t)); }
     const fine = whole.index!.array;
     for (let t = 0; t < fine.length; t += 3) expect(coarse.has(key(fine, t))).toBe(true);
+    // the far mesh's stand-in: every other ring and spoke of the same vertices, a quarter of the triangles
+    const farWhole = (g.getObjectByName('terrain-far') as THREE.Mesh).geometry;
+    const farView = tiles('terrain-far-'), farMirror = tiles('terrain-farmirror-');
+    expect(farMirror.length).toBe(farView.length);
+    for (const m of farMirror) { expect(m.layers.mask).toBe(1 << MIRROR_LAYER); expect(m.geometry.attributes.position).toBe(farWhole.attributes.position); }
+    expect(n(farMirror) / n(farView)).toBeGreaterThan(0.23);
+    expect(n(farMirror) / n(farView)).toBeLessThan(0.27);
+    expect(polarMirrorIndex(2, 6)).toEqual([0, 2, 14, 2, 16, 14, 2, 4, 16, 4, 18, 16, 4, 6, 18, 6, 20, 18]);
     // the coarse cell x, z in [19, 38] lies wholly in the hole, its neighbour to the north does not
     expect(coarse.has('11,11')).toBe(false);
     expect(coarse.has('11,8')).toBe(true);

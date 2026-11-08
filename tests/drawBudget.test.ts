@@ -35,7 +35,7 @@ import { buildGroundCover, type GroundCover } from '../src/world/grass';
 /** Budget for what is built here, per frame (four passes); the frame's own budget is 1000. */
 const BUDGET = 750;
 /** Triangles a frame for what is built here; the frame's own budget is 3 M. */
-const TRI_BUDGET = 2_500_000;
+const TRI_BUDGET = 2_700_000;
 
 describe('draw calls per frame on WebGPU, from the scene graph', () => {
   const scene = new THREE.Scene();

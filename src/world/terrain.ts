@@ -602,6 +602,17 @@ export function mirrorIndex(g: THREE.BufferGeometry, step = 2): number[] {
   return out;
 }
 
+/** The reflection's stand-in for buildFar's polar mesh: every `step`-th ring and spoke of the same vertices. */
+export function polarMirrorIndex(rings: number, segs: number, step = 2): number[] {
+  const W = segs + 1, out: number[] = [];
+  for (let i = 0; i + step <= rings; i += step) for (let j = 0; j + step <= segs; j += step) {
+    // buildFar's cell winding: a b c / b d c
+    const a = i * W + j, b = a + step, c = a + step * W, d = c + step;
+    out.push(a, b, c, b, d, c);
+  }
+  return out;
+}
+
 /** The index of `g` without the triangles whose three corners are all `hidden`. */
 export function underNear(g: THREE.BufferGeometry, hidden: (x: number, z: number) => boolean): number[] {
   const p = g.attributes.position as THREE.BufferAttribute, idx = g.index!.array, out: number[] = [];
@@ -725,7 +736,8 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   far.receiveShadow = false; far.name = 'terrain-far';
   // the polar mesh starts at 150 m, inside the near grid's square, where it is dropped (4 m from 25 m in)
   // under the near ground: its triangles 10 m and more inside (dropped 1.4 m or more) are never seen
-  far.geometry.setIndex(underNear(far.geometry, (x, z) => inside(x, z) > 10));
+  const buried = (x: number, z: number) => inside(x, z) > 10;
+  far.geometry.setIndex(underNear(far.geometry, buried));
   const tFar = performance.now();
   const ud = (material as THREE.Material & { userData: { stream?: THREE.Material; rock?: THREE.Material; reliefTex?: THREE.DataTexture } }).userData;
   if (ud.reliefTex) { (ud.reliefTex.image.data as Uint8Array).set(T.reliefTexture(ud.reliefTex.image.width)); ud.reliefTex.needsUpdate = true; }
@@ -738,17 +750,24 @@ export function buildTerrain(material: THREE.Material, T: Terrain = defaultTerra
   const mg = new THREE.BufferGeometry();
   for (const [n, a] of Object.entries(near.geometry.attributes)) mg.setAttribute(n, a); // the same vertices
   const mirror = new THREE.Mesh(mg.setIndex(mirrorIndex(near.geometry)), material);
-  mirror.name = 'terrain-mirror';
+  mirror.name = 'terrain-mirror'; mirror.receiveShadow = true;
   const mirrorTiles = cullTiles(mirror, nearKey);
-  for (const t of nearTiles) t.layers.set(VIEW_LAYER);
-  for (const t of mirrorTiles) { t.layers.set(MIRROR_LAYER); t.castShadow = false; t.receiveShadow = true; }
-  const tiles = [
-    ...nearTiles, ...mirrorTiles,
-    ...cullTiles(far, (x, z) => {
-      const a = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * FAR_SECTORS), band = Math.min(FAR_BANDS - 1, Math.floor((Math.log(Math.hypot(x, z) / 150) / Math.log(16000 / 150)) * FAR_BANDS));
-      return band * FAR_SECTORS + a;
-    }),
-  ];
+  const farKey = (x: number, z: number) => {
+    const a = Math.floor(((Math.atan2(z, x) / (Math.PI * 2)) + 1) % 1 * FAR_SECTORS), band = Math.min(FAR_BANDS - 1, Math.floor((Math.log(Math.hypot(x, z) / 150) / Math.log(16000 / 150)) * FAR_BANDS));
+    return band * FAR_SECTORS + a;
+  };
+  const farTiles = cullTiles(far, farKey);
+  // and the far mesh with every other ring and spoke (its rings are 2.4 % of their radius apart)
+  const fg = new THREE.BufferGeometry();
+  for (const [n, a] of Object.entries(far.geometry.attributes)) fg.setAttribute(n, a);
+  fg.setIndex(polarMirrorIndex(o.farRings ?? 200, o.farSegs ?? 560));
+  fg.setIndex(underNear(fg, buried));
+  const farMirror = new THREE.Mesh(fg, material);
+  farMirror.name = 'terrain-farmirror';
+  const farMirrorTiles = cullTiles(farMirror, farKey);
+  for (const t of [...nearTiles, ...farTiles]) t.layers.set(VIEW_LAYER);
+  for (const t of [...mirrorTiles, ...farMirrorTiles]) { t.layers.set(MIRROR_LAYER); t.castShadow = false; }
+  const tiles = [...nearTiles, ...mirrorTiles, ...farTiles, ...farMirrorTiles];
   near.layers.set(UNDRAWN_LAYER); far.layers.set(UNDRAWN_LAYER);
   const st = buildStream(T, ud.stream ?? null);
   const corridor = new THREE.Mesh(st.ground, material);
