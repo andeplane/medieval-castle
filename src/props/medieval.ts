@@ -4,7 +4,7 @@
 // hearth with a spit and a cauldron on a crane, a big work table). Same contract as kit.ts: pure
 // generators of (mesh, rng, variant), local frame on the floor (or wall) at the centre of the footprint,
 // front +z, metres.
-import { PropMesh, translate, rotX, rotZ, compose, type RGB, type V3 } from './geom';
+import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } from './geom';
 import { range, pick, type Rng } from '../core/rng';
 import { WOOD, CLOTH, IRON, jitterTint, woodTint, boxCollider, hull, none, planks, leg, jug, bowl, candle, type PropKind, type PropMeta, type Emitter } from './parts';
 import { hoodedHearth } from './period';
@@ -378,9 +378,13 @@ export const shackles: PropKind = {
     m.tinted(IRON, () => {
       for (const sx of [-1, 1]) {
         m.box('iron', [sx * sp / 2, 0, 0.01], [0.12, 0.12, 0.02], { bevel: 0.004 });
-        const drop = range(r, 0.45, 0.7), path: V3[] = Array.from({ length: 7 }, (_, i) => { const t = i / 6; return [sx * sp / 2 + Math.sin(t * Math.PI) * 0.03 * sx, -t * drop, 0.03 + Math.sin(t * Math.PI) * 0.04]; });
-        m.tube('iron', path, 0.01, 4, [false, false]);
-        m.with(compose(translate(sx * sp / 2, -drop - 0.04, 0.05), rotX(Math.PI / 2)), () => m.lathe('iron', [[0.045, -0.02], [0.05, 0], [0.045, 0.02]], 10));
+        // a chain of interlocking links hanging straight down, each turned a quarter from the last, to a cuff
+        const links = Math.round(range(r, 15, 22)), pitch = 0.028, drop = links * pitch;
+        for (let i = 0; i < links; i++) {
+          m.with(compose(compose(translate(sx * sp / 2, -0.04 - i * pitch, 0.035), rotY(i % 2 ? Math.PI / 2 : 0)), rotX(Math.PI / 2)),
+            () => m.lathe('iron', [[0.012, -0.004], [0.018, 0], [0.012, 0.004], [0.012, -0.004]], 6));
+        }
+        m.with(compose(translate(sx * sp / 2, -drop - 0.08, 0.035), rotX(Math.PI / 2)), () => m.lathe('iron', [[0.045, -0.02], [0.05, 0], [0.045, 0.02], [0.045, -0.02]], 10));
       }
     });
     return { colliders: [hull(m)], emitters: [] };
