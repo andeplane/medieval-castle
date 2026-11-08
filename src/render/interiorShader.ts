@@ -3,11 +3,12 @@
 // the room side of window panes. Built lazily by the renderer, so it is checked by captures
 // (?test=room) rather than unit tests. Data layout: interiorMath.packTable.
 import {
-  Fn, If, Loop, Break, attribute, textureLoad, ivec2, int, float, vec3, positionWorld, normalWorld, select, max, inverseSqrt, sqrt, mix, cameraPosition, min,
+  Fn, If, Loop, Break, attribute, textureLoad, texture3DLoad, ivec2, ivec3, int, float, vec3, positionWorld, normalWorld, select, max, inverseSqrt, sqrt, mix, cameraPosition, min, clamp,
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import type { InteriorLight } from './interiorLight';
-import { AP_TEXELS } from './interiorMath';
+import { AP_TEXELS, OUTDOOR_TAG } from './interiorMath';
+import { MAX_FIRES, FIRE_TEXELS } from '../light/roomLight';
 
 export const MAX_AP = 8;          // apertures per room the shader integrates
 
@@ -30,6 +31,8 @@ export function interiorIrradiance(light: InteriorLight) {
     const r = row().toVar();
     const P = positionWorld, N = normalWorld.toVar();
     const E = vec3(light.floor).toVar();
+    // the outer half of an outdoor doorway: the courtyard's sky and ground, as on the wall beside it
+    If(r.equal(OUTDOOR_TAG), () => { E.assign(mix(light.outdoor.ground, light.outdoor.sky, N.y.mul(0.5).add(0.5))); });
     If(r.greaterThanEqual(0), () => {
       const head = tex(int(0), r);
       E.addAssign(head.yzw.mul(light.gain));
@@ -97,3 +100,44 @@ export function paneGlow(light: InteriorLight) {
   })();
 }
 
+
+/**
+ * Firelight at the fragment from its room's fires (light/roomLight.ts FireTable): candela / (d² + soft²),
+ * faded out at each fire's range, × cos, × this frame's flicker. Every fire of the room, whatever the
+ * camera's distance: a room is lit the same from anywhere it is drawn. Untagged surfaces (door leaves)
+ * take the room they face from the room grid, 0.3 m out along their normal.
+ */
+export function fireIrradiance(light: InteriorLight) {
+  const tex = (x: Node<'int'>, r: Node<'int'>) => textureLoad(light.fires, ivec2(x, r));
+  return Fn(() => {
+    const r = row().toVar();
+    const P = positionWorld, N = normalWorld.toVar();
+    If(r.equal(-1), () => {
+      const g = light.grid;
+      const q = P.add(N.mul(0.3)).sub(g.origin).div(g.cell).floor();
+      const c = ivec3(clamp(q, vec3(0), g.size.sub(1)));
+      r.assign(int(texture3DLoad(g.texture, c).x.add(0.5)).sub(1));
+    });
+    const E = vec3(0).toVar();
+    If(r.greaterThanEqual(0), () => {
+      const count = int(tex(int(0), r).x);
+      Loop(MAX_FIRES, ({ i }: { i: Node<'int'> }) => {
+        If(i.greaterThanEqual(count), () => { Break(); });
+        const x = i.mul(FIRE_TEXELS).add(1);
+        const a = tex(x, r), b = tex(x.add(1), r);
+        const k = textureLoad(light.flick, ivec2(i, r)).x;
+        const L = a.xyz.sub(P).toVar();
+        const d2 = L.dot(L), d = sqrt(d2).max(1e-4);
+        const w = clamp(float(1).sub(d.div(a.w).pow(4)), 0, 1);
+        const cos = N.dot(L.div(d)).max(0);
+        E.addAssign(b.xyz.mul(k.mul(w).mul(w).mul(cos).div(d2.add(b.w))));
+      });
+    });
+    // the carried light (InteriorLight.carried): every surface in its range, whatever room
+    const c = light.carried, Lc = c.pos.sub(P).toVar();
+    const dc2 = Lc.dot(Lc), dc = sqrt(dc2).max(1e-4);
+    const wc = clamp(float(1).sub(dc.div(c.range).pow(4)), 0, 1);
+    E.addAssign(c.light.xyz.mul(wc.mul(wc).mul(N.dot(Lc.div(dc)).max(0)).div(dc2.add(c.light.w))));
+    return E;
+  })();
+}

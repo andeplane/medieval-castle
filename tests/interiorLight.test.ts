@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
 import {
-  MAX_AP, bakeInteriorLight, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
+  MAX_AP, bakeInteriorLight, syncFires, setCarried, buildShadowSkins, bvhOccluder, collectTriangles, createInteriorLight, makeInteriorMaterials, sunStateOf, tagGroups,
   type InteriorKey, type SunOccluder,
 } from '../src/render/interiorLight';
 import { buildRoomTest } from '../src/debug/roomtest';
+import { FireTable, toFire, FIRE_W, MAX_FIRES } from '../src/light/roomLight';
+import { gridRoom } from '../src/render/interiorMath';
 import type { Materials } from '../src/render/materials';
 import type { InteriorGroup, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -29,36 +31,33 @@ function floorGroup(): InteriorGroup {
 }
 
 describe('interior materials', () => {
-  test('clones lit by the sun only, with the interior irradiance and a dynamic-light hook', () => {
+  test('clones lit by the sun only, with the interior irradiance and their rooms\' fires', () => {
     const light = createInteriorLight(16);
     expect(light.table.image.width).toBe(1 + MAX_AP * 5);
     expect(light.table.image.height).toBe(16);
+    expect(light.fires.image.width).toBe(FIRE_W);
+    expect(light.flick.image.width).toBe(MAX_FIRES);
+    expect(light.grid.model.size).toEqual([1, 1, 1]); // no rooms given: an empty grid
     const sunL = new THREE.DirectionalLight();
     const IM = makeInteriorMaterials(mats(), sunL, light);
     expect(Object.keys(IM).sort()).toEqual(['glass', 'iron', 'new', 'old', 'trim', 'wood']);
     expect(IM.old.name).toBe('interior-old');
     expect(IM.glass.side).toBe(THREE.DoubleSide);
     expect(IM.glass.emissiveNode).toBeTruthy();
-    const env = (IM.wood as unknown as { setupEnvironment: () => { isLightingNode: boolean } }).setupEnvironment();
+    // daylight + firelight go into the lighting context: irradiance, and a rough reflection for metals
+    const env = (IM.wood as unknown as { setupEnvironment: () => THREE.LightingNode }).setupEnvironment();
     expect(env.isLightingNode).toBe(true);
+    const added: string[] = [];
+    const slot = (k: string) => ({ addAssign: () => { added.push(k); } });
+    expect(env.setup({ context: { irradiance: slot('irradiance'), radiance: slot('radiance'), iblIrradiance: slot('iblIrradiance') } } as unknown as THREE.NodeBuilder)).toBe(null);
+    expect(added).toEqual(['irradiance', 'radiance', 'iblIrradiance']);
     const ln = IM.old.lightsNode as unknown as { getLights(): THREE.Light[] };
-    expect(ln.getLights()).toEqual([sunL]);
-    const torch = new THREE.PointLight();
-    const v0 = IM.old.version;
-    IM.setDynamicLights([torch]);
-    expect(ln.getLights()).toEqual([sunL, torch]);
-    expect(IM.old.version).toBeGreaterThan(v0);
-    const v1 = IM.old.version;
-    IM.setDynamicLights([torch]);                      // same pool: no recompile
-    expect(IM.old.version).toBe(v1);
-    // underground: no sun, only the fire pool
+    expect(ln.getLights()).toEqual([sunL]); // no point lights indoors
+    // underground: no sun
     const UM = makeInteriorMaterials(mats(), null, light);
     expect(UM.old.name).toBe('interior-under-old');
-    const un = UM.old.lightsNode as unknown as { getLights(): THREE.Light[] };
-    expect(un.getLights()).toEqual([]);
-    UM.setDynamicLights([torch]);
-    expect(un.getLights()).toEqual([torch]);
-    // furniture materials join a set: same lights node, same clone per source, recompiled with the set
+    expect((UM.old.lightsNode as unknown as { getLights(): THREE.Light[] }).getLights()).toEqual([]);
+    // furniture materials join a set: same lights node, same clone per source
     const wood = new THREE.MeshStandardNodeMaterial(), plain = new THREE.MeshStandardNodeMaterial();
     wood.name = 'prop-wood';
     const a = UM.adopt(wood);
@@ -66,10 +65,42 @@ describe('interior materials', () => {
     expect(a.name).toBe('interior-under-prop-wood');
     expect(UM.adopt(wood)).toBe(a);
     expect(UM.adopt(plain).name).toBe('interior-under-prop');
-    expect((a.lightsNode as unknown as { getLights(): THREE.Light[] }).getLights()).toEqual([torch]);
-    const va = a.version;
-    UM.setDynamicLights([]);
-    expect(a.version).toBeGreaterThan(va);
+    expect(a.lightsNode).toBe(UM.old.lightsNode);
+  });
+  test('the fire table reaches the textures: rows when they change, the flicker every frame', () => {
+    const light = createInteriorLight(4), T = new FireTable(4), seen = { version: -1 };
+    T.set(1, [toFire({ kind: 'torch', position: [1, 2, 3], colour: [1, 1, 1], intensity: 3, flicker: 0.2 })]);
+    const v0 = light.fires.version, f0 = light.flick.version;
+    syncFires(light, T, seen);
+    expect((light.fires.image.data as Float32Array)[FIRE_W * 4]).toBe(1);
+    expect(light.fires.version).toBeGreaterThan(v0);
+    const v1 = light.fires.version;
+    T.update(1.5);
+    syncFires(light, T, seen);
+    expect(light.fires.version).toBe(v1); // rows unchanged: no upload
+    expect(light.flick.version).toBeGreaterThan(f0 + 1);
+    expect((light.flick.image.data as Float32Array)[MAX_FIRES]).toBeCloseTo(T.flick[MAX_FIRES]);
+  });
+  test('the carried light: where it is, colour × candela × flicker, soft², range; out is black', () => {
+    const light = createInteriorLight(2), f = toFire({ kind: 'lantern', position: [1, 2, 3], colour: [1, 1, 1], intensity: 0.45, flicker: 0.2 });
+    expect(light.carried.light.value.toArray().slice(0, 3)).toEqual([0, 0, 0]); // out until set
+    setCarried(light, f, 0.5);
+    expect(light.carried.pos.value.toArray()).toEqual([1, 2, 3]);
+    expect(light.carried.light.value.x).toBeCloseTo(f.colour[0] * f.candela * 0.5);
+    expect(light.carried.light.value.w).toBeCloseTo(f.soft ** 2);
+    expect(light.carried.range.value).toBe(f.range);
+    setCarried(light, f);
+    expect(light.carried.light.value.z).toBeCloseTo(f.colour[2] * f.candela);
+    setCarried(light, null);
+    expect(light.carried.light.value.toArray().slice(0, 3)).toEqual([0, 0, 0]);
+  });
+  test('the bake fills the room grid of the plan it was sized for', () => {
+    const room = { id: 'H', zone: 'T', floor: 0, kind: 'hall' as const, poly: [[0, 0], [6, 0], [6, 4], [0, 4]] as [number, number][], y0: 0, y1: 4 };
+    const light = createInteriorLight(4, [room]);
+    expect(light.grid.model.size[0]).toBeGreaterThan(10);
+    bakeInteriorLight([], never, { plan: { rooms: [room], doors: [], stairs: [] }, windows: [], sun, light });
+    expect(gridRoom(light.grid.model, [3, 1, 2])).toBe(0);
+    expect(light.grid.texture.version).toBeGreaterThan(0);
   });
   test('sunStateOf reads direction and irradiance', () => {
     const l = new THREE.DirectionalLight(0xffffff, 2); l.position.set(0, 10, 0);

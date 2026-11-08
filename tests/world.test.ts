@@ -47,7 +47,9 @@ import { caveSpan, caveWalk, CAVE_ZONE } from '../src/castle/interior/caves';
 import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
 import { wallTorches } from '../src/render/interiorFire';
-import { LightRig } from '../src/light/rig';
+import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
+import { OUTDOOR_TAG } from '../src/render/interiorMath';
+import type { LightEmitter } from '../src/light/types';
 
 type V3 = [number, number, number];
 const OUTDOOR = new Set(['courtyard', 'outside']);
@@ -911,30 +913,79 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect([...faults.values()]).toEqual([]);
   }, 120_000);
 
-  // firelight never goes out because the camera crossed a doorway: walking through every doorway, a
-  // torch whose light still reaches the camera keeps its light (main.ts picks lights by distance only)
-  it('keeps every torch that reaches the camera lit while it walks through a doorway', () => {
+  // Anders, 2026-11-08: looking down into a room through an open door it was dark; a few steps closer
+  // its torch suddenly lit. The rig lit the 8 fires nearest the camera, each only within 1.6 × its range
+  // (a wall torch: 11 m), so a drawn room further off had no firelight at all. Now each room's fires are
+  // its row of the fire table (light/roomLight.ts), set as main.ts sets it: walking up to and through
+  // every doorway, from 15 m out, every room the graph draws has all its torches, at the same
+  // candela, and the firelight its walls get is the same at every pose.
+  it('lights every drawn room with all its fires, the same from every pose', () => {
+    const vis = makeVis(), index = baked().roomIndex;
     const groupOf = new Map<string, string>();
     for (const g of inner.groups) for (const id of g.rooms) groupOf.set(id, g.key);
     const fire = wallTorches(P, (id) => groupOf.get(id));
-    const rig = new LightRig({ create: () => ({ set() {} }) }, { shadows: 0, lights: 8 }); // as main.ts
-    rig.setEmitters(fire.emitters);
-    const src = rig.meanLights();
-    const faults: string[] = [];
+    const table = new FireTable(1024), byRoom = new Map<string, LightEmitter[]>();
+    fire.holders.forEach((h, i) => { if (!byRoom.has(h.room)) byRoom.set(h.room, []); byRoom.get(h.room)!.push(fire.emitters[i]); });
+    for (const [id, es] of byRoom) table.set(index.get(id)!, roomFires(P.rooms.find((r) => r.id === id)!, es)); // as main.ts
+    // the firelight on a room's floor at its centre, as the shader sums it (flicker held: motion 0)
+    table.update(0, 0);
+    const centre = (id: string): V3 => { const r = P.rooms.find((x) => x.id === id)!; return [r.poly.reduce((a, p) => a + p[0], 0) / r.poly.length, r.y0 + 0.01, r.poly.reduce((a, p) => a + p[1], 0) / r.poly.length]; };
+    const lightOf = (id: string) => { const row = index.get(id)!; return fireAt(table.fires(row).map((f, k) => ({ ...f, candela: f.candela * table.flick[row * MAX_FIRES + k] })), centre(id), [0, 1, 0]); };
+    const ref = new Map([...byRoom.keys()].map((id) => [id, lightOf(id)]));
+    const faults = new Map<string, string>();
+    let poses = 0, checked = 0;
     for (const d of P.doors) {
-      const reach = d.wall / 2 + 2;
-      let prev = new Set<number>();
-      for (let t = -reach; t <= reach + 1e-9; t += 0.05) {
-        const q = on(d, 0, t), eye: V3 = [q[0], d.centre[1] + 1.6, q[1]];
-        rig.update(0, 1, eye); // as main.ts: no visibility filter
-        const lit = new Set([...rig.snapshot().plain].filter((s) => s.source >= 0 && s.weight > 0).map((s) => s.source));
-        for (const id of prev) if (!lit.has(id) && Math.hypot(...src[id].position.map((v, k) => v - eye[k]) as V3) < src[id].range) faults.push(`${d.id}: torch ${id} went out ${t.toFixed(2)} m through`);
-        prev = lit;
+      const reach = d.wall / 2 + 15;
+      for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
+        const q = on(d, 0, t);
+        cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
+        vis.update(); poses++;
+        for (const [id, es] of byRoom) {
+          if (!vis.isRoomVisible(id)) continue;
+          checked++;
+          const row = index.get(id)!;
+          if (table.fires(row).length !== es.length) faults.set(id, `${id}: ${table.fires(row).length} of ${es.length} fires lit from ${t.toFixed(2)} m off ${d.id}`);
+          else if (Math.abs(lightOf(id) - ref.get(id)!) > 1e-9) faults.set(id, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} from ${t.toFixed(2)} m off ${d.id}`);
+        }
       }
     }
     expect(fire.emitters.length).toBeGreaterThan(10);
-    expect(faults).toEqual([]);
-  }, 60_000);
+    expect(poses).toBeGreaterThan(1000);
+    expect(checked).toBeGreaterThan(5000);
+    expect([...faults.values()]).toEqual([]);
+  }, 120_000);
+
+  // Anders, 2026-11-08 (live, WebGPU): the reveal of a courtyard door rendered pitch black beside the daylit
+  // wall. Its outer half was tagged to the room behind, so it got that room's daylight through the shut
+  // door (none) and no sun (the outdoor doorways use the underground set). Over every outdoor door of the
+  // castle: the interior stone between the shut leaf (or the mid plane) and the courtyard takes the sky
+  // (OUTDOOR_TAG), the stone behind the leaf its room.
+  it('lights every outdoor doorway from the sky up to its leaf, and from its room behind it', () => {
+    baked();
+    const faults: string[] = [];
+    let outer = 0, inside = 0;
+    const outdoorDoors = P.doors.filter((d) => OUTDOOR.has(d.spaces[0]) !== OUTDOOR.has(d.spaces[1]));
+    for (const g of inner.groups) g.object.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position'), tag = m.geometry.getAttribute('interiorRoom');
+      for (let i = 0; i < pos.count; i += 3) {
+        const c: V3 = [0, 1, 2].map((k) => (pos.getComponent(i, k) + pos.getComponent(i + 1, k) + pos.getComponent(i + 2, k)) / 3) as V3;
+        for (const d of outdoorDoors) {
+          const s = OUTDOOR.has(d.spaces[0]) ? -1 : 1, dx = c[0] - d.centre[0], dz = c[2] - d.centre[2];
+          const leaf = d.leaf ? s * (d.swingInto === 1 ? 1 : -1) * (d.wall / 2 - d.rebate) : 0; // the shut leaf, outward from the mid plane
+          const through = (dx * d.normal[0] + dz * d.normal[1]) * s, across = dx * d.along[0] + dz * d.along[1];
+          if (Math.abs(across) > d.width / 2 + 0.15 || // the jambs, and a back-swinging leaf's recess (LIP beyond them)
+             c[1] < d.centre[1] + 0.05 || c[1] > d.centre[1] + d.height) continue;
+          if (through > leaf + 0.1 && through < d.wall / 2 - 0.02) { outer++; if (tag.getX(i) !== OUTDOOR_TAG) faults.push(`${d.id}: outer reveal tagged ${tag.getX(i)}`); }
+          if (through < leaf - 0.1 && through > -d.wall / 2 + 0.02) { inside++; if (tag.getX(i) < 0) faults.push(`${d.id}: inner reveal tagged ${tag.getX(i)}`); }
+        }
+      }
+    });
+    expect(faults.slice(0, 10)).toEqual([]);
+    expect(outer).toBeGreaterThan(10);
+    expect(inside).toBeGreaterThan(10);
+  }, 120_000);
 
   it('lays no real stone, at any level of detail, in a doorway', () => {
     // every level draws the same stones (field.ts: hi, mid, lo and silhouette-only are one set and a draw

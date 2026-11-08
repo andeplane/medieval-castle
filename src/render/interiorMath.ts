@@ -291,15 +291,16 @@ export interface ExposureCfg {
   strength: number;    // 0..1: how much of a luminance change exposure compensates
   maxStops: number;    // ceiling above base (interiors)
   deepStops: number;   // ceiling underground
+  minInside: number;   // floor indoors (stops, ≤ 0): the eye closes a little next to a fire
   tauDark: number;     // s, adapting to a darker scene (exposure rising)
   tauBright: number;   // s, adapting to a brighter scene
 }
-export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -3.0, strength: 0.85, maxStops: 2.5, deepStops: 3.2, tauDark: 1.4, tauBright: 0.6 };
+export const EXPOSURE: ExposureCfg = { base: 0.72, refLog2: -3.0, strength: 0.85, maxStops: 2.5, deepStops: 3.2, minInside: -1, tauDark: 1.4, tauBright: 0.6 };
 
 /** Target exposure in stops above `base` for a measured mean log2 luminance. */
-export function targetStops(meanLog2: number, deep: boolean, cfg = EXPOSURE) {
+export function targetStops(meanLog2: number, deep: boolean, cfg = EXPOSURE, inside = false) {
   const s = (cfg.refLog2 - meanLog2) * cfg.strength;
-  return Math.max(0, Math.min(deep ? cfg.deepStops : cfg.maxStops, s));
+  return Math.max(inside ? cfg.minInside : 0, Math.min(deep ? cfg.deepStops : cfg.maxStops, s));
 }
 
 /** One step of exponential adaptation in log space; `stops` is the current offset above base. */
@@ -323,7 +324,31 @@ export function meanLog2(px: ArrayLike<number>, w: number, h: number, stride = 4
 
 /** Room index per vertex for a non-indexed, world-space triangle soup: each triangle steps 0.25 m off
  * its face along its normal and takes the nearest room within maxWall; all three vertices share it. */
-export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | null, rooms: RoomSpec[], maxWall: number, prefer?: Set<number>) {
+/** Tag of a surface on the courtyard or outer side of an outdoor doorway: lit by the sky, not by a room. */
+export const OUTDOOR_TAG = -2;
+
+/**
+ * Is a surface (centre p, normal n) on the outer side of an outdoor doorway: its jambs and soffit from the
+ * shut leaf (or the wall's mid plane, with no leaf) out to the outer face, and the stop the leaf shuts
+ * against when that faces out? That stone faces the courtyard, so it takes the sky's light; tagged to the
+ * room behind, it got that room's daylight through a shut door (none) and rendered black.
+ */
+export function outdoorRevealTest(doors: DoorSpec[]): (p: V3, n?: V3) => boolean {
+  const out = doors.filter((d) => OUTSIDE.has(d.spaces[0]) !== OUTSIDE.has(d.spaces[1])).map((d) => {
+    const s = OUTSIDE.has(d.spaces[0]) ? -1 : 1;
+    // where the shut leaf stands, along the outward normal: rebate in from the face of the space it swings into
+    const sw = d.swingInto === 1 ? 1 : -1, leaf = d.leaf ? s * sw * (d.wall / 2 - d.rebate) : 0;
+    return { d, s, leaf };
+  });
+  return (p, n) => out.some(({ d, s, leaf }) => {
+    const q: V3 = n ? [p[0] + n[0] * 0.05, p[1], p[2] + n[2] * 0.05] : p;
+    const dx = q[0] - d.centre[0], dz = q[2] - d.centre[2];
+    const through = (dx * d.normal[0] + dz * d.normal[1]) * s, across = dx * d.along[0] + dz * d.along[1];
+    return through > leaf + 0.01 && through <= d.wall / 2 + 0.3 && Math.abs(across) <= d.width / 2 + 0.6 && p[1] >= d.centre[1] - 0.3 && p[1] <= d.centre[1] + d.height + d.width * 0.6 + 0.6;
+  });
+}
+
+export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | null, rooms: RoomSpec[], maxWall: number, prefer?: Set<number>, outdoor?: (p: V3, n: V3) => boolean) {
   const n = Math.floor(pos.length / 3), out = new Float32Array(n).fill(-1);
   for (let t = 0; t + 2 < n; t += 3) {
     const p: V3 = [0, 0, 0];
@@ -334,7 +359,7 @@ export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | nu
       q = cross3(e1, e2);
     }
     q = norm3(q);
-    const room = nearestRoom(rooms, [p[0] + q[0] * 0.25, p[1] + q[1] * 0.25, p[2] + q[2] * 0.25], maxWall, prefer);
+    const room = outdoor?.(p, q) ? OUTDOOR_TAG : nearestRoom(rooms, [p[0] + q[0] * 0.25, p[1] + q[1] * 0.25, p[2] + q[2] * 0.25], maxWall, prefer);
     out[t] = out[t + 1] = out[t + 2] = room;
   }
   return out;
@@ -462,4 +487,54 @@ export function ceilingSkins(rooms: RoomSpec[], lift = 0.55, grow = 0.32): { pol
     const poly = q.map((a, i): V2 => { const n0 = nOf((i + q.length - 1) % q.length), n1 = nOf(i), k = grow / (1 + n0[0] * n1[0] + n0[1] * n1[1]); return [a[0] + (n0[0] + n1[0]) * k, a[1] + (n0[1] + n1[1]) * k]; });
     return { poly, y: r.y1 + lift };
   });
+}
+
+// ---------- room grid (which room a point is in, for surfaces with no room tag) ----------
+
+/** A world box cut into cells; `data` holds room index + 1 per cell (0 = no room), x fastest, then y, then z. */
+export interface RoomGrid { origin: V3; cell: V3; size: [number, number, number]; data: Float32Array }
+
+/** An empty grid over the rooms' bounds (+ `pad` m, more than fillRoomGrid reaches, so its edge stays empty), `cell` metres per cell. */
+export function roomGridFor(rooms: RoomSpec[], cell: V3 = [0.5, 1, 0.5], pad = 3): RoomGrid {
+  if (!rooms.length) return { origin: [0, 0, 0], cell, size: [1, 1, 1], data: new Float32Array(1) };
+  const xs = rooms.flatMap((r) => r.poly.map((p) => p[0])), zs = rooms.flatMap((r) => r.poly.map((p) => p[1]));
+  const lo: V3 = [Math.min(...xs) - pad, Math.min(...rooms.map((r) => r.y0)) - pad, Math.min(...zs) - pad];
+  const hi: V3 = [Math.max(...xs) + pad, Math.max(...rooms.map((r) => r.y1)) + pad, Math.max(...zs) + pad];
+  const size = [0, 1, 2].map((k) => Math.max(1, Math.ceil((hi[k] - lo[k]) / cell[k]))) as [number, number, number];
+  return { origin: lo, cell, size, data: new Float32Array(size[0] * size[1] * size[2]) };
+}
+
+/**
+ * Fill a grid with the rooms (index in `rooms`): a cell whose centre is inside a room (outline, floor to
+ * ceiling) is that room; then empty cells take a neighbour's room across x and z, `reach` cells deep,
+ * so a point in a doorway or a wall's reveal finds the room beside it.
+ */
+export function fillRoomGrid(g: RoomGrid, rooms: RoomSpec[], reach = 5): RoomGrid {
+  const [nx, ny, nz] = g.size, at = (i: number, j: number, k: number) => i + nx * (j + ny * k);
+  g.data.fill(0);
+  rooms.forEach((r, ri) => {
+    const xs = r.poly.map((p) => p[0]), zs = r.poly.map((p) => p[1]);
+    const i0 = Math.max(0, Math.floor((Math.min(...xs) - g.origin[0]) / g.cell[0])), i1 = Math.min(nx - 1, Math.floor((Math.max(...xs) - g.origin[0]) / g.cell[0]));
+    const k0 = Math.max(0, Math.floor((Math.min(...zs) - g.origin[2]) / g.cell[2])), k1 = Math.min(nz - 1, Math.floor((Math.max(...zs) - g.origin[2]) / g.cell[2]));
+    const j0 = Math.max(0, Math.floor((r.y0 - g.origin[1]) / g.cell[1])), j1 = Math.min(ny - 1, Math.floor((r.y1 - g.origin[1]) / g.cell[1]));
+    for (let k = k0; k <= k1; k++) for (let i = i0; i <= i1; i++) {
+      if (!inPoly(r.poly, g.origin[0] + (i + 0.5) * g.cell[0], g.origin[2] + (k + 0.5) * g.cell[2])) continue;
+      for (let j = j0; j <= j1; j++) { const y = g.origin[1] + (j + 0.5) * g.cell[1]; if (y >= r.y0 - g.cell[1] * 0.5 && y <= r.y1) g.data[at(i, j, k)] = ri + 1; }
+    }
+  });
+  for (let step = 0; step < reach; step++) {
+    const prev = g.data.slice();
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (prev[at(i, j, k)]) continue;
+      const v = (i > 0 && prev[at(i - 1, j, k)]) || (i < nx - 1 && prev[at(i + 1, j, k)]) || (k > 0 && prev[at(i, j, k - 1)]) || (k < nz - 1 && prev[at(i, j, k + 1)]) || 0;
+      if (v) g.data[at(i, j, k)] = v;
+    }
+  }
+  return g;
+}
+
+/** The room index (or -1) the grid gives a world point, as the shader reads it. */
+export function gridRoom(g: RoomGrid, p: V3): number {
+  const c = [0, 1, 2].map((k) => Math.min(g.size[k] - 1, Math.max(0, Math.floor((p[k] - g.origin[k]) / g.cell[k]))));
+  return g.data[c[0] + g.size[0] * (c[1] + g.size[1] * c[2])] - 1;
 }

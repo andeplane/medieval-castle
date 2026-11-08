@@ -12,6 +12,7 @@ export interface FlameProfile {
   amp: number;      // relative intensity swing at flicker = 1
   sway: number;     // metres the light centre wanders at flicker = 1
   gutter: number;   // chance per second of a gutter at flicker = 1
+  soft: number;     // metres: the flame's size as a light, so nothing near it gets more than candela / soft²
 }
 
 // Brightness is tuned for the interior exposure (src/light/look.ts), not photometrically exact: a
@@ -20,11 +21,11 @@ export interface FlameProfile {
 // no shadows, so `range` also bounds how far a torch shines through the walls into the next room:
 // keep it about one room (a wall torch, intensity 3, reaches 4 × √3 ≈ 6.9 m).
 export const PROFILES: Record<FlameKind, FlameProfile> = {
-  candle: { kind: 'candle', kelvin: 1850, candela: 3.6, range: 3.5, speed: 1.0, amp: 0.7, sway: 0.015, gutter: 0.6 },
-  torch: { kind: 'torch', kelvin: 1800, candela: 7.5, range: 4, speed: 1.25, amp: 0.85, sway: 0.06, gutter: 1.0 },
-  lantern: { kind: 'lantern', kelvin: 1950, candela: 4, range: 5, speed: 0.8, amp: 0.4, sway: 0.004, gutter: 0.2 },
-  brazier: { kind: 'brazier', kelvin: 1650, candela: 10, range: 7.5, speed: 0.7, amp: 0.65, sway: 0.08, gutter: 0.5 },
-  hearth: { kind: 'hearth', kelvin: 1600, candela: 14, range: 9, speed: 0.55, amp: 0.55, sway: 0.15, gutter: 0.35 },
+  candle: { kind: 'candle', kelvin: 1850, candela: 2.5, range: 3.5, speed: 1.0, amp: 0.7, sway: 0.015, gutter: 0.6, soft: 0.12 },
+  torch: { kind: 'torch', kelvin: 1800, candela: 7.5, range: 4, speed: 1.25, amp: 0.85, sway: 0.06, gutter: 1.0, soft: 0.25 },
+  lantern: { kind: 'lantern', kelvin: 1950, candela: 4, range: 5, speed: 0.8, amp: 0.4, sway: 0.004, gutter: 0.2, soft: 0.15 },
+  brazier: { kind: 'brazier', kelvin: 1650, candela: 10, range: 7.5, speed: 0.7, amp: 0.65, sway: 0.08, gutter: 0.5, soft: 0.45 },
+  hearth: { kind: 'hearth', kelvin: 1600, candela: 6, range: 6, speed: 0.55, amp: 0.55, sway: 0.15, gutter: 0.35, soft: 0.9 },
 };
 
 /** Integer hash → [0, 1). */
