@@ -29,7 +29,7 @@ export const PALETTES: readonly Palette[] = [
   { name: 'crimson', main: PCLOTH.crimson, upholstery: PCLOTH.crimson, accent: PCLOTH.gold, carpet: [1, 1, 1] },
   { name: 'green', main: PCLOTH.green, upholstery: PCLOTH.green, accent: PCLOTH.gold, carpet: [0.82, 1.04, 0.86] },
   { name: 'blue', main: PCLOTH.blue, upholstery: PCLOTH.oxblood, accent: PCLOTH.ivory, carpet: [0.86, 0.9, 1.1] },
-  { name: 'murrey', main: [0.27, 0.07, 0.15], upholstery: [0.27, 0.07, 0.15], accent: PCLOTH.gold, carpet: [0.95, 0.8, 0.95] },
+  { name: 'murrey', main: [0.22, 0.07, 0.1], upholstery: [0.22, 0.07, 0.1], accent: PCLOTH.gold, carpet: [0.95, 0.8, 0.95] },
   { name: 'tawny', main: [0.48, 0.25, 0.09], upholstery: [0.3, 0.15, 0.07], accent: PCLOTH.green, carpet: [1.06, 0.92, 0.74] },
   { name: 'saffron', main: [0.6, 0.43, 0.11], upholstery: PCLOTH.blue, accent: PCLOTH.blue, carpet: [1.08, 1.0, 0.76] },
 ];

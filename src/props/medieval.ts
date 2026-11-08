@@ -638,10 +638,10 @@ export const hanging: PropKind = {
   name: 'hanging', placement: 'wall', mount: 2.6, blocksNav: false,
   build(m, r, v) {
     const pal = PALETTES[tone(v)], W = range(r, 0.9, 1.7), H = range(r, 1.1, 1.6), ph = r() * 6;
-    const main = jitterTint(r, pal.main, 0.06), band = jitterTint(r, pal.accent, 0.06), nu = 6, nv = 4;
+    const main = jitterTint(r, pal.main, 0.06), band = jitterTint(r, pal.accent, 0.06), nu = 6, nv = 4, sides = r() < 0.5;
     m.tinted(jitterTint(r, WOOD.dark), () => m.tube('wood', [[-W / 2 - 0.06, 0, 0.04], [W / 2 + 0.06, 0, 0.04]], 0.018, 6));
     for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
-      const s0 = i / nu, t0 = j / nv, edge = j === nv - 1 || ((i === 0 || i === nu - 1) && r() < 0.5);
+      const s0 = i / nu, t0 = j / nv, edge = j === nv - 1 || (sides && (i === 0 || i === nu - 1)); // a band along the hem, and down both sides or neither
       m.tinted(edge ? band : main, () => m.sheet('cloth', (s, t) => {
         const S = s0 + s / nu, T = t0 + t / nv;
         return [(S - 0.5) * W, -0.02 - T * H + Math.sin(S * 7 + ph) * 0.012 * T, 0.03 + Math.sin(S * Math.PI * 6 + ph) * 0.01 * (1 - T * 0.5) + T * 0.008];
