@@ -34,11 +34,12 @@ export interface DoorSpec {
   head: 'round' | 'pointed' | 'flat' | 'segmental';
   leaf: boolean;               // false = open archway, no door leaf
   hinge: 'left' | 'right';     // hinge side, seen from spaces[0] looking along +normal
-  swingInto: 0 | 1;            // which space the leaf swings into first (where it rests shut at the start)
+  swingInto: 0 | 1;            // the space the leaf swings into forward; it hangs in the rebate on this face
   rebate: number;              // depth from the face of the space it swings into to where the closed leaf sits
-  /** Hinge side when the leaf swings into the other space, spaces[1 - swingInto]: the doorway is rebated on
-   *  both faces and the leaf opens away from whoever opens it. Absent: it opens into spaces[swingInto] only. */
-  otherHinge?: 'left' | 'right';
+  /** The leaf also swings back, through the doorway toward spaces[1 - swingInto], turning on its back edge in
+   *  the same seat, so it opens away from whoever opens it (doorGeom: it fills its rebate, with no stop, and the
+   *  doorway behind it is cut out for its sweep). Absent: it opens into spaces[swingInto] only. */
+  swingsBack?: boolean;
   kind: 'plank' | 'gate' | 'postern' | 'grille';
 }
 

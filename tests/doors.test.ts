@@ -4,8 +4,8 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import type { DoorSpec, V3 } from '../src/castle/interior/types';
 import {
-  placeLeaves, seatsOf, seatAwayFrom, hingeOf, twoWayFits, stopPlane, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4apply, m4translate, m4scale, m4rotX, maxSwing, doorFrame,
-  OPEN_ANGLE, LIP, GROW, STOP_GAP, BIN, stopDepth, KIND, leafDepth,
+  placeLeaves, swingAwayFrom, leafSwing, leafHead, doorCuts, backReach, stopPlane, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4apply, m4translate, m4scale, m4rotX, maxSwing, doorFrame,
+  OPEN_ANGLE, LIP, GROW, FIT, STOP_GAP, BIN, BACK_ANGLE, stopDepth, KIND, leafDepth,
 } from '../src/castle/interior/doorGeom';
 import { leafGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
 import { buildDoors, instancesByGeometry, m4quat, rayBox, rayEnters, REACH_NPC } from '../src/castle/interior/doors';
@@ -42,14 +42,25 @@ const randomSpecs = (n: number, seed = 7): DoorSpec[] => {
       wall, rebate: 0.08 + r() * Math.min(0.5, wall * 0.5), hinge: r() < 0.5 ? 'left' : 'right', swingInto: r() < 0.5 ? 0 : 1,
       normal: [Math.cos(a), Math.sin(a)], along: [-Math.sin(a), Math.cos(a)], centre: [r() * 40 - 20, 2.6 + r() * 20, r() * 40 - 20],
     });
-  }).map((d) => {
-    // most hang two-way where the wall leaves room for both rebates, some on the other jamb when swung back
-    const k = r();
-    return twoWayFits(d) && k < 0.7 ? { ...d, otherHinge: k < 0.35 ? d.hinge : d.hinge === 'left' ? 'right' as const : 'left' as const } : d;
-  });
+  }).map((d) => (d.kind !== 'grille' && r() < 0.6 ? { ...d, swingsBack: true } : d)); // most swing both ways
 };
-/** Every leaf of a door in every seat it can hang in. */
-const allSeats = (d: DoorSpec) => seatsOf(d).flatMap((k) => placeLeaves(d, k));
+/** The signed swings a leaf can make: forward, and back when it swings back. */
+const swingsOf = (d: DoorSpec): (1 | -1)[] => (d.swingsBack ? [1, -1] : [1]);
+/** Is (u, y) inside a closed outline, or within `tol` of it? */
+function nearOutline(o: [number, number][], u: number, y: number, tol: number) {
+  let inside = false;
+  for (let i = 0, j = o.length - 1; i < o.length; j = i++) {
+    const [xi, yi] = o[i], [xj, yj] = o[j];
+    if ((yi > y) !== (yj > y) && u < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  if (inside) return true;
+  for (let i = 0, j = o.length - 1; i < o.length; j = i++) {
+    const [ax, ay] = o[j], [bx, by] = o[i], dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((u - ax) * dx + (y - ay) * dy) / L));
+    if (Math.hypot(ax + dx * t - u, ay + dy * t - y) < tol) return true;
+  }
+  return false;
+}
 const verts = (b: PartBin) => { const o: V3[] = []; for (let i = 0; i < b.pos.length; i += 3) o.push([b.pos[i], b.pos[i + 1], b.pos[i + 2]]); return o; };
 const det3 = (m: number[]) => m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
 
@@ -79,10 +90,11 @@ describe('leaf placement', () => {
 
   it('laps the stop all round, keeps 2 cm off the rebate and stands just in front of the stop', () => {
     const geomCache = new Map<string, ReturnType<typeof leafGeometry>>();
-    for (const d of specs) {
+    for (const d0 of specs) {
+      const d = { ...d0, swingsBack: undefined }; // one-way: the stop behind it (a back-swinging leaf has none: below)
       const top = headTop(d.head, d.width, d.height), reb = headTop(d.head, d.width, d.height, -LIP);
       const outline = openingOutline(d.head, d.width, d.height, 60, LIP).filter((p) => p[1] > d.height - 0.1);
-      for (const pl of allSeats(d)) {
+      for (const pl of placeLeaves(d)) {
         const sgn = pl.seat === 1 ? 1 : -1;
         const cls = leafClassFor(d, pl.kind), g = geomCache.get(pl.classKey) ?? leafGeometry(cls, mulberry32(1));
         geomCache.set(pl.classKey, g);
@@ -110,7 +122,7 @@ describe('leaf placement', () => {
         expect(thick, what).toBeGreaterThanOrEqual(-1e-6); // inside the wall thickness
         // over the clear opening: past both jambs and above the head everywhere across it
         expect(Math.min(-d.width / 2 - s0, s1 - d.width / 2), what).toBeGreaterThanOrEqual(pl.kind === 'grille' ? 0.005 : 0.03);
-        const lt = headTop(cls.head, cls.ow, cls.oh, -GROW);
+        const lt = leafHead(cls);
         for (let s = -d.width / 2; s <= d.width / 2; s += d.width / 50) expect(lt(s) - top(s), what).toBeGreaterThanOrEqual(0.015);
         // the back face sits at `rebate` (unless the leaf would stick out of the wall), STOP_GAP before the stop
         const back = KIND[pl.kind].t + KIND[pl.kind].ledge + 0.012;
@@ -120,11 +132,38 @@ describe('leaf placement', () => {
     }
   });
 
+  it('fills its rebate when it swings back: the same leaf, FIT off the rebated outline all round, no stop', () => {
+    for (const d of specs.filter((x) => x.swingsBack)) {
+      const [pl] = placeLeaves(d), cls = leafClassFor(d, pl.kind), cuts = doorCuts(d);
+      // same seat, hinge and pose as the one-way leaf: swinging back changes nothing about where it hangs
+      expect(leafMatrix(pl, leafSwing(pl, 0))).toEqual(leafMatrix(placeLeaves({ ...d, swingsBack: undefined })[0], m4swing(0)));
+      const reb = cuts.find((c) => c.band === 'reb')!.o, lt = leafHead(cls);
+      // the rebate's jambs and head are the leaf's own, FIT out (and a little more where the head's chords need it
+      // to clear the leaf's boards, cut 1 cm under the curve): always tighter than a stopped leaf's rebate
+      const jamb = Math.max(...reb.map((q) => q[0]));
+      expect(jamb - (cls.ow / 2 + GROW)).toBeGreaterThanOrEqual(FIT - 1e-9);
+      expect(jamb - (cls.ow / 2 + GROW)).toBeLessThan(LIP - GROW);
+      for (const [u, y] of reb.slice(2)) if (Math.abs(u) < cls.ow / 2) expect(y - d.centre[1] - lt(u)).toBeGreaterThan(0);
+      for (const [u, y] of reb.slice(2)) if (Math.abs(u) < cls.ow / 2) expect(y - d.centre[1] - lt(u)).toBeLessThan(LIP - GROW);
+      // the recess behind: as far back as the leaf reaches, then a stop, or through the wall
+      const b = backReach(d), names = cuts.map((c) => c.band);
+      expect(names).toEqual(d.swingInto === 1 ? (b.through ? ['sweep', 'reb'] : ['clear', 'sweep', 'reb']) : (b.through ? ['reb', 'sweep'] : ['reb', 'sweep', 'clear']));
+      expect(b.end - b.rear).toBeGreaterThan(pl.width);
+    }
+    // the cuts are contiguous from −∞ to +∞
+    for (const d of specs) {
+      const cuts = doorCuts(d);
+      expect(cuts[0].t0).toBe(-Infinity); expect(cuts[cuts.length - 1].t1).toBe(Infinity);
+      for (let i = 1; i < cuts.length; i++) expect(cuts[i].t0).toBe(cuts[i - 1].t1);
+    }
+    expect(doorCuts(spec({ leaf: false })).map((c) => c.band)).toEqual(['clear']);
+  });
+
   it('puts the hinge on the side named, seen from spaces[0] along +normal', () => {
-    for (const d of specs) for (const k of seatsOf(d)) {
-      const pls = placeLeaves(d, k);
+    for (const d of specs) {
+      const pls = placeLeaves(d);
       const s = doorCoords(d, pls[0].pivot).s;
-      expect(Math.sign(s)).toBe(hingeOf(d, k) === 'right' ? 1 : -1);
+      expect(Math.sign(s)).toBe(d.hinge === 'right' ? 1 : -1);
       expect(pls).toHaveLength(1); // one whole leaf
       // the latch edge is at the other jamb
       const latch = doorCoords(d, leafPoint(pls[0], m4swing(0), [pls[0].width, 1, -0.05])).s;
@@ -132,24 +171,27 @@ describe('leaf placement', () => {
     }
   });
 
-  it('swings into spaces[seat] (spaces[swingInto] first), past the wall face', () => {
-    expect(specs.filter((d) => d.otherHinge).length).toBeGreaterThan(10);
+  it('swings forward into spaces[swingInto] past the wall face, and back toward the other space', () => {
+    expect(specs.filter((d) => d.swingsBack).length).toBeGreaterThan(10);
     for (const d of specs) {
-      expect(placeLeaves(d)[0].seat).toBe(d.swingInto);
-      for (const pl of allSeats(d)) {
-        const sgn = pl.seat === 1 ? 1 : -1;
-        const p = doorCoords(d, leafPoint(pl, m4swing(pl.maxAngle), [pl.width, 1, -0.05]));
-        expect(p.n * sgn).toBeGreaterThan(0);
-        expect(p.n * sgn).toBeGreaterThan(Math.min(d.wall / 2, pl.width * 0.9 - d.wall / 2));
-        // and a little opening goes the same way
-        expect(doorCoords(d, leafPoint(pl, m4swing(0.2), [pl.width, 1, -0.05])).n * sgn).toBeGreaterThan(doorCoords(d, leafPoint(pl, m4swing(0), [pl.width, 1, -0.05])).n * sgn);
-      }
+      const [pl] = placeLeaves(d), sgn = d.swingInto === 1 ? 1 : -1;
+      expect(pl.seat).toBe(d.swingInto);
+      expect(pl.backAngle).toBe(d.swingsBack ? BACK_ANGLE : 0);
+      const n = (a: number) => doorCoords(d, leafPoint(pl, leafSwing(pl, a), [pl.width, 1, -0.05])).n * sgn;
+      expect(n(pl.maxAngle)).toBeGreaterThan(0);
+      expect(n(pl.maxAngle)).toBeGreaterThan(Math.min(d.wall / 2, pl.width * 0.9 - d.wall / 2));
+      // and a little opening goes the same way
+      expect(n(0.2)).toBeGreaterThan(n(0));
+      if (!d.swingsBack) continue;
+      // back: the latch edge goes the other way, a leaf's width behind where it hung
+      expect(n(-0.2)).toBeLessThan(n(0));
+      expect(n(-pl.backAngle)).toBeLessThan(n(0) - pl.width * 0.95);
     }
   });
 
   it('keeps every leaf matrix a rotation (det +1) for both hands and any angle', () => {
-    for (const d of specs.slice(0, 24)) for (const pl of allSeats(d)) for (const a of [0, 0.7, pl.maxAngle]) {
-      expect(det3(leafMatrix(pl, m4swing(a)))).toBeCloseTo(1, 9);
+    for (const d of specs.slice(0, 24)) for (const pl of placeLeaves(d)) for (const a of [0, 0.7, pl.maxAngle, -0.7, -BACK_ANGLE]) {
+      expect(det3(leafMatrix(pl, leafSwing(pl, a)))).toBeCloseTo(1, 9);
     }
     const hands = new Set(specs.flatMap((d) => placeLeaves(d).map((p) => p.mirrored)));
     expect(hands).toEqual(new Set([true, false]));
@@ -166,46 +208,50 @@ describe('leaf placement', () => {
     expect(f.pivotDepth).toBeGreaterThanOrEqual(0.03);
   });
 
-  it('opens away from whoever opens it: the seat on the far side, the door default in its plane', () => {
-    const d = spec({ otherHinge: 'right' }), at = (t: number) => [d.centre[0] + d.normal[0] * t, d.centre[2] + d.normal[1] * t] as const;
-    expect(seatAwayFrom(d, ...at(-1))).toBe(1);
-    expect(seatAwayFrom(d, ...at(1))).toBe(0);
-    expect(seatAwayFrom(d, ...at(0.01))).toBeNull();
+  it('opens away from whoever opens it: forward or back, forward when it cannot swing back', () => {
+    const d = spec({ swingsBack: true }), at = (t: number) => [d.centre[0] + d.normal[0] * t, d.centre[2] + d.normal[1] * t] as const;
+    // swingInto 1: from spaces[0] (t < 0) forward into spaces[1]; from spaces[1] back toward spaces[0]
+    expect(swingAwayFrom(d, ...at(-1))).toBe(1);
+    expect(swingAwayFrom(d, ...at(1))).toBe(-1);
+    expect(swingAwayFrom(d, ...at(0.01))).toBeNull();
     // in the plane: toward the side they look away from (behind them)
-    expect(seatAwayFrom(d, ...at(0), { x: d.normal[0], z: d.normal[1] })).toBe(0);
-    expect(seatAwayFrom(d, ...at(0), { x: -d.normal[0], z: -d.normal[1] })).toBe(1);
-    expect(seatAwayFrom(d, ...at(0), { x: d.along[0], z: d.along[1] })).toBeNull();
-    expect(seatsOf(d)).toEqual([1, 0]);
-    expect(seatsOf(spec())).toEqual([1]);
-    expect(seatsOf(spec({ leaf: false, otherHinge: 'left' }))).toEqual([]);
-    expect([hingeOf(d, 1), hingeOf(d, 0), hingeOf(spec(), 0)]).toEqual(['left', 'right', 'left']);
-    // a wall too thin for two rebates and a stop between them
-    expect(twoWayFits(spec({ wall: 0.3 }))).toBe(false);
-    expect(twoWayFits(d)).toBe(true);
-    expect(twoWayFits(spec({ kind: 'gate', leaf: false }))).toBe(false);
+    expect(swingAwayFrom(d, ...at(0), { x: d.normal[0], z: d.normal[1] })).toBe(-1);
+    expect(swingAwayFrom(d, ...at(0), { x: -d.normal[0], z: -d.normal[1] })).toBe(1);
+    expect(swingAwayFrom(d, ...at(0), { x: d.along[0], z: d.along[1] })).toBeNull();
+    // a one-way leaf opens its one way from either side
+    expect(swingAwayFrom(spec(), ...at(1))).toBe(1);
+    expect(swingAwayFrom({ ...d, swingInto: 0 }, ...at(1))).toBe(1);
+    expect(swingAwayFrom({ ...d, swingInto: 0 }, ...at(-1))).toBe(-1);
   });
 
-  it('keeps every castle leaf, in either seat and all through its swing, in its rebate and off the stops', () => {
-    // inside the wall a leaf stays in the rebated outline (clear of the jambs, the head and the arch over it)
-    // and on its own face's side of its stop, so it never reaches the stop or the other seat's rebate. The
-    // room beyond each face is world.test.ts's (rule 7): walls, ceiling, steps and every other leaf's sweep.
+  it('keeps every castle leaf, all through its swing either way, inside its doorway', () => {
+    // inside the wall a leaf stays in the doorway cut at each depth (doorCuts: the rebate, the clear outline, a
+    // back-swinging leaf's recess), so it never reaches a stop, a jamb or the head. A one-way leaf keeps 1 cm off
+    // its rebate and on its face's side of its stop. A back-swinging leaf fills its rebate: as it turns, its
+    // latch-edge corner (radius √(w² + t²) round its back edge) passes ≤ 5 mm into the latch jamb for a
+    // moment (a real leaf has that edge bevelled). The room beyond each face is world.test.ts's (rule 7).
     // the doors that open (the locked sally-port grille never swings: its sweep is not checked)
     const doors = playDoors([], planInterior().doors).active;
-    expect(doors.filter((d) => d.otherHinge).length).toBeGreaterThan(doors.length * 0.7); // stair doors stay one-way
+    expect(doors.filter((d) => d.swingsBack).length).toBeGreaterThan(doors.length * 0.95);
     const bad = new Set<string>();
     for (const d of doors) {
-      const reb = headTop(d.head, d.width, d.height, -LIP), stop = stopPlane(d);
-      for (const pl of allSeats(d)) {
-        const sgn = pl.seat === 1 ? 1 : -1, { zBack } = leafDepth(pl.kind), cls = leafClassFor(d, pl.kind);
-        // the leaf's top edge at x along it (the head it is shaped to)
-        const top = (x: number) => headTop(cls.head, cls.ow, cls.oh, -GROW)(pl.sOff + pl.sDir * x) - cls.sill;
-        for (let i = 0; i <= 24; i++) for (let k = 0; k <= 10; k++) for (const f of [0, 0.5, 1]) for (const z of [zBack, 0]) {
-          const x = (pl.width * k) / 10, p = doorCoords(d, leafPoint(pl, m4swing((pl.maxAngle * i) / 24), [x, f * top(x), z]));
-          if (p.n * sgn < stop + STOP_GAP - 1e-3) bad.add(`${d.id} seat ${pl.seat}: reaches its stop`);
-          if (Math.abs(p.n) > d.wall / 2) continue; // out of the wall: the room's (world.test.ts)
-          if (Math.abs(p.s) > d.width / 2 + LIP - 0.01) bad.add(`${d.id} seat ${pl.seat}: into a jamb`);
-          if (p.y > reb(p.s) - 0.01) bad.add(`${d.id} seat ${pl.seat}: into the head`);
+      const stop = stopPlane(d), cuts = doorCuts(d), [pl] = placeLeaves(d), reb = headTop(d.head, d.width, d.height, -LIP);
+      const sgn = pl.seat === 1 ? 1 : -1, { zBack } = leafDepth(pl.kind), cls = leafClassFor(d, pl.kind);
+      // the leaf's top edge at x along it (the head it is shaped to)
+      const top = (x: number) => leafHead(cls)(pl.sOff + pl.sDir * x) - cls.sill;
+      for (const way of swingsOf(d)) for (let i = 0; i <= 24; i++) for (let k = 0; k <= 10; k++) for (const f of [0, 0.5, 1]) for (const z of [zBack, 0]) {
+        const a = way > 0 ? (pl.maxAngle * i) / 24 : (-pl.backAngle * i) / 24;
+        const x = (pl.width * k) / 10, q = leafPoint(pl, leafSwing(pl, a), [x, f * top(x), z]), p = doorCoords(d, q);
+        if (!d.swingsBack && p.n * sgn < stop + STOP_GAP - 1e-3) bad.add(`${d.id}: reaches its stop`);
+        if (Math.abs(p.n) > d.wall / 2) continue; // out of the wall: the room's (world.test.ts)
+        const u = (q[0] - d.centre[0]) * d.along[0] + (q[2] - d.centre[2]) * d.along[1];
+        if (!d.swingsBack) {
+          if (Math.abs(p.s) > d.width / 2 + LIP - 0.01) bad.add(`${d.id}: into a jamb`);
+          if (p.y > reb(p.s) - 0.01) bad.add(`${d.id}: into the head`);
+          continue;
         }
+        const cut = cuts.find((c) => p.n >= c.t0 && p.n < c.t1)!;
+        if (!nearOutline(cut.o, u, q[1], 0.006) && !(q[1] < d.centre[1] + 0.05)) bad.add(`${d.id} ${way > 0 ? 'forward' : 'back'}: out of its ${cut.band} outline at (${u.toFixed(2)}, ${(q[1] - d.centre[1]).toFixed(2)}, n ${p.n.toFixed(2)})`);
       }
     }
     expect([...bad]).toEqual([]);
@@ -265,7 +311,7 @@ describe('leaf geometry', () => {
       // faces a ray straight through the leaf can meet (not the edge-on sides)
       const tris: number[][] = [];
       for (let i = 0; i < g.wood.pos.length; i += 9) if (Math.abs(g.wood.nor[i + 2]) > 0.3) tris.push([0, 1, 3, 4, 6, 7].map((k) => g.wood.pos[i + k]));
-      const topO = headTop(cls.head, cls.ow, cls.oh, -GROW), top = (x: number) => topO(cls.sOff + x) - cls.sill;
+      const topO = leafHead(cls), top = (x: number) => topO(cls.sOff + x) - cls.sill;
       for (let x = 0.03; x < g.width - 0.03; x += 0.0013) for (let y = 0.05; y < Math.min(top(x - 0.03), top(x), top(x + 0.03)) - 0.03; y += 0.37) {
         checked++;
         if (!covered(tris, x, y)) { holes++; if (where.length < 5) where.push(`${pl.classKey} x=${x.toFixed(3)} y=${y.toFixed(2)}`); }
@@ -356,8 +402,8 @@ describe('door system', () => {
     expect(fb.made.map((m) => m.name)).toEqual(['doors-wood', 'doors-iron']);
     expect(sys.object.children).toHaveLength(2);
     const leaves = doors.reduce((n, d) => n + placeLeaves(d).length, 0);
-    // one instance per seat (a two-way leaf has one hung in each, only one shown)
-    expect(fb.made[0].inst.length).toBe(doors.filter((d) => d.kind !== 'grille').reduce((n, d) => n + seatsOf(d).length, 0));
+    // one wood instance per leaf (it has one seat, whichever way it swings)
+    expect(fb.made[0].inst.length).toBe(doors.filter((d) => d.kind !== 'grille').length);
     expect(fb.made[0].inst.length - fb.made[0].hidden.size).toBe(leaves - doors.filter((d) => d.kind === 'grille').length);
     expect(sys.triangles / leaves).toBeLessThan(2500);
     // geometry is shared by class: far fewer geometries than leaves
@@ -572,69 +618,97 @@ describe('door system', () => {
     sys.setOpen('nope', true); // unknown ids are ignored
   });
 
-  it('opens every castle door away from whoever opens it, from either side (player and NPC alike)', () => {
-    // Anders, 2026-11-07: "doors should always open away from player". Each door, shut, is asked open by a
-    // character standing 1 m off the doorway on one side, then the other: the leaf (its collider, as the
-    // physics sees it) ends wide open on the far side, without touching the opener on the way.
-    const doors = playDoors([], planInterior().doors).active, ph = fakePhysics();
-    const sys = buildDoors(doors, M, ph.api, { batch: fakeBatch().factory, ajar: 0 });
+  it('opens every castle door away from whoever opens it, from either side, and never moves it out of its seat', () => {
+    // Anders, 2026-11-07: "doors should always open away from player"; 2026-11-08: a leaf at the near end of a
+    // deep passage jumped to the far end when he pressed E. Each door, shut, is asked open by a character
+    // standing 1 m off the doorway on one side, then the other: the leaf (its collider, as the physics sees
+    // it) ends wide open on the far side wherever it can swing back; it is shut, after each open and close,
+    // exactly where it was before (same matrix); and its hinge edge never leaves its seat on the way.
+    const doors = playDoors([], planInterior().doors).active, ph = fakePhysics(), fb = fakeBatch();
+    const sys = buildDoors(doors, M, ph.api, { batch: fb.factory, ajar: 0 });
     const body = new Map(doors.map((d) => [d.id, ph.bodies.find((b) => b.tag === 'door:' + d.id)!]));
+    // each leaf's wood instance: the one its door's visibility hides
+    const inst = new Map(doors.map((d) => {
+      const before = new Set(fb.made[0].hidden); sys.setVisible(d.id, false);
+      const mine = [...fb.made[0].hidden].filter((i) => !before.has(i)); sys.setVisible(d.id, true);
+      return [d.id, mine[0]];
+    }));
+    const shutPose = new Map(doors.map((d) => [d.id, [...fb.made[0].mats.get(inst.get(d.id)!)!]]));
+    const shutBody = new Map(doors.map((d) => [d.id, [...body.get(d.id)!.pose!.p, ...body.get(d.id)!.pose!.q]]));
     const bad: string[] = [];
-    let cases = 0;
-    for (const d of doors.filter((x) => x.otherHinge)) for (const side of [0, 1] as const) {
-      const sg = side === 1 ? 1 : -1, t = d.wall / 2 + 1;
+    let cases = 0, away = 0;
+    for (const d of doors) for (const side of [0, 1] as const) {
+      // a leaf that has to swing toward the opener (it cannot swing back) needs them to stand clear of its arc
+      const [pl] = placeLeaves(d), toward = !d.swingsBack && side === d.swingInto;
+      const sg = side === 1 ? 1 : -1, t = d.wall / 2 + (toward ? pl.width + 0.5 : 1);
       const by = { x: d.centre[0] + d.normal[0] * sg * t, y: d.centre[1] + 0.9, z: d.centre[2] + d.normal[1] * sg * t };
-      sys.setOpen(d.id, false, true);
       if (!sys.request(d.id, true, { pos: by })) { bad.push(`${d.id}: out of reach from ${d.spaces[side]}`); continue; }
-      for (let i = 0; i < 240 && !sys.isOpen(d.id); i++) sys.update(1 / 60, by);
+      const hinge0 = doorCoords(d, pl.pivot), n0 = doorCoords(d, body.get(d.id)!.pose!.p).n;
+      for (let i = 0; i < 240 && !sys.isOpen(d.id); i++) {
+        sys.update(1 / 60, by);
+        // the leaf's hinge edge (bottom, on its back face, where it turns back) stays in its seat
+        const m = fb.made[0].mats.get(inst.get(d.id)!)!, e = doorCoords(d, m4apply(m, [0, 0, pl.backAxis]));
+        if (Math.hypot(e.s - hinge0.s, e.n - hinge0.n) > 0.13) { bad.push(`${d.id} from ${d.spaces[side]}: hinge left its seat`); break; }
+      }
       const n = doorCoords(d, body.get(d.id)!.pose!.p).n;
       cases++;
+      const expectAway = !toward;
       if (!sys.isOpen(d.id)) bad.push(`${d.id} from ${d.spaces[side]}: stuck at ${sys.state()[d.id]}`);
-      else if (sys.seat(d.id) !== 1 - side || n * sg > -d.wall / 2) bad.push(`${d.id} from ${d.spaces[side]}: opened toward the opener (n ${n.toFixed(2)})`);
-      sys.setOpen(d.id, false, true);
+      // away: its collider has moved off toward the far side (half a leaf, at least), whichever half of the wall it is in
+      else if (expectAway && (sys.swingsInto(d.id) !== 1 - side || (n - n0) * sg > -pl.width * 0.4)) bad.push(`${d.id} from ${d.spaces[side]}: opened toward the opener (n ${n.toFixed(2)})`);
+      else if (expectAway) away++;
+      sys.request(d.id, false, { pos: by });
+      for (let i = 0; i < 300 && sys.state()[d.id] > 0; i++) sys.update(1 / 60, by);
+      if (sys.state()[d.id] !== 0) bad.push(`${d.id}: did not shut`);
+      else if (fb.made[0].mats.get(inst.get(d.id)!)!.some((v, j) => Math.abs(v - shutPose.get(d.id)![j]) > 1e-9)) bad.push(`${d.id} from ${d.spaces[side]}: shut somewhere else`);
+      // and its collider too (on main before this fix, 189 colliders came to rest up to 2 m off after opening from the far side)
+      else if ([...body.get(d.id)!.pose!.p, ...body.get(d.id)!.pose!.q].some((v, j) => Math.abs(v - shutBody.get(d.id)![j]) > 1e-9)) bad.push(`${d.id} from ${d.spaces[side]}: collider shut somewhere else`);
     }
-    expect(cases).toBeGreaterThan(300);
+    expect(cases).toBe(doors.length * 2);
     expect(bad).toEqual([]);
-    // the one-way doors (stair doors, a wall too thin or a far side too tight for a second seat) keep their way
-    const one = doors.filter((x) => !x.otherHinge);
-    expect(one.length).toBeLessThan(doors.length * 0.25);
-    for (const d of one) {
-      const t = d.wall / 2 + 1, sg = d.swingInto === 1 ? -1 : 1;
-      sys.request(d.id, true, { pos: { x: d.centre[0] + d.normal[0] * sg * t, y: d.centre[1] + 0.9, z: d.centre[2] + d.normal[1] * sg * t } });
-      expect(sys.seat(d.id)).toBe(d.swingInto);
-      sys.setOpen(d.id, false, true);
-    }
+    // every door opens away from both sides but the few that cannot swing back (planInterior: fitHinges)
+    expect(away).toBeGreaterThan(doors.length * 2 - 4);
   });
 
-  it('hangs a shut two-way leaf away from the opener only when asked to open, never by who is near', () => {
-    // nothing changes with a viewer's distance (Anders' standing rule): the leaf moves to the far face at
-    // the moment someone opens it, then swings
-    const d = single({ otherHinge: 'left' }), npc = { x: 0, y: d.centre[1] + 0.9, z: 0 };
-    const sys = buildDoors([d], M, undefined, { batch: fakeBatch().factory, ajar: 0, characters: () => [npc] });
+  it('never moves a shut leaf except to swing it: standing about, walking through and the way chosen only when opened', () => {
+    // Anders, 2026-11-08: the door jumped back to the other end when he walked through. A leaf's way is chosen
+    // at an open request and nowhere else; standing on either side, near or far, changes nothing.
+    const d = single({ swingsBack: true }), npc = { x: 0, y: d.centre[1] + 0.9, z: 0 }, fb = fakeBatch();
+    const sys = buildDoors([d], M, undefined, { batch: fb.factory, ajar: 0, characters: () => [npc] });
     const put = (t: number) => { npc.x = d.centre[0] + d.normal[0] * t; npc.z = d.centre[2] + d.normal[1] * t; };
-    expect(sys.seat('door')).toBe(1);
-    for (const t of [6, 2, -2, -6, -20]) { put(t); run(sys, 0.1, npc); expect(sys.seat('door')).toBe(1); } // standing about: no change
+    const pose = () => [...fb.made[0].mats.get(0)!], shut = pose();
+    expect(sys.swingsInto('door')).toBe(1);
+    for (const t of [6, 2, -2, -6, -20]) { put(t); run(sys, 0.1, npc); expect(pose()).toEqual(shut); }
     put(1.5);
-    sys.setOpen('door', true, false, { pos: npc }); // E from spaces[1]: it hangs away from them, then swings
-    expect(sys.seat('door')).toBe(0);
+    sys.setOpen('door', true, false, { pos: npc }); // E from spaces[1]: it swings back, away from them
+    expect(sys.swingsInto('door')).toBe(0);
+    expect(pose()).toEqual(shut); // nothing moved yet
     run(sys, 4);
     expect(sys.isOpen('door')).toBe(true);
+    const open = pose();
     put(-1.5); run(sys, 0.1);
-    expect(sys.seat('door')).toBe(0);           // open: it keeps its seat
+    expect(pose()).toEqual(open); // open: it stays as it is
     sys.setOpen('door', false, false, { pos: npc });
     run(sys, 4);
-    expect(sys.seat('door')).toBe(0);           // closing never re-hangs it
-    sys.setOpen('door', true, true, { pos: npc }); // instant open from spaces[0]: hung the other way at once
-    expect(sys.seat('door')).toBe(1);
+    expect(pose()).toEqual(shut); // shut where it was
+    sys.setOpen('door', true, true, { pos: npc }); // instant open from spaces[0]: forward
+    expect(sys.swingsInto('door')).toBe(1);
     expect(sys.state().door).toBe(1);
-    expect(sys.seat('nope')).toBeNull();
+    expect(sys.swingsInto('nope')).toBeNull();
+    // a request while it is open never changes its way
+    sys.setOpen('door', true, false, { pos: { x: d.centre[0] + d.normal[0] * 2, y: 4, z: d.centre[2] + d.normal[1] * 2 } });
+    expect(sys.swingsInto('door')).toBe(1);
     // the player's E through the interactable: from where the camera stands, or in the plane where it looks
     sys.setOpen('door', false, true);
     sys.interactables[0].use({ pos: { x: d.centre[0] + d.normal[0] * 2, y: 4, z: d.centre[2] + d.normal[1] * 2 } });
-    expect(sys.seat('door')).toBe(0);
+    expect(sys.swingsInto('door')).toBe(0);
     sys.setOpen('door', false, true);
     sys.interactables[0].use({ pos: { x: d.centre[0], y: 4, z: d.centre[2] }, dir: { x: -d.normal[0], y: 0, z: -d.normal[1] } });
-    expect(sys.seat('door')).toBe(1);
+    expect(sys.swingsInto('door')).toBe(1);
+    // in the plane looking along it: no preference, it keeps its last way
+    sys.setOpen('door', false, true);
+    sys.interactables[0].use({ pos: { x: d.centre[0], y: 4, z: d.centre[2] }, dir: { x: d.along[0], y: 0, z: d.along[1] } });
+    expect(sys.swingsInto('door')).toBe(1);
   });
 
   it('starts closed, with a seeded few ajar, the same every time', () => {
