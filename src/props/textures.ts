@@ -114,8 +114,8 @@ export function brassTex(N = 256): PropTex {
   }, 1.5);
 }
 
-/** Dressed sandstone (1 m tile): fine grain, bedding, claw-tool striations, soot and wear; pale and
- * warm so tints give grey limestone, sandstone or a dark polished marble. */
+/** Dressed stone (1 m tile), as dark as the castle's own walls (linear albedo ≈ 0.3, texgen LITH_COL) so hearths and altars sit in them: fine grain, bedding, claw-tool striations, soot and wear; warm
+ * so tints give grey limestone, sandstone or a dark polished marble. */
 export function stoneTex(N = 512): PropTex {
   const n = new TileNoise(hashSeed('prop-stone'));
   return bake(N, (u, v) => {
@@ -126,7 +126,7 @@ export function stoneTex(N = 512): PropTex {
     const grain = n.n(u, v, 256) * 0.5 + 0.5, mottle = n.fbm(u, v, 4, 4) * 0.5 + 0.5;
     const claw = Math.sin((u * 3 + v * 2) * 160 + n.n(u, v, 32) * 4) * 0.5 + 0.5; // diagonal tooling
     const k = joint ? 0.5 + 0.1 * grain : (0.6 + 0.1 * mottle + 0.1 * block) * (0.9 + 0.1 * grain) * (0.97 + 0.03 * claw);
-    return { c: [k * 0.95, k * 0.9, k * 0.82], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
+    return { c: [k * 0.48, k * 0.46, k * 0.42], h: joint ? 0.1 : 0.55 + grain * 0.15 + claw * 0.1 + mottle * 0.1, r: joint ? 0.95 : 0.8 + 0.1 * grain };
   }, 2.2);
 }
 
