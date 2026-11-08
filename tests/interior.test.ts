@@ -358,12 +358,16 @@ describe('interior camera bookmarks', () => {
   const noSqueeze: Edit = (Q) => { Q.caves!.passages = Q.caves!.passages.filter((p) => p.id !== 'cave-squeeze'); };
   const noDrop: Edit = (Q) => { Q.caves!.passages = Q.caves!.passages.filter((p) => !p.steps); };
   const noCavern: Edit = (Q) => { Q.caves!.chambers = Q.caves!.chambers.filter((k) => k.id !== 'cave-cavern'); };
+  const noFinds: Edit = (Q) => { Q.caves!.features = []; };
+  const noPool: Edit = (Q) => { for (const k of Q.caves!.chambers) delete k.pool; };
   const noCellar: Edit = (Q) => { Q.rooms = Q.rooms.filter((r) => r.id !== 'N-c1'); };
   it.each([
     ['a tunnel that never goes deep', flatTunnel, ['tunnel']],
     ['no squeeze passage', noSqueeze, ['cave-squeeze']],
-    ['no stepped drop (the cavern view is placed from it)', noDrop, ['cave-drop', 'caves']],
-    ['no cavern chamber', noCavern, ['caves']],
+    ['no stepped drop (the cavern view is placed from it)', noDrop, ['cave-drop', 'caves', 'cave-steps']],
+    ['no cavern chamber', noCavern, ['caves', 'cave-pool', 'cave-wall']],
+    ['no finds', noFinds, ['cave-ossuary', 'cave-cache']],
+    ['a cavern without its pool', noPool, ['cave-pool']],
     ['no cellar room at the cave breach', noCellar, ['cellar', 'cave-entrance']],
   ] as [string, Edit, string[]][])('leaves out only the views it cannot place: %s', (_what, edit, gone) => {
     const Q = clone(P);
