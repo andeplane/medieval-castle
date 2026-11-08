@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-11-08: with furniture, every room's fires are lit from the first frame, not when its furniture streams in (branch `claude/project-thread-ns4g2v-lights`)
+
+Anders: "light in next room off. then i walk a bit, then on".
+
+**Cause: with `?furniture=1` a room's fires came with its furniture.** Furniture streams in by room (`props/streamer.ts`): a room is wanted once the room graph draws it, furnished in a worker and added a few rooms a frame; its fires went into the fire table only then (`roomMeshes.ts` → `light/roomFires.ts`), and out again 5 s after it stopped being wanted. So a room seen through a doorway was drawn with no firelight and no flames until its furniture had loaded, and it went dark again after you left it for a while. Without furniture nothing depended on distance (the wall torches are all set at load, since #71).
+
+Fix: fires no longer stream.
+- `props/roomFurniture.ts roomFireLists`: every room's fires (emitters and flames) by dressing the room without building its triangles (`place.ts placedFires`, the same as `mergePlaced` gives). It runs in a furnish worker at load (the `fires` job, ~0.9 s for 221 rooms in node, alongside the prop textures), and main awaits it before the first frame.
+- `render/interiorFire.ts furnitureFires` turns the lists into fire sources owned by their room; `light/roomLight.ts lightCastle` builds the fire table and the linked flames once, for both modes (main.ts used to do this inline). The streamer's sink no longer touches fires; `light/roomFires.ts` is gone.
+- Side effect: windows of furnished rooms glow at night from the start, not once their furniture has loaded.
+- **Assumption / known look:** a room's flame (and its light) now shows from the first frame even if the candlestick or hearth under it has not streamed in yet. On a jump to a far bookmark that can be a flame in mid-air for the few frames the furniture takes. Not fixed here (the furniture streaming is not this change's area); prefetching rooms one step beyond the drawn set would hide it.
+
+Checked the rest of the list for anything distance-dependent: the flame sprites are one instanced mesh with every flame, not culled or faded by distance (`light/three.ts`); there are no outdoor torches; `LightRig` and `light/budget.ts` (the nearest-8 pool with its 0.35 s fade) are only used by `props.html` and `lights.html`, not the game; the 12-fire cap keeps the brightest 12 of a room (the busiest furnished room has 8), not the nearest; a room seen through an open door uses its own row, which does not depend on the camera.
+
+Test (`world-views.test.ts`, replacing the old one which set the table once and never ran the streamer): in both modes (wall torches; furniture, with the furniture streamer running as main runs it, the graph's drawn rooms wanted, loads finishing between steps and rooms unloaded behind you), stepping the camera from 15 m out through every doorway, doors shut and then open (> 4000 poses): every room the graph draws has all its fires at the same candela and the same firelight on its floor, and the fire table and the flames are byte-identical to the first frame. With the old wiring put back, 481,417 of 8.8 M drawn-room checks failed (e.g. `gate-0: 0 of 2 fires lit from -15.35 m off N0-0>N0-1`). `props-stream.test.ts`: the fire lists equal the furnished rooms' emitters and flames, through the worker too. `roomLight.test.ts`: `lightCastle` by owner and position.
+
 ## 2026-11-08: the cavern's fire burns with furniture on; the caves a little less black (branch `claude/project-thread-ns4g2v-caves4`)
 
 From the coordinator's WebGPU capture of #78 on Anders' Mac (`castle-plan/caves3/webgpu-caves-after-78.jpg`): in the `caves` bookmark the smugglers' fire showed only as logs. It had no flame and no light, and the cavern was black but for the fungi. The hall's candle lit its wall, so that was furniture mode (`?furniture=1`).

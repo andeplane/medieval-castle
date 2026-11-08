@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { floorAlong, torchSpot, wallTorches, besideWayDown } from '../src/render/interiorFire';
+import { floorAlong, torchSpot, wallTorches, besideWayDown, furnitureFires } from '../src/render/interiorFire';
 import { planInterior } from '../src/castle/interior/plan';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -12,6 +12,16 @@ const door = (a: string, x: number, z: number): DoorSpec => ({
 } as unknown as DoorSpec);
 
 describe('interior fire sources', () => {
+  test('furniture fires: every listed room\'s emitters owned by that room, flames and the groups with fire', () => {
+    const e = (x: number) => ({ kind: 'candle' as const, position: [x, 1, 0] as [number, number, number], colour: [1, 1, 1] as [number, number, number], intensity: 1, flicker: 0 });
+    const f = furnitureFires([{ room: 'a', emitters: [e(1), e(2)], flames: [{ kind: 'candle', base: [1, 1, 0], height: 0.05 }] }, { room: 'x', emitters: [e(3)], flames: [] }], (id) => (id === 'a' ? 'g1' : undefined));
+    expect(f.emitters.map((x) => x.position[0])).toEqual([1, 2, 3]);
+    expect(f.owners).toEqual([{ room: 'a' }, { room: 'a' }, { room: 'x' }]);
+    expect(f.flames).toHaveLength(1);
+    expect(f.group).toEqual(['g1', 'g1']);
+    expect(f.holders).toEqual([]);
+  });
+
   test('a torch goes on the long wall away from the door, facing into the room', () => {
     const r = room('H', 'hall');
     const plan: InteriorPlan = { rooms: [r], doors: [door('H', 5, 0)], stairs: [] };

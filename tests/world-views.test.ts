@@ -17,9 +17,12 @@ import { PAVE_Y } from '../src/castle/paving';
 import { interiorViews } from '../src/camera/interiorViews';
 import { rayIndex, soupTris } from './helpers/rays';
 import { caveWalk, CAVE_ZONE } from '../src/castle/interior/caves';
-import { wallTorches } from '../src/render/interiorFire';
-import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
-import type { LightEmitter } from '../src/light/types';
+import { wallTorches, furnitureFires } from '../src/render/interiorFire';
+import { lightCastle, firesByRoom, fireAt, MAX_FIRES } from '../src/light/roomLight';
+import { caveFires } from '../src/castle/interior/caveGeom';
+import { roomFireLists } from '../src/props/roomFurniture';
+import { createFurnitureStreamer } from '../src/props/streamer';
+import { inlineJobs } from '../src/props/furnishWorker';
 import { worldViews, OUTDOOR, on, bvhOf, type V3 } from './helpers/worldViews';
 
 describe('every opening in the castle, as the player sees it', () => {
@@ -226,46 +229,82 @@ describe('every opening in the castle, as the player sees it', () => {
   }, 120_000);
 
   // Anders, 2026-11-08: looking down into a room through an open door it was dark; a few steps closer
-  // its torch suddenly lit. The rig lit the 8 fires nearest the camera, each only within 1.6 × its range
-  // (a wall torch: 11 m), so a drawn room further off had no firelight at all. Now each room's fires are
-  // its row of the fire table (light/roomLight.ts), set as main.ts sets it: walking up to and through
-  // every doorway, from 15 m out, every room the graph draws has all its torches, at the same
-  // candela, and the firelight its walls get is the same at every pose.
-  it('lights every drawn room with all its fires, the same from every pose', () => {
+  // its torch suddenly lit ("light in next room off. then i walk a bit, then on"). Twice over:
+  // - the old rig lit the 8 fires nearest the camera, each only within 1.6 × its range (#71 replaced it
+  //   with a fire table: one row per room);
+  // - with furniture (?furniture=1) a room's fires came with its furniture, which streams in by room once
+  //   the room graph draws it, so a room seen through a doorway was drawn dark until its furniture loaded
+  //   (and dark again after it was unloaded). Now every room's fires are listed up front without building
+  //   the furniture (props/roomFurniture.ts roomFireLists) and set once (light/roomLight.ts lightCastle).
+  // Here, as main.ts builds them, in both modes, with the furniture streamer running as main runs it (the
+  // rooms the graph draws wanted, loads finishing between steps): walking from 15 m out up to and through
+  // every doorway, doors shut and open, every room the graph draws has all its fires at the same candela,
+  // the firelight on its floor is the same, and the flames are the same, at every step from the first frame.
+  it('lights every drawn room with all its fires and flames, the same from every pose, with furniture or without', async () => {
     const vis = makeVis(), index = baked().roomIndex;
     const groupOf = new Map<string, string>();
     for (const g of inner.groups) for (const id of g.rooms) groupOf.set(id, g.key);
-    const fire = wallTorches(P, (id) => groupOf.get(id));
-    const table = new FireTable(1024), byRoom = new Map<string, LightEmitter[]>();
-    fire.holders.forEach((h, i) => { if (!byRoom.has(h.room)) byRoom.set(h.room, []); byRoom.get(h.room)!.push(fire.emitters[i]); });
-    for (const [id, es] of byRoom) table.set(index.get(id)!, roomFires(P.rooms.find((r) => r.id === id)!, es)); // as main.ts
-    // the firelight on a room's floor at its centre, as the shader sums it (flicker held: motion 0)
-    table.update(0, 0);
+    const roomBox = (id: string) => { const row = index.get(id), r = P.rooms.find((x) => x.id === id); return row === undefined || !r ? undefined : { row, box: r }; };
     const centre = (id: string): V3 => { const r = P.rooms.find((x) => x.id === id)!; return [r.poly.reduce((a, p) => a + p[0], 0) / r.poly.length, r.y0 + 0.01, r.poly.reduce((a, p) => a + p[1], 0) / r.poly.length]; };
-    const lightOf = (id: string) => { const row = index.get(id)!; return fireAt(table.fires(row).map((f, k) => ({ ...f, candela: f.candela * table.flick[row * MAX_FIRES + k] })), centre(id), [0, 1, 0]); };
-    const ref = new Map([...byRoom.keys()].map((id) => [id, lightOf(id)]));
+    const caves = caveFires(P.caves!, 'caves');
+    const lists = roomFireLists(P);
+    const modes = {
+      'wall torches': () => { const t = wallTorches(P, (id) => groupOf.get(id)); t.emitters.push(...caves.emitters); t.flames.push(...caves.flames); return { ...t, owners: t.holders }; },
+      furniture: () => { const f = furnitureFires(lists, (id) => groupOf.get(id)); f.emitters.push(...caves.emitters); f.flames.push(...caves.flames); return f; },
+    };
     const faults = new Map<string, string>();
     let poses = 0, checked = 0;
-    for (const d of P.doors) {
-      const reach = d.wall / 2 + 15;
-      for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
-        const q = on(d, 0, t);
-        cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
-        vis.update(); poses++;
-        for (const [id, es] of byRoom) {
-          if (!vis.isRoomVisible(id)) continue;
-          checked++;
-          const row = index.get(id)!;
-          if (table.fires(row).length !== es.length) faults.set(id, `${id}: ${table.fires(row).length} of ${es.length} fires lit from ${t.toFixed(2)} m off ${d.id}`);
-          else if (Math.abs(lightOf(id) - ref.get(id)!) > 1e-9) faults.set(id, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} from ${t.toFixed(2)} m off ${d.id}`);
+    for (const [mode, sources] of Object.entries(modes)) {
+      const src = sources();
+      const byRoom = new Map<string, number>();
+      for (const [id, es] of firesByRoom(P.rooms, src.emitters, src.owners)) byRoom.set(id, Math.min(es.length, MAX_FIRES));
+      // as main.ts, before the first frame
+      const { table, flames } = lightCastle(P.rooms, src, roomBox, 1024);
+      table.update(0, 0); // flicker held (motion 0)
+      const lightOf = (id: string) => { const row = index.get(id)!; return fireAt(table.fires(row).map((f, k) => ({ ...f, candela: f.candela * table.flick[row * MAX_FIRES + k] })), centre(id), [0, 1, 0]); };
+      const ref = new Map([...byRoom.keys()].map((id) => [id, lightOf(id)]));
+      const data0 = table.data.slice(), flames0 = JSON.stringify(flames);
+      // the furniture streamer as main.ts drives it: the graph's drawn rooms wanted, a few rooms in per frame
+      const stream = mode === 'furniture' ? createFurnitureStreamer({
+        jobs: inlineJobs((id) => ({ room: id, key: groupOf.get(id) ?? '', role: 'empty', props: 0, triangles: 0, bins: {}, boxes: new Float32Array(0), ...(lists.find((l) => l.room === id) ?? { emitters: [], flames: [] }) })),
+        sink: { add: (r) => r.room, remove: () => {} }, now: () => poses * 16,
+      }, { unloadAfter: 500 }) : null;
+      for (const open of [false, true]) {
+        for (const d of P.doors) vis.setDoorOpen(d.id, open);
+        for (const d of P.doors) {
+          const reach = d.wall / 2 + 15;
+          for (let t = -reach; t <= reach + 1e-9; t += 0.25) {
+            const q = on(d, 0, t);
+            cam.position = { x: q[0], y: d.centre[1] + 1.6, z: q[1] };
+            vis.update(); poses++;
+            if (stream) {
+              stream.setWanted(new Set([...vis.state.from, ...vis.state.drawn].filter((id) => index.has(id))));
+              stream.update();
+              await Promise.resolve(); // the jobs started this step finish before the next
+            }
+            const where = `from ${t.toFixed(2)} m off ${d.id}${open ? ' (doors open)' : ''} [${mode}]`;
+            for (const [id, n] of byRoom) {
+              if (!vis.isRoomVisible(id)) continue;
+              checked++;
+              const row = index.get(id)!;
+              if (table.fires(row).length !== n) faults.set(id + mode, `${id}: ${table.fires(row).length} of ${n} fires lit ${where}`);
+              else if (Math.abs(lightOf(id) - ref.get(id)!) > 1e-9) faults.set(id + mode, `${id}: firelight ${lightOf(id).toFixed(3)} ≠ ${ref.get(id)!.toFixed(3)} ${where}`);
+            }
+          }
         }
       }
+      // nothing in the table or the flames changed while walking (and streaming) about
+      expect(table.data, mode).toEqual(data0);
+      expect(JSON.stringify(flames), mode).toBe(flames0);
+      expect(flames.length, mode).toBe(src.flames.length);
+      if (stream) expect(stream.stats().added, 'the furniture did stream in and out on the walk').toBeGreaterThan(50);
+      if (stream) expect(stream.stats().removed).toBeGreaterThan(10);
+      expect(byRoom.size, mode).toBeGreaterThan(mode === 'furniture' ? 150 : 10);
     }
-    expect(fire.emitters.length).toBeGreaterThan(10);
-    expect(poses).toBeGreaterThan(1000);
-    expect(checked).toBeGreaterThan(5000);
+    expect(poses).toBeGreaterThan(4000);
+    expect(checked).toBeGreaterThan(40000);
     expect([...faults.values()]).toEqual([]);
-  }, 120_000);
+  }, 240_000);
 
   // The water's reflection renders the whole scene again from below (1.1 M of 3.2 M triangles at the hall on
   // Anders' Mac). It is skipped when no line of sight can reach the water (world/waterView.ts). From poses all

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FireTable, toFire, fireAt, firesByRoom, roomSamples, roomSurface, fireStats, roomFires, FIRE_PEAK, FIRE_MEAN, MAX_FIRES, FIRE_W, FIRE_TEXELS, NEAR } from '../../src/light/roomLight';
+import { FireTable, lightCastle, toFire, fireAt, firesByRoom, roomSamples, roomSurface, fireStats, roomFires, FIRE_PEAK, FIRE_MEAN, MAX_FIRES, FIRE_W, FIRE_TEXELS, NEAR } from '../../src/light/roomLight';
 import { PROFILES, flicker, flickerAmount, seedOf } from '../../src/light/flicker';
 import { linkFlames, flameBrightness } from '../../src/light/flames';
 import type { LightEmitter, V3 } from '../../src/light/types';
@@ -85,6 +85,24 @@ describe('fires by room', () => {
     expect(m.get('down')).toEqual([torch, crate]);
     expect(m.get('up')).toEqual([above]);
     expect(firesByRoom(rooms, [crate]).get('down')).toEqual([crate]);
+  });
+
+  it('lights the whole castle at once: every room row by its owner, rooms without a row skipped, every flame linked', () => {
+    const rooms = [
+      { id: 'up', poly: [[0, 0], [4, 0], [4, 4], [0, 4]] as [number, number][], y0: 3, y1: 6 },
+      { id: 'down', poly: [[0, 0], [4, 0], [4, 4], [0, 4]] as [number, number][], y0: 0, y1: 3 },
+      { id: 'norow', poly: [[10, 0], [14, 0], [14, 4], [10, 4]] as [number, number][], y0: 0, y1: 3 },
+    ];
+    const e = (x: number, y: number, z: number): LightEmitter => ({ kind: 'torch', position: [x, y, z], colour: [1, 1, 1], intensity: 1, flicker: 0.5 });
+    // a furniture fire owned by 'down' though it stands in 'up'; one by position; one in a room with no row
+    const emitters = [e(2, 4, 2), e(2, 4.5, 3), e(12, 1, 2)];
+    const rows: Record<string, number> = { up: 0, down: 1 };
+    const { table, flames } = lightCastle(rooms, { emitters, flames: [{ kind: 'torch', base: [2, 4, 2], height: 0.3 }], owners: [{ room: 'down' }] }, (id) => (id in rows ? { row: rows[id], box: rooms.find((r) => r.id === id)! } : undefined), 4);
+    expect(table.fires(1).map((f) => f.position)).toEqual([[2, 4, 2]]);
+    expect(table.fires(0).map((f) => f.position)).toEqual([[2, 4.5, 3]]);
+    expect(table.stats().fires).toBe(2);
+    expect(flames).toHaveLength(1);
+    expect(flames[0].seed).toBe(seedOf([2, 4, 2]));
   });
 });
 
