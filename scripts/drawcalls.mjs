@@ -36,7 +36,10 @@ await page.evaluate(() => {
       while (o.parent && o.parent.parent) { o = o.parent; }
       top = o.name || o.type;
       const g = top.startsWith('interior:') ? 'interior' : top;
-      window.__calls.push([pass, g, ro.object.name || ro.object.type, ro.object.castShadow, top]);
+      const t0 = renderer.info.render.triangles;
+      const res = draw(ro, info);
+      window.__calls.push([pass, g, ro.object.name || ro.object.type, ro.object.castShadow, top, renderer.info.render.triangles - t0]);
+      return res;
     }
     return draw(ro, info);
   };
@@ -65,6 +68,11 @@ for (const p of POSES) {
   console.log(`\n== ${p}: drawCalls ${r.st.drawCalls} (hooked ${r.c.length}), triangles ${(r.st.frameTriangles / 1e6).toFixed(2)} M, groups shown ${r.st.light?.groupsShown}/${r.st.light?.groups}, room ${r.st.light?.room}, camera ${r.st.camera.mode} (${r.st.camera.x}, ${r.st.camera.y}, ${r.st.camera.z})`);
   console.log('  by pass:', by((x) => x[0]).map(([k, v]) => `${k} ${v}`).join(', '));
   console.log('  by pass+group:', by((x) => `${x[0]}|${x[1]}`).slice(0, 25).map(([k, v]) => `${k} ${v}`).join(', '));
+  const tby = (f) => { const m = {}; for (const x of r.c) { const k = f(x); m[k] = (m[k] ?? 0) + (x[5] ?? 0); } return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+  console.log('  tris by pass:', tby((x) => x[0]).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by pass+group:', tby((x) => `${x[0]}|${x[1]}`).slice(0, 40).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by group (all passes):', tby((x) => x[1]).slice(0, 30).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
+  console.log('  tris by mesh (all passes):', tby((x) => `${x[1]}/${x[2]}`).slice(0, 40).map(([k, v]) => `${k} ${(v / 1e3).toFixed(0)}k`).join(', '));
   if (process.env.DETAIL) console.log('  interior groups (scene+shadow):', by((x) => `${x[0]}|${x[4]}`).filter(([k]) => k.includes('interior:')).slice(0, 40).map(([k, v]) => `${k} ${v}`).join(', '));
 }
 await browser.close();
