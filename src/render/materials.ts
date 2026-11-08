@@ -502,8 +502,9 @@ function rockBump(h: Node<'float'>) {
 }
 
 /**
- * The caves' materials. Rock: no masonry; the macro noise and the detail grain projected on the three world
- * planes (triplanar) and 3D noise in world space, as bedded limestone: colour bands by bed (grey, buff, dark
+ * The caves' materials. Rock: no masonry; 3D noise of the world position (seamless on the curved rock, where
+ * triplanar projections met in hard patches) and only the finest grit and the streaks projected, as bedded
+ * limestone: colour bands by bed (grey, buff, dark
  * shale, rust), joints and fine cracks (worley cell edges) and bedding lines cut into the bump, grit at arm's
  * length, darker damp patches, pale flowstone streaks. Its uv carries what the plan baked (caveGeom.ts): u how
  * open the rock is (recesses darker), v the fungi's light on it. Round the pool: wet, dark stone under the
@@ -521,9 +522,9 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   const n01 = (s: number, o: number) => mx_noise_float(p.mul(s).add(o)).mul(0.8).add(0.5).clamp(0, 1);
   const oct = (s: number, o: number) => n01(s, o).mul(0.65).add(n01(s * 2.1, o + 7.3).mul(0.35));
   const big = vec3(oct(1 / 9, 0), oct(1 / 9, 31), oct(1 / 9, 57)), mid = vec3(oct(1 / 2.3, 13), oct(1 / 2.3, 71), n01(1 / 2.3, 97));
-  const grain = tri(detail, 1.1).r;
+  const grain = oct(1.1, 23), det6 = n01(5.3, 41); // (noise too: the detail texture's projections seamed the same way)
   const near = float(1).sub(smoothstep(2, 7, dist)), close = float(1).sub(smoothstep(1, 4, dist));
-  const det6 = tri(detail, 5.3), det17 = tri(detail, 17);
+  const det17 = tri(detail, 17);
   const rock = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
   rock.name = 'cave-rock';
 
@@ -556,7 +557,7 @@ function caveMaterials(macro: THREE.Texture, detail: THREE.Texture) {
   col = mix(col, vec3(0.5, 0.48, 0.43), flow.mul(0.55));
   col = mix(col, col.mul(vec3(1.2, 0.9, 0.65)), smoothstep(0.72, 0.88, run.b).mul(wall).mul(0.5));
   // grit: three octaves, the finer ones only near
-  col = col.mul(float(0.82).add(grain.mul(0.36))).mul(float(1).add(det6.g.sub(0.5).mul(0.35).mul(near))).mul(float(1).add(det17.g.sub(0.5).mul(0.25).mul(close)));
+  col = col.mul(float(0.82).add(grain.mul(0.36))).mul(float(1).add(det6.sub(0.5).mul(0.3).mul(near))).mul(float(1).add(det17.g.sub(0.5).mul(0.25).mul(close)));
   // damp patches: darker and glossier
   const damp = smoothstep(0.52, 0.72, mid.b.mul(0.6).add(big.b.mul(0.4)));
   col = col.mul(float(1).sub(damp.mul(0.2)));
