@@ -4,7 +4,8 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, characterOf, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, NT, LAYOUTS, DECOR, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, FIRESIDE, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { layoutTokens, roleSimilarity, emptyQuarters } from './helpers/variety';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
@@ -87,6 +88,9 @@ describe('dressing helpers', () => {
     const make = variantPool((k, s) => { built++; return makeProp(k, s); });
     const a = make('barrel', 3), b = make('barrel', 3 + VARIANTS), c = make('barrel', 4);
     expect(a).toBe(b); expect(c).not.toBe(a); expect(built).toBe(2);
+    // a toned kind keeps two shapes in each palette: seeds ≡ palette (mod NT)
+    const d = make('bed', 3), e = make('bed', 3 + NT), f = make('bed', 3 + 2 * NT);
+    expect(e).not.toBe(d); expect(f).toBe(d); expect(tone(e.seed)).toBe(tone(d.seed));
   });
   it('roles follow room kind, floor and size', () => {
     const r = mulberry32(1);
@@ -319,10 +323,10 @@ describe('dressing the castle plan', () => {
       }
     }
   });
-  it('furnishes the family rooms in period: carpets, pictures, candles and lamps', () => {
+  it('furnishes the family rooms: something soft underfoot, something on the walls, candles', () => {
     const fam = D.rooms.filter((d) => FAMILY.includes(d.role));
     const has = (k: string[]) => fam.filter((d) => d.placed.some((p) => k.includes(p.prop.kind.name))).length / fam.length;
-    expect(has(['portrait', 'overmantel-mirror', 'stag-head', 'weapon-trophy'])).toBeGreaterThan(0.8);
+    expect(has(['portrait', 'overmantel-mirror', 'stag-head', 'weapon-trophy', 'tapestry', 'hanging', 'shield', 'peg-rail'])).toBeGreaterThan(0.9); // pictures and tapestries in the best rooms, hangings, shields or pegs in the plainer ones
     expect(has(['candle-sconce', 'oil-lamp', 'candelabrum', 'candlestick'])).toBeGreaterThan(0.9);
     expect(has(['carpet', 'rug', 'skin'])).toBeGreaterThan(0.8);
     for (const d of fam) for (const p of d.placed) if (flat(p.prop)) expect(p.prop.kind.blocksNav).toBe(false);
@@ -433,6 +437,52 @@ describe('dressing the castle plan', () => {
     expect(low).toEqual([]);
     expect(D.rooms.find((d) => d.role === 'chapel')!.placed.length).toBeGreaterThanOrEqual(MIN_PROPS);
   });
+
+  // ---------------------------------------------------------------- variety (castle-plan/fix-variety)
+  it('deals every room a character: the palettes in turn within a role, the tier by its place, every layout used', () => {
+    const T = roleTable(P), rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    const by = new Map<string, ReturnType<typeof characterOf>[]>();
+    for (const d of D.rooms) by.set(d.role, [...(by.get(d.role) ?? []), characterOf(rooms.get(d.room)!, P, T.get(d.room)!)]);
+    for (const [role, cs] of by) {
+      if (cs.length >= NT) expect(new Set(cs.map((c) => c.palette)).size, role).toBe(NT);
+      const n = LAYOUTS[role as keyof typeof LAYOUTS] ?? 1;
+      for (const c of cs) { expect(c.layout).toBeLessThan(n); expect(c.palette).toBeLessThan(NT); }
+      if (cs.length >= 2 * n) expect(new Set(cs.map((c) => c.layout)).size, role).toBe(n);
+    }
+    for (const role of ['lord', 'lady', 'hall', 'chapel', 'treasury']) expect(by.get(role)!.every((c) => c.tier === 2), role).toBe(true);
+    for (const role of ['guard', 'store', 'cellar', 'dungeon', 'kitchen', 'garderobe']) expect(by.get(role)!.every((c) => c.tier === 0), role).toBe(true);
+    // the household's rooms come in all three tiers
+    for (const role of ['bedchamber', 'solar', 'study']) expect(new Set(by.get(role)!.map((c) => c.tier)).size, role).toBe(3);
+    // the room's palette is its textiles' colour
+    for (const d of D.rooms) for (const p of d.placed.filter((x) => TONED.has(x.prop.kind.name))) expect(tone(p.prop.seed), d.room).toBe(characterOf(rooms.get(d.room)!, P, T.get(d.room)!).palette);
+  });
+  it('keeps the finery for the best rooms: no curtained bed, carpet, tapestry or sofa where the servants live', () => {
+    const T = roleTable(P), bad: string[] = [];
+    for (const d of D.rooms) {
+      if (characterOf(P.rooms.find((r) => r.id === d.room)!, P, T.get(d.room)!).tier !== 0) continue;
+      for (const p of d.placed) if (['four-poster', 'carpet', 'tapestry', 'sofa', 'candelabrum', 'oil-lamp'].includes(p.prop.kind.name)) bad.push(`${d.room} ${d.role} ${p.prop.kind.name}`);
+    }
+    expect(bad).toEqual([]);
+  });
+  it('furnishes no two rooms of one role alike: what stands where, and in what colours', () => {
+    // pairwise weighted Jaccard over kind@anchor tokens (corner, wall, window wall, middle, on a top,
+    // hung) and the textiles' palette. Before this pass (main f98c864): bedchamber mean 0.32 / most alike
+    // pair 0.71, solar 0.31 / 0.67, study 0.35 / 0.71, library 0.44 / 0.90, sewing 0.39 / 0.89, guard 0.54 / 0.87.
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    const toks = D.rooms.filter((d) => !UNFLOORED.includes(d.role)).map((d) => ({ role: d.role, room: d.room, tokens: layoutTokens(d, rooms.get(d.room)!, W, tone, TONED) }));
+    const bad: string[] = [];
+    for (const s of roleSimilarity(toks)) {
+      const big = ['bedchamber', 'solar', 'study'].includes(s.role);
+      if (s.n >= 5 && (s.mean > (big ? 0.3 : 0.45) || s.max > (big ? 0.7 : 0.8))) bad.push(`${s.role} n=${s.n} mean ${s.mean.toFixed(2)} max ${s.max.toFixed(2)} (${s.pair})`);
+    }
+    expect(bad).toEqual([]);
+  });
+  it('leaves no quarter of a room\'s floor empty, and dresses the walls of nearly every room', () => {
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    const floored = D.rooms.filter((d) => !UNFLOORED.includes(d.role));
+    expect(floored.map((d) => ({ room: d.room, empty: emptyQuarters(d, rooms.get(d.room)!, P) })).filter((x) => x.empty.length)).toEqual([]);
+    expect(floored.filter((d) => d.placed.some((p) => DECOR.has(p.prop.kind.name))).length).toBeGreaterThan(floored.length * 0.95);
+  });
   it('builds each role round its focal piece', () => {
     const focal: Record<string, string[]> = { kitchen: ['spit-hearth'], buttery: ['cask-rack'], 'wine-cellar': ['cask-rack'], brewhouse: ['mash-tun'], bakehouse: ['bread-oven'], laundry: ['wash-tub'], armoury: ['weapon-rack'],
       dungeon: ['shackles'], 'well-room': ['well'], lord: ['four-poster'], lady: ['four-poster'], garderobe: ['privy'], nursery: ['cradle'], library: ['bookcase', 'writing-desk'], steward: ['counting-table'],
@@ -440,5 +490,33 @@ describe('dressing the castle plan', () => {
     const miss: string[] = [];
     for (const d of D.rooms) { const f = focal[d.role]; if (f && !d.placed.some((p) => f.includes(p.prop.kind.name))) miss.push(`${d.room} ${d.role}`); }
     expect(miss).toEqual([]);
+  });
+  // the skin rug (period.ts skin): never layered with another textile (fur and pile would cross in depth),
+  // never run under the hearth, and nothing but a fireside seat stands on it
+  it('a skin never lies on or under another floor textile', () => {
+    let skins = 0;
+    const bad: string[] = [];
+    for (const rd of D.rooms) for (const p of rd.placed) if (p.prop.kind.name === 'skin') {
+      skins++;
+      for (const q of rd.placed) if (q !== p && flat(q.prop) && convexOverlap(footRect(p), footRect(q))) bad.push(`${rd.room}: skin on ${q.prop.kind.name}`);
+    }
+    expect(skins).toBeGreaterThan(5);
+    expect(bad).toEqual([]);
+  });
+
+  it('a skin lies on its room floor, clear of the hearth and of everything standing but the fireside seats', () => {
+    const rooms = new Map(P.rooms.map((r) => [r.id, r]));
+    const bad: string[] = [];
+    let seats = 0;
+    for (const rd of D.rooms) for (const p of rd.placed) if (p.prop.kind.name === 'skin') {
+      expect(p.at[1]).toBe(rooms.get(rd.room)!.y0);
+      for (const q of rd.placed) {
+        if (q === p || flat(q.prop) || (q.prop.kind.placement !== 'floor' && !q.prop.kind.blocksNav)) continue;
+        if (!convexOverlap(footRect(p), footRect(q), -0.01)) continue;
+        if (FIRESIDE.has(q.prop.kind.name)) seats++; else bad.push(`${rd.room}: skin under ${q.prop.kind.name}`);
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(seats).toBeGreaterThan(0); // armchairs drawn up to the fire may stand on its edge
   });
 });

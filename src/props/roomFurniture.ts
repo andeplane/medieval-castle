@@ -11,7 +11,7 @@ import type { Flame, LightEmitter } from '../light/types';
 import { tagTriangles } from '../render/interiorMath';
 import { PROP_MATS, type PropMat } from './geom';
 import { dressRoom, groupKey, variantPool, type Role } from './dress';
-import { mergePlaced, yawXZ, type Placed } from './place';
+import { mergePlaced, placedFires, yawXZ, type Placed } from './place';
 import type { Prop } from './kit';
 
 /** A bounding sphere: centre xyz, radius. */
@@ -107,6 +107,26 @@ export function createFurnisher(plan: InteriorPlan, o: FurnisherOptions): (room:
     }
     return { room: id, key: d.key, role: d.role, props: d.placed.length, triangles: mesh.triangles, bins, boxes: colliderBoxes(d.placed), emitters, flames: mesh.flames };
   };
+}
+
+/** A room's fires: its furniture's emitters and flames, as its RoomFurniture will carry them. */
+export interface RoomFireList { room: SpaceId; emitters: LightEmitter[]; flames: Flame[] }
+
+/**
+ * Every room's fires without building its furniture (dress only, no triangles): the light system lights
+ * every room from the first frame, so a room's fires never wait for its furniture to stream in.
+ * Rooms with no fire are left out. Same dressing as createFurnisher (same plan, seed and windows).
+ */
+export function roomFireLists(plan: InteriorPlan, o: Omit<FurnisherOptions, 'maxRooms' | 'maxWall'> = {}, rooms: readonly SpaceId[] = plan.rooms.map((r) => r.id)): RoomFireList[] {
+  const make = o.make ?? variantPool(), byId = new Map(plan.rooms.map((r) => [r.id, r]));
+  const out: RoomFireList[] = [];
+  for (const id of rooms) {
+    const r = byId.get(id);
+    if (!r) throw new Error(`no room ${id}`);
+    const f = placedFires(dressRoom(r, plan, { seed: o.seed, make, windows: o.windows }).placed);
+    if (f.emitters.length || f.flames.length) out.push({ room: id, ...f });
+  }
+  return out;
 }
 
 /** The buffers a room's message can hand over without copying. */

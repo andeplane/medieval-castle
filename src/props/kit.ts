@@ -5,7 +5,7 @@
 import { PropMesh, translate, rotX, rotY, rotZ, compose, type RGB, type V3 } from './geom';
 import { mulberry32, hashSeed, range, pick, type Rng } from '../core/rng';
 import { WOOD, CLOTH, IRON, FLAME, jitterTint, woodTint, boxCollider, hull, none, planks, leg, flame, jug, bowl, book, candle, v3dir, type PropKind, type PropMeta, type Emitter } from './parts';
-import { PERIOD } from './period';
+import { PERIOD, PALETTES, tone } from './period';
 import { MEDIEVAL } from './medieval';
 export { WOOD, CLOTH };
 export type { Placement, Emitter, Collider, PropMeta, PropKind } from './parts';
@@ -130,9 +130,10 @@ function bedBody(m: PropMesh, r: Rng, L: number, W: number, cover: RGB) {
 
 export const bed: PropKind = {
   name: 'bed', placement: 'floor', blocksNav: true,
-  build(m, r) {
+  build(m, r, v) {
     const L = range(r, 1.9, 2.1), W = range(r, 0.9, 1.4);
-    bedBody(m, r, L, W, pick(r, [CLOTH.brown, CLOTH.undyed, CLOTH.woad, CLOTH.green]));
+    // the coverlet in the room's palette, or a plain undyed or brown blanket
+    bedBody(m, r, L, W, r() < 0.65 ? PALETTES[tone(v)].main : pick(r, [CLOTH.brown, CLOTH.undyed]));
     return none(m);
   },
 };
@@ -478,20 +479,22 @@ export const bookStack: PropKind = {
 };
 
 // ---------- textiles ----------
-/** Coarse woven pattern for tapestries and rugs, as vertex colours: border, field, lozenges. */
-function pattern(r: Rng) {
-  const field = jitterTint(r, pick(r, [CLOTH.madder, CLOTH.woad, CLOTH.green])), border = jitterTint(r, pick(r, [CLOTH.weld, CLOTH.black, CLOTH.linen]));
-  const motif = jitterTint(r, pick(r, [CLOTH.weld, CLOTH.linen, CLOTH.madder])), k = 2 + Math.floor(r() * 3);
+/** Coarse woven pattern for tapestries, as vertex colours: border, field, lozenges. The field is the room's
+ * palette (period.ts PALETTES, by the variant seed) and the border its accent. */
+function pattern(r: Rng, v: number) {
+  const pal = PALETTES[tone(v)];
+  const field = jitterTint(r, pal.main), border = jitterTint(r, r() < 0.6 ? pal.accent : pick(r, [CLOTH.black, CLOTH.linen]));
+  const motif = jitterTint(r, pick(r, [CLOTH.weld, CLOTH.linen, pal.accent])), k = 2 + Math.floor(r() * 3);
   return (s: number, t: number): RGB => {
     const e = Math.min(s, 1 - s, t, 1 - t);
     if (e < 0.06) return border;
-    const u = (s * k) % 1, v = (t * k) % 1;
-    return Math.abs(u - 0.5) + Math.abs(v - 0.5) < 0.22 ? motif : field;
+    const u = (s * k) % 1, w = (t * k) % 1;
+    return Math.abs(u - 0.5) + Math.abs(w - 0.5) < 0.22 ? motif : field;
   };
 }
 
-function patterned(m: PropMesh, r: Rng, f: (s: number, t: number) => V3, nu: number, nv: number, size: [number, number], flip = false) {
-  const col = pattern(r);
+function patterned(m: PropMesh, r: Rng, v: number, f: (s: number, t: number) => V3, nu: number, nv: number, size: [number, number], flip = false) {
+  const col = pattern(r, v);
   // split into cells so each cell carries its own colour
   for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
     const s0 = i / nu, t0 = j / nv;
@@ -501,10 +504,10 @@ function patterned(m: PropMesh, r: Rng, f: (s: number, t: number) => V3, nu: num
 
 export const tapestry: PropKind = {
   name: 'tapestry', placement: 'wall', mount: 3.0, blocksNav: false,
-  build(m, r) {
+  build(m, r, v) {
     const W = range(r, 1.6, 3.2), H = range(r, 1.4, 2.2), ph = r() * 6;
     m.tinted(jitterTint(r, WOOD.dark), () => m.tube('wood', [[-W / 2 - 0.08, 0, 0.05], [W / 2 + 0.08, 0, 0.05]], 0.022, 6));
-    patterned(m, r, (s, t) => [(s - 0.5) * W, -0.03 - t * H + Math.sin(s * 3 + ph) * 0.01, 0.035 + Math.sin(s * Math.PI * 9 + ph) * 0.012 * (1 - t * 0.6) + t * 0.01], 18, 10, [W, H]);
+    patterned(m, r, v, (s, t) => [(s - 0.5) * W, -0.03 - t * H + Math.sin(s * 3 + ph) * 0.01, 0.035 + Math.sin(s * Math.PI * 9 + ph) * 0.012 * (1 - t * 0.6) + t * 0.01], 18, 10, [W, H]);
     return { colliders: [hull(m)], emitters: [] };
   },
 };

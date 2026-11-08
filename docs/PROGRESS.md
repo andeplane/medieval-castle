@@ -1,5 +1,74 @@
 # Progress
 
+## 2026-11-08: rooms of one role no longer read as copies: a character per room, wall dressing, clutter, no empty quarter (branch `claude/project-thread-ns4g2v-variety`, behind `?furniture=1`)
+
+Anders: "All rooms have furniture, and are unique and great?", "fix all rooms next, in a smart way". After #70 every room had its role's focal piece and a different set of pieces, but 26 bedchambers, 23 solars and 20 studies were built by one recipe each: the same arrangement, three textile colours for the whole castle, the same wall decor, and bare corners.
+
+**A character per room** (`props/dress.ts characterOf`, a pure function of the seed, the role table and the room's place):
+- **Palette**: six medieval dyes (`period.ts PALETTES`: crimson, green, blue, murrey, tawny, saffron), each with its upholstery, an accent and a tint over the atlas carpets. The rooms of one role take them in turn from a seeded start. It colours the bed curtains, the plain beds' coverlets, tapestries (field in the main colour, border in the accent), rugs and carpets, cushions, cloaks on the pegs, hangings and shields. Toned kinds keep two shapes per palette (`variantPool`: 12 variants instead of 6).
+- **Tier**: 0 servants and garrison, 1 the household, 2 the lord's and the best rooms. Fixed by role (lord, lady, hall, chapel, treasury rich; kitchens, stores, guard rooms… plain); for the family's rooms by rank within the role: floor area, half again in the lord's wing (his zone, above ground), less in a tower garret; top third rich, bottom quarter poor, one in five nudged. The tier picks the bed (bed / curtained bed), the seats (stool / chair / box chair), the lights (candlestick / candelabrum), the hangings (pegs / dyed hanging or painted shield / tapestry) and what lies on the floor. No curtained bed, carpet, tapestry, sofa, candelabrum or oil lamp in a tier-0 room.
+- **Layout**: two or three arrangements for bedchamber (bed in an inner corner; bed centred on the longest solid wall between two bedside tables; bed in the corner farthest from the door with a window seat), solar (hearth and seats; a table in the window's light with a window seat; a long board with benches and a cupboard of plate), study (hearth and desk; a table under the window, lectern in the middle; a sloped desk in a corner with wall shelves), library, sewing room, guard room, nursery, physician and wardrobe. New placements: `underWindow` (a piece low enough under the sill, its back to the window wall), `againstWall`/`onWall` `toward` a point.
+
+**New light pieces** (`props/medieval.ts`, existing materials only, so no new draw calls): `basket` (wicker, with linen, apples or wool), `peg-rail` (pegs with cloaks, a bag, a hat), `wall-shelf` (iron brackets, jugs, bowls, books), `shield` (painted heater shield, five charges, in the room's colours), `hanging` (dyed wool on a rod with a banded edge; about a tenth of a tapestry's triangles).
+
+**A finishing pass** after every recipe (`finish`): wall dressing up to 1-3 pieces by size and tier, small things on bare tops (books, jugs and bowls, a basket; a candle only where the room has none), and a piece in or beside every quarter of the floor still empty (something of its tier against the nearest wall, else on it). Extras and the fill list use the wall shelf instead of the 2.9k-triangle floor shelf outside kitchens, pantries, bakehouses and stores.
+
+Whole castle, main → branch: similarity of rooms within a role (weighted Jaccard over kind@anchor tokens — corner, wall, window wall, middle, on a top, hung — and the textiles' palette; mean / most alike pair): bedchamber 0.32 / 0.71 → 0.17 / 0.67, solar 0.31 / 0.67 → 0.20 / 0.52, study 0.35 / 0.71 → 0.25 / 0.67, library 0.44 / 0.90 → 0.34 / 0.67, sewing 0.39 / 0.89 → 0.26 / 0.69, guard 0.54 / 0.87 → 0.41 / 0.65, wardrobe 0.34 / 0.67 → 0.26 / 0.59. Floored rooms with an empty quarter 6 → 0 (of 192). Pieces 2,158 → 2,420; furniture triangles 1,164k → 1,059k (largest group 45.9k → 41.7k); furniture light emitters 519 → 460 (fewer oil lamps), at most 8 in a room as before.
+
+Tests (`props-dress.test.ts`, helpers in `tests/helpers/variety.ts`): characters (every palette and layout used within a role, tiers by role, the household's rooms in all three tiers, every toned piece in its room's palette); no finery in tier-0 rooms; within every role of five rooms or more mean similarity ≤ 0.45 and no pair over 0.8 (bedchamber, solar, study: ≤ 0.3 and 0.7); no empty floor quarter in any floored room; wall dressing in over 95 % of them. The "family rooms in period" test now counts hangings, shields and pegs as wall dressing (Anders dropped the 1800s restyle).
+
+Captures (headless WebGL2, `?furniture=1`, walk mode at eye height from 0.7 m inside each room's first doorway, before = main f98c864, after = this branch): `castle-plan/fix-variety/{before,after}-<role>-<room>.png` for 12 rooms: bedchambers N5-0, N5-3, E4-1, S3-3; solars S5-2, great-5 (round tower), sw-3; studies N2-1, W2-0; libraries N2-2, E3-0; sewing room S2-2. Seen in them and fixed: the murrey palette rendered magenta (now a browner mulberry); hangings had random banded cells down their sides (now both sides or neither).
+
+`scripts/drawcalls.mjs` (headless WebGL2, `?furniture=1`, this branch): hall 355 draw calls / 2.53 M triangles (interior group 55k a pass), chamber 274 / 2.08 M, tower room 332 / 2.24 M; `drawBudget.test.ts` passes.
+
+Not checked: WebGPU; the Mac; every room by eye (12 of 192); a library can get two identical rugs (the recipe's and its extras'); the poses look in from the first doorway, so a few shots face a wall with a door rather than the room.
+
+Assumptions for Anders to veto: the six palettes; the tier rules (lord's wing, size rank); the five new pieces and how they look; plain household rooms get dyed hangings or painted shields instead of tapestries, servants' rooms pegs and baskets; window seats are chests or benches under the sill.
+
+## 2026-11-08: with furniture, every room's fires are lit from the first frame, not when its furniture streams in (branch `claude/project-thread-ns4g2v-lights`)
+
+Anders: "light in next room off. then i walk a bit, then on".
+
+**Cause: with `?furniture=1` a room's fires came with its furniture.** Furniture streams in by room (`props/streamer.ts`): a room is wanted once the room graph draws it, furnished in a worker and added a few rooms a frame; its fires went into the fire table only then (`roomMeshes.ts` → `light/roomFires.ts`), and out again 5 s after it stopped being wanted. So a room seen through a doorway was drawn with no firelight and no flames until its furniture had loaded, and it went dark again after you left it for a while. Without furniture nothing depended on distance (the wall torches are all set at load, since #71).
+
+Fix: fires no longer stream.
+- `props/roomFurniture.ts roomFireLists`: every room's fires (emitters and flames) by dressing the room without building its triangles (`place.ts placedFires`, the same as `mergePlaced` gives). It runs in a furnish worker at load (the `fires` job, ~0.9 s for 221 rooms in node, alongside the prop textures), and main awaits it before the first frame.
+- `render/interiorFire.ts furnitureFires` turns the lists into fire sources owned by their room; `light/roomLight.ts lightCastle` builds the fire table and the linked flames once, for both modes (main.ts used to do this inline). The streamer's sink no longer touches fires; `light/roomFires.ts` is gone.
+- Side effect: windows of furnished rooms glow at night from the start, not once their furniture has loaded.
+- **Assumption / known look:** a room's flame (and its light) now shows from the first frame even if the candlestick or hearth under it has not streamed in yet. On a jump to a far bookmark that can be a flame in mid-air for the few frames the furniture takes. Not fixed here (the furniture streaming is not this change's area); prefetching rooms one step beyond the drawn set would hide it.
+
+Checked the rest of the list for anything distance-dependent: the flame sprites are one instanced mesh with every flame, not culled or faded by distance (`light/three.ts`); there are no outdoor torches; `LightRig` and `light/budget.ts` (the nearest-8 pool with its 0.35 s fade) are only used by `props.html` and `lights.html`, not the game; the 12-fire cap keeps the brightest 12 of a room (the busiest furnished room has 8), not the nearest; a room seen through an open door uses its own row, which does not depend on the camera.
+
+Test (`world-views.test.ts`, replacing the old one which set the table once and never ran the streamer): in both modes (wall torches; furniture, with the furniture streamer running as main runs it, the graph's drawn rooms wanted, loads finishing between steps and rooms unloaded behind you), stepping the camera from 15 m out through every doorway, doors shut and then open (> 2000 poses, both modes at each): every room the graph draws has all its fires, the same row as at the first frame (its firelight summed every 16th pose), and the fire table and the flames are byte-identical to the first frame. With the old wiring put back, 481,417 of 8.8 M drawn-room checks failed (e.g. `gate-0: 0 of 2 fires lit from -15.35 m off N0-0>N0-1`). `props-stream.test.ts`: the fire lists equal the furnished rooms' emitters and flames, through the worker too. `roomLight.test.ts`: `lightCastle` by owner and position.
+
+Checked: build, `npm test`, coverage (thresholds pass). Not checked: the look with furniture in a browser. The headless WebGL2 page with `?furniture=1` crashed its renderer during load four times on the shared machine, on main and on this branch alike, so there are no furniture captures. Only `hall` without furniture was captured (`castle-plan/fix-lights/`: 312 draw calls, 2.30 M triangles; that path did not change). Not checked on WebGPU or the Mac. The added load time with furniture (the `fires` job in a worker, before the first frame) was not measured in a browser.
+
+## 2026-11-08: the skin rug is a hide, not an orange blob (branch `claude/project-thread-ns4g2v-rug`)
+
+Anders on the skin rug: "wtf is this". After #70 it was still a polar star of 72 spokes: legs too narrow for the spokes to draw, so it read as a blob; the whole fur rectangle of the atlas (128 × 512 px) stretched over the hide, 4× coarser across than along; a saturated orange from the tint on a brown texture; a faceted box head on half the bears.
+
+**Rebuilt** (`period.ts skin`, `hideShape`): three hides, chosen by seed. A bear (1.6-1.85 m nose to tail, dark brown, broad paws, round ears, a domed head with glass eyes), a deer (1.35-1.55 m, fawn with paler flanks, long thin legs, pointed ears, a short tail) or a sheepskin (1.0-1.2 m, cream, stubby flaps), the plainer variant.
+- The outline is a signed distance (body, neck, head and snout, ears, legs from shoulder to elbow to paw, tail, smoothly joined, with a slightly ragged cut edge).
+- The mesh is a height field on a 5 cm grid clipped to that outline by marching squares, so the edge is exact and no two faces overlap. It is 4 mm at the cut edge and rolls up over 10 cm to the pile (12-26 mm). The head is domed.
+- The fur tile is 0.25 × 1 m repeated in metres, the same 2 mm a pixel both ways. Its seams are half a tile off the spine and the middle, sampled 2 texels in from the rectangle's sides.
+- `furPx` is now near-grey fine hairs lying head to tail, in locks. The colour is the vertex tint: darker along the spine, at the cut rim and at the nose.
+- 575-1600 triangles a hide (mean 980; before 500-690). That is about +6.5 k over the 16 skins in the castle.
+
+**Placement** (`dress.ts fits`, variety's file, two rules for the skin only):
+- A skin is never laid over or under another textile. Before, 7 of 20 skins lay on a rug, and the fur and pile crossed in depth.
+- A skin is laid clear of the blockers already there (the hearth), and afterwards nothing stands on it but the fireside seats (`FIRESIDE`: armchair, sofa, footstool). Before, desks, cupboards and cradles stood on hides.
+- 16 skins in the castle (20 before).
+
+**Tests**:
+- `tests/props-skin.test.ts`: the hide lies flat (4 mm edge, under 6 cm, every face up), its outline has legs and a head (cut in and out round a circle), and the fur is unstretched (du/dx = dv/dz per triangle, no shear, inside the rectangle).
+- `tests/props-dress.test.ts`: over the dressed castle, a skin is on no other textile and is clear of all standing furniture but fireside seats.
+- `props-zfight` covers the new mesh (kit and shell).
+
+Captures (props.html, WebGL2; before/after) are in `castle-plan/fix-rug/`.
+- The props page's hall now shows a bear (seed 4); its chamber shows a sheepskin and its gallery cell a deer.
+- `props.html` gained `__game.lookFrom(pos, target)` for close-ups.
+- Not captured: the castle itself with `?furniture=1`. Its headless page was killed by the container's memory limit three times on the shared machine.
+
 ## 2026-11-08: the cavern's fire burns with furniture on; the caves a little less black (branch `claude/project-thread-ns4g2v-caves4`)
 
 From the coordinator's WebGPU capture of #78 on Anders' Mac (`castle-plan/caves3/webgpu-caves-after-78.jpg`): in the `caves` bookmark the smugglers' fire showed only as logs. It had no flame and no light, and the cavern was black but for the fungi. The hall's candle lit its wall, so that was furniture mode (`?furniture=1`).

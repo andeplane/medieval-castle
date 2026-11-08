@@ -4,15 +4,16 @@
 // ports, so tests run them with fakes (tests/props-stream.test.ts).
 import type { InteriorPlan, SpaceId } from '../castle/interior/types';
 import type { WindowFace } from '../castle/interior/shell';
-import { createFurnisher, transferables, type RoomFurniture } from './roomFurniture';
+import { createFurnisher, roomFireLists, transferables, type RoomFireList, type RoomFurniture } from './roomFurniture';
+import { variantPool } from './dress';
 import { propTextures, type PropTex } from './textures';
 
 /** The prop kit's textures (structurally render.ts PropTextures, without three.js). */
 export type PropTexSet = ReturnType<typeof propTextures>;
 
 export interface FurnishInit { plan: InteriorPlan; maxRooms: number; seed?: number; windows?: WindowFace[] }
-export type ToFurnisher = ({ t: 'init' } & FurnishInit) | { t: 'room'; job: number; room: SpaceId } | { t: 'textures'; job: number };
-export type FromFurnisher = { t: 'room'; job: number; result: RoomFurniture } | { t: 'textures'; job: number; result: PropTexSet } | { t: 'error'; job: number; message: string };
+export type ToFurnisher = ({ t: 'init' } & FurnishInit) | { t: 'room'; job: number; room: SpaceId } | { t: 'fires'; job: number } | { t: 'textures'; job: number };
+export type FromFurnisher = { t: 'room'; job: number; result: RoomFurniture } | { t: 'fires'; job: number; result: RoomFireList[] } | { t: 'textures'; job: number; result: PropTexSet } | { t: 'error'; job: number; message: string };
 
 /** The worker global as serveFurnish uses it. */
 export interface FurnishScope {
@@ -21,17 +22,23 @@ export interface FurnishScope {
 }
 
 /** Answer room (and texture) requests on `scope`. Room requests before 'init' get an error. */
-export function serveFurnish(scope: FurnishScope, make: typeof createFurnisher = createFurnisher, textures: () => PropTexSet = propTextures) {
-  let furnish: ((room: SpaceId) => RoomFurniture) | null = null;
+export function serveFurnish(scope: FurnishScope, make: typeof createFurnisher = createFurnisher, textures: () => PropTexSet = propTextures, fires: typeof roomFireLists = roomFireLists) {
+  let furnish: ((room: SpaceId) => RoomFurniture) | null = null, listFires: (() => RoomFireList[]) | null = null;
   scope.onmessage = ({ data: m }) => {
-    if (m.t === 'init') { furnish = make(m.plan, { maxRooms: m.maxRooms, seed: m.seed, windows: m.windows }); return; }
+    if (m.t === 'init') {
+      const pool = variantPool(); // one prop pool for the fires and the furniture: the same props
+      furnish = make(m.plan, { maxRooms: m.maxRooms, seed: m.seed, windows: m.windows, make: pool });
+      listFires = () => fires(m.plan, { seed: m.seed, windows: m.windows, make: pool });
+      return;
+    }
     try {
       if (m.t === 'textures') {
         const result = textures();
         scope.postMessage({ t: 'textures', job: m.job, result }, Object.values(result).flatMap((x: PropTex) => [x.albedo.buffer, x.normal.buffer, x.rough.buffer] as ArrayBuffer[]));
         return;
       }
-      if (!furnish) throw new Error('furnisher not initialised');
+      if (!furnish || !listFires) throw new Error('furnisher not initialised');
+      if (m.t === 'fires') { scope.postMessage({ t: 'fires', job: m.job, result: listFires() }); return; }
       const result = furnish(m.room);
       scope.postMessage({ t: 'room', job: m.job, result }, transferables(result));
     } catch (e) {
@@ -43,6 +50,8 @@ export function serveFurnish(scope: FurnishScope, make: typeof createFurnisher =
 /** Runs one room's furnishing somewhere (a worker, or inline in tests). */
 export interface FurnitureJobs {
   run(room: SpaceId): Promise<RoomFurniture>;
+  /** Every room's fires (roomFireLists), without its furniture: the page lights them all before the first frame. */
+  fires(): Promise<RoomFireList[]>;
   /** The prop textures, made off the page's thread where there are workers. */
   textures(): Promise<PropTexSet>;
   dispose(): void;
@@ -84,12 +93,13 @@ export function workerJobs(create: () => WorkerPort, size: number, init: Furnish
   };
   return {
     run: (room) => ask((job) => ({ t: 'room', job, room })),
+    fires: () => ask((job) => ({ t: 'fires', job })),
     textures: () => ask((job) => ({ t: 'textures', job })),
     dispose() { for (const w of workers) w.terminate(); },
   };
 }
 
 /** Jobs run on the calling thread (tests, and a fallback without workers). */
-export function inlineJobs(furnish: (room: SpaceId) => RoomFurniture, textures: () => PropTexSet = propTextures): FurnitureJobs {
-  return { run: async (room) => furnish(room), textures: async () => textures(), dispose() {} };
+export function inlineJobs(furnish: (room: SpaceId) => RoomFurniture, textures: () => PropTexSet = propTextures, fires: () => RoomFireList[] = () => []): FurnitureJobs {
+  return { run: async (room) => furnish(room), fires: async () => fires(), textures: async () => textures(), dispose() {} };
 }

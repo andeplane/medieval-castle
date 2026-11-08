@@ -273,12 +273,16 @@ export function scenePx(n: TileNoise, i: number, x: number, y: number): Px2 {
   return { c: [c[0] * 0.7 * crack, c[1] * 0.62 * crack, c[2] * 0.46 * crack], h: 0.5 + (crack < 1 ? -0.3 : 0), r: 0.42 };
 }
 
-/** Pelt: long hair streaks along v, darker roots, mid brown so tints give bear, deer or wolf. */
+/** Pelt, one tile of 0.25 × 1 m (period.ts FUR_TILE), tileable both ways: fine hairs lying along v
+ * (head to tail on a hide) as thin streaks that change slowly along their length, waving a little and
+ * gathered in soft locks. Near grey: the hide's vertex tint gives bear, deer or sheep. */
 export function furPx(n: TileNoise, x: number, y: number): Px2 {
-  // short fibres: lanes across, each broken every ~1.5 cm along; tufts and a soft clumping on top
-  const lane = (Math.floor(x * 96) + 0.5) / 96, fib = n.n(lane, y, 128) * 0.5 + 0.5, tuft = n.n(x, y, 24) * 0.5 + 0.5, clump = n.n(x, y, 8) * 0.5 + 0.5;
-  const k = 0.42 + 0.33 * fib * (0.6 + 0.4 * tuft) + 0.25 * clump;
-  return { c: [0.36 * k, 0.27 * k, 0.19 * k], h: 0.3 * clump + 0.7 * fib * tuft, r: 0.85 };
+  const xw = x + 0.01 * Math.sin(y * Math.PI * 2 * 5 + n.n(x, y, 4) * 3) + 0.006 * n.n(x, y, 16); // the hair waves
+  const hair = (lanes: number, f: number, o: number) => { const lane = (Math.floor(xw * lanes + o) + 0.5) / lanes; return n.n(lane, y, f) * 0.5 + 0.5; };
+  const streak = 0.6 * hair(96, 48, 0) + 0.4 * hair(64, 96, 0.5);         // ~1-2 mm hairs, 1-2 cm along
+  const lock = n.n(x, y, 12) * 0.5 + 0.5, clump = n.n(x, y, 4) * 0.5 + 0.5; // locks stretched along v (the tile is 1:4)
+  const k = 0.3 + 0.55 * streak * (0.55 + 0.45 * lock) + 0.25 * clump;
+  return { c: [0.5 * k, 0.47 * k, 0.43 * k], h: 0.2 * streak + 0.3 * lock, r: 0.9 };
 }
 
 /** The paint atlas (geom ATLAS): every carpet, runner, canvas and pelt design in one non-tiling texture. */
