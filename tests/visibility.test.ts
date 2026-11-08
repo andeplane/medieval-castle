@@ -224,9 +224,9 @@ describe('what a line of sight can reach (for the water)', () => {
     const plain = createVisibility({ position: { x: 5, y: 4.6, z: 4 } }, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] } });
     plain.update();
     expect(named.water.visible).toBe(true);
-    const noGround = createVisibility({ position: { x: 5, y: 4.6, z: 4 } }, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] }, frustum: () => ({ planes: [], corners: [] }) });
+    const noGround = createVisibility({ position: { x: 5, y: 4.6, z: 4 } }, mkGroups(), plan, { scene: { getObjectByName: (n: string) => named[n] }, apertures: aps, frustum: () => ({ planes: [], corners: [] }) });
     noGround.update();
-    expect(named.water.visible).toBe(true); // the gate's lines reach y 0 over no ground
+    expect(named.water.visible).toBe(true); // A's window's lines reach y 0 over no ground (no courtyard outline: it faces out)
   });
 });
 

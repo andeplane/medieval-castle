@@ -139,7 +139,8 @@ export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardN
     const m = src.clone() as THREE.MeshStandardNodeMaterial;
     m.name = sun ? `interior-${name}` : `interior-under-${name}`;
     m.lightsNode = sunOnly;
-    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, (add) => fireLights(light, add));
+    // (fireLights emits TSL: it runs when the renderer builds the shader, checked by the captures)
+    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, /* v8 ignore next */ (add) => fireLights(light, add));
     return m;
   };
   const glass = mk(M.glass, 'glass');

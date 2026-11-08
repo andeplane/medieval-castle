@@ -8,6 +8,8 @@ import { createFurnisher } from '../../src/props/roomFurniture';
 import { wallTorches } from '../../src/render/interiorFire';
 import { dressRoom, variantPool } from '../../src/props/dress';
 import { mergePlaced, yawXZ } from '../../src/props/place';
+import { buildShell } from '../../src/castle/interior/shell';
+import { islandCastle } from '../world';
 import { caveFires } from '../../src/castle/interior/caveGeom';
 import { CAVE_ZONE } from '../../src/castle/interior/caves';
 import { CARRIED_LANTERN, lanternAt } from '../../src/player/lantern';
@@ -186,10 +188,12 @@ describe('the carried lantern in the caves', () => {
 describe('fireplaces in the castle', () => {
   const plan = planInterior(), make = variantPool();
   it('light the room, not their own fronts', () => {
+    // dressed as the game dresses them (the windows' shutters and keep-outs move things)
+    const windows = buildShell(plan, islandCastle().builder).embrasures.map((e) => e.face);
     const faults: string[] = [];
     let hearths = 0;
     for (const r of plan.rooms) {
-      const d = dressRoom(r, plan, { make });
+      const d = dressRoom(r, plan, { make, windows });
       const all = mergePlaced(d.placed);
       if (!all.emitters.some((e) => e.kind === 'hearth')) continue;
       const fires = roomFires(r, all.emitters);
@@ -220,5 +224,5 @@ describe('fireplaces in the castle', () => {
     }
     expect(hearths).toBeGreaterThan(10);
     expect(faults).toEqual([]);
-  }, 60_000);
+  }, 180_000);
 });

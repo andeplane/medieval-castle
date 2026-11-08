@@ -18,7 +18,7 @@ export default defineConfig({
         'src/light/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
         // interior light + visibility; the TSL shader (render/interiorShader.ts) is checked by ?test=room captures
         'src/render/{interiorMath,interiorLight,interiorFire,windowGlass,exposure,precompile}.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
-        'src/world/visibility.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
+        'src/world/{visibility,waterView}.ts': { lines: 100, functions: 100, branches: 95, statements: 99 },
         'src/render/texgen.ts': { lines: 95, functions: 95, branches: 85, statements: 95 },
         // measured 99.8 / 100 / 89.6 / 98.0
         'src/castle/interior/{stairs,stairprobe}.ts': { lines: 99, functions: 100, branches: 88, statements: 97 },
