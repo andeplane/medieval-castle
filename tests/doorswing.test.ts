@@ -6,6 +6,9 @@
 // No browser.
 import { describe, it, expect, beforeAll } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
+import * as THREE from 'three/webgpu';
+import { createInteraction, type UseInput } from '../src/game/interact';
+import { m4apply } from '../src/castle/interior/doorGeom';
 import { buildInterior, type PlanX } from '../src/castle/interior';
 import { buildDoors, type DoorSystem } from '../src/castle/interior/doors';
 import { placeLeaves, leafPoint, leafSwing, type LeafPlace } from '../src/castle/interior/doorGeom';
@@ -25,6 +28,7 @@ type Play = Awaited<ReturnType<typeof setupPlay>>;
 
 describe('door swing vs characters', { timeout: 300_000 }, () => {
   let play: Play, input: ScriptedInput, plan: PlanX, doors: DoorSystem, leaves: { d: DoorSpec; pl: LeafPlace; way: 1 | -1 }[];
+  let view: ReturnType<typeof fakeView>;
 
   beforeAll(async () => {
     const isl = islandCastle(), builder = isl.builder;
@@ -33,7 +37,7 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     plan = interior.plan;
     input = new ScriptedInput();
     play = await setupPlay({
-      castle, terrain: terrainObject(), bridge: isl.bridge, input, view: fakeView(), footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
+      castle, terrain: terrainObject(), bridge: isl.bridge, input, view: (view = fakeView()), footsteps: new Footsteps(() => null), clock: fakeClock(0.01),
       interior: { collision: interior.collision },
     });
     const sets = playDoors([], plan.doors);
@@ -163,4 +167,66 @@ describe('door swing vs characters', { timeout: 300_000 }, () => {
     for (let i = 0; i < 180; i++) play.physics.tick();
     expect(doors.isOpen(d.id)).toBe(true); // and the leaf carries on
   }, 200_000);
+
+  // Anders, 2026-11-08: a door shut at the near end of a deep wall passage jumped to the far end when he
+  // pressed E; and walking through, it jumped back without a key. Walked as the player does, with the
+  // player's motor, camera and E (createInteraction): from either side of deep-wall doors, walk up until the
+  // crosshair is on the leaf, press E, and watch the leaf: it swings away from the player, turning on an edge
+  // that never leaves its seat; walking through the open door and back (movement only) never moves it; shut
+  // again, it is exactly where it was.
+  it('walks deep-wall doors from either side: E swings the leaf away in its seat, walking past never moves it', () => {
+    let press: (() => void) | null = null;
+    const use: UseInput = { subscribe: (cb) => { press = () => cb('key'); return () => {}; } };
+    const cam = new THREE.PerspectiveCamera(), shown: (string | null)[] = [];
+    const ia = createInteraction(cam, {} as HTMLElement, () => doors.interactables, { input: use, view: { show: (l) => { shown.push(l); }, dispose: () => {} } });
+    const look = () => { play.player.frame(1, 1 / 60); cam.position.copy(view.position); cam.quaternion.copy(view.quaternion); ia.update(); };
+    const step = (n: number) => { for (let i = 0; i < n; i++) { play.physics.tick(); look(); } };
+    const same = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+    const deep = leaves.filter((l) => l.way < 0 && l.d.wall >= 2 && l.d.spaces.every((sp) => plan.rooms.some((r) => r.id === sp && r.kind !== 'stair') || sp === 'courtyard'));
+    const sample = deep.filter((_, i) => i % Math.max(1, Math.floor(deep.length / 8)) === 0).slice(0, 8);
+    expect(sample.length).toBeGreaterThanOrEqual(6);
+    const fails: string[] = [];
+    let walked = 0;
+    for (const { d, pl } of sample) for (const side of [0, 1] as const) {
+      park(); doors.setOpen(d.id, false, true); play.physics.tick();
+      const shut = doors.leafPose(d.id)!, sg = side === 1 ? 1 : -1, fx = -d.normal[0] * sg, fz = -d.normal[1] * sg;
+      // stand 1.2 m off the doorway on this side, facing it
+      const x = d.centre[0] + d.normal[0] * sg * (d.wall / 2 + 1.2), z = d.centre[2] + d.normal[1] * sg * (d.wall / 2 + 1.2);
+      play.player.teleport(x, play.player.groundAt(x, z, d.centre[1] + 1, d.centre[1]), z, Math.atan2(-fx, -fz), -0.15);
+      step(4);
+      // walk in (W only) until the crosshair is on the leaf
+      input.hold(['KeyW']);
+      for (let i = 0; i < 240 && ia.target()?.id !== d.id; i++) step(1);
+      input.hold([]);
+      if (ia.target()?.id !== d.id) { fails.push(`${d.id} from ${d.spaces[side]}: never got the crosshair on it`); continue; }
+      if (!same(doors.leafPose(d.id)!, shut)) fails.push(`${d.id} from ${d.spaces[side]}: moved before E`);
+      press!();
+      const hinge = [m4apply(shut, [0, 0, 0]), m4apply(shut, [0, 0, pl.backAxis])];
+      for (let i = 0; i < 400 && doors.state()[d.id] < 1; i++) {
+        step(1);
+        // it turns on its pintles or its back edge: one of the two stays put
+        const m = doors.leafPose(d.id)!, a = m4apply(m, [0, 0, 0]), b = m4apply(m, [0, 0, pl.backAxis]);
+        if (Math.min(Math.hypot(a[0] - hinge[0][0], a[2] - hinge[0][2]), Math.hypot(b[0] - hinge[1][0], b[2] - hinge[1][2])) > 1e-6) { fails.push(`${d.id} from ${d.spaces[side]}: left its seat`); break; }
+      }
+      if (!doors.isOpen(d.id)) { fails.push(`${d.id} from ${d.spaces[side]}: did not open (${doors.state()[d.id]})`); continue; }
+      if (doors.swingsInto(d.id) !== 1 - side) fails.push(`${d.id} from ${d.spaces[side]}: swung toward the player`);
+      // the leaf's latch edge went away from the player
+      const latch = (m: number[]) => { const p = m4apply(m, [pl.mirrored ? -pl.width : pl.width, 1, 0]); return (p[0] - d.centre[0]) * d.normal[0] + (p[2] - d.centre[2]) * d.normal[1]; };
+      if ((latch(doors.leafPose(d.id)!) - latch(shut)) * sg > -0.5) fails.push(`${d.id} from ${d.spaces[side]}: latch edge did not go away (${((latch(doors.leafPose(d.id)!) - latch(shut)) * sg).toFixed(2)})`);
+      // walk through to the far side and back, movement only: the open leaf never moves
+      const open = doors.leafPose(d.id)!, f0 = [...play.player.feet];
+      walk(fx, fz, 150);
+      const through = ((play.player.feet[0] - d.centre[0]) * d.normal[0] + (play.player.feet[2] - d.centre[2]) * d.normal[1]) * sg;
+      walk(-fx, -fz, 150);
+      if (!same(doors.leafPose(d.id)!, open)) fails.push(`${d.id} from ${d.spaces[side]}: moved while walked past`);
+      if (through < -d.wall / 2) walked++;
+      // shut it (as anyone can) and it is back exactly where it was
+      doors.request(d.id, false, { pos: { x: play.player.feet[0], y: play.player.feet[1] + 0.9, z: play.player.feet[2] } }) || doors.setOpen(d.id, false);
+      for (let i = 0; i < 300 && doors.state()[d.id] > 0; i++) play.physics.tick();
+      if (!same(doors.leafPose(d.id)!, shut)) fails.push(`${d.id} from ${d.spaces[side]}: shut somewhere else`);
+      void f0;
+    }
+    expect(fails, fails.join('\n')).toEqual([]);
+    expect(walked).toBeGreaterThanOrEqual(sample.length); // most walks went right through the doorway
+  }, 300_000);
 });

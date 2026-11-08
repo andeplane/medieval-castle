@@ -25,7 +25,7 @@ import type { InteriorGroup } from '../src/castle/interior/types';
 import { nicheSplay } from '../src/castle/interior/shell';
 import { buildInterior } from '../src/castle/interior';
 import { stairOpts, type PlanX } from '../src/castle/interior/plan';
-import { placeLeaves, leafPoint, leafSwing, leafDepth, headRise, headTop, leafClassFor, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
+import { placeLeaves, leafPoint, leafSwing, leafDepth, leafHead, headRise, leafClassFor, stopPlane, doorCuts, LIP, GROW, type LeafPlace } from '../src/castle/interior/doorGeom';
 import { archOutline, orient } from '../src/castle/interior/geom';
 import { at } from '../src/castle/builder';
 import { heightAt } from '../src/world/terrain';
@@ -567,7 +567,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(f.some((x) => x.startsWith('cut twice:') && x.endsWith('court>stairtower'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>E0-2: castle surface left in the doorway'))).toBe(true);
     expect(f.some((x) => x.startsWith('court>W0-2: its hole in the castle face is bigger than its outline'))).toBe(true);
-    expect(f).toContain('N0-2>N0-3: leaf swings through the wall of N0-3');
+    expect(f.some((x) => x.startsWith('N0-2>N0-3: leaf swings through the wall of'))).toBe(true);
     // a courtyard door's outward seat (it opens away from someone inside) with its sill sunk into the paving
     const R = structuredClone(P), sunk = R.doors.find((d) => d.id === 'court>E0-2')!;
     expect(sunk.swingsBack).toBe(true);
@@ -585,12 +585,11 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
   const makeVis = () => createVisibility(cam, inner.groups, P, { apertures: baked().apertures, ground: heightAt, court: inCourt, roofs });
   /** The castle as drawn, less its window glass (you see through it). */
   const castleSolid = () => trianglesOf({ bins: Object.fromEntries(Object.entries(B.bins).filter(([k]) => k !== 'glass')) } as unknown as Builder);
-  /** A door's shut leaf as a flat outline at its mid-thickness, its boards' top 1 cm under the head it is shaped to
-   *  (doorParts): triangles, the outline, its depth along the door's normal. */
+  /** A door's shut leaf as a flat outline at its mid-thickness: triangles, the outline, its depth along the door's normal. */
   const shutLeaf = (d: DoorSpec) => {
     const pl = placeLeaves(d)[0];
     if (!pl) return null;
-    const cls = leafClassFor(d, pl.kind), arc = headTop(cls.head, cls.ow, cls.oh, -GROW), top = (s: number) => arc(s) - 0.01, sill = cls.sill;
+    const cls = leafClassFor(d, pl.kind), top = leafHead(cls), sill = cls.sill;
     const { zBack, zFront } = leafDepth(pl.kind), z = (zBack + zFront) / 2, M = leafSwing(pl, 0), N = 24;
     const ring: V3[] = [leafPoint(pl, M, [0, 0, z]), leafPoint(pl, M, [pl.width, 0, z])];
     for (let i = 0; i <= N; i++) { const x = pl.width * (1 - i / N); ring.push(leafPoint(pl, M, [x, top(cls.sOff + x) - sill, z])); }

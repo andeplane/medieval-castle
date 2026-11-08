@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
 import type { DoorSpec, V3 } from '../src/castle/interior/types';
 import {
-  placeLeaves, swingAwayFrom, leafSwing, doorCuts, backReach, stopPlane, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4apply, m4translate, m4scale, m4rotX, maxSwing, doorFrame,
+  placeLeaves, swingAwayFrom, leafSwing, leafHead, doorCuts, backReach, stopPlane, headTop, headRise, openingOutline, leafClassFor, leafMatrix, leafPoint, m4swing, m4mul, m4apply, m4translate, m4scale, m4rotX, maxSwing, doorFrame,
   OPEN_ANGLE, LIP, GROW, FIT, STOP_GAP, BIN, BACK_ANGLE, stopDepth, KIND, leafDepth,
 } from '../src/castle/interior/doorGeom';
 import { leafGeometry, mirrorX, slab, type PartBin } from '../src/castle/interior/doorParts';
@@ -122,7 +122,7 @@ describe('leaf placement', () => {
         expect(thick, what).toBeGreaterThanOrEqual(-1e-6); // inside the wall thickness
         // over the clear opening: past both jambs and above the head everywhere across it
         expect(Math.min(-d.width / 2 - s0, s1 - d.width / 2), what).toBeGreaterThanOrEqual(pl.kind === 'grille' ? 0.005 : 0.03);
-        const lt = headTop(cls.head, cls.ow, cls.oh, -GROW);
+        const lt = leafHead(cls);
         for (let s = -d.width / 2; s <= d.width / 2; s += d.width / 50) expect(lt(s) - top(s), what).toBeGreaterThanOrEqual(0.015);
         // the back face sits at `rebate` (unless the leaf would stick out of the wall), STOP_GAP before the stop
         const back = KIND[pl.kind].t + KIND[pl.kind].ledge + 0.012;
@@ -137,7 +137,7 @@ describe('leaf placement', () => {
       const [pl] = placeLeaves(d), cls = leafClassFor(d, pl.kind), cuts = doorCuts(d);
       // same seat, hinge and pose as the one-way leaf: swinging back changes nothing about where it hangs
       expect(leafMatrix(pl, leafSwing(pl, 0))).toEqual(leafMatrix(placeLeaves({ ...d, swingsBack: undefined })[0], m4swing(0)));
-      const reb = cuts.find((c) => c.band === 'reb')!.o, lt = headTop(cls.head, cls.ow, cls.oh, -GROW);
+      const reb = cuts.find((c) => c.band === 'reb')!.o, lt = leafHead(cls);
       // the rebate's jambs and head are the leaf's own, FIT out (and a little more where the head's chords need it
       // to clear the leaf's boards, cut 1 cm under the curve): always tighter than a stopped leaf's rebate
       const jamb = Math.max(...reb.map((q) => q[0]));
@@ -237,8 +237,8 @@ describe('leaf placement', () => {
     for (const d of doors) {
       const stop = stopPlane(d), cuts = doorCuts(d), [pl] = placeLeaves(d), reb = headTop(d.head, d.width, d.height, -LIP);
       const sgn = pl.seat === 1 ? 1 : -1, { zBack } = leafDepth(pl.kind), cls = leafClassFor(d, pl.kind);
-      // the leaf's top edge at x along it: its boards, cut 1 cm under the head it is shaped to (doorParts)
-      const top = (x: number) => headTop(cls.head, cls.ow, cls.oh, -GROW)(pl.sOff + pl.sDir * x) - cls.sill - 0.01;
+      // the leaf's top edge at x along it (the head it is shaped to)
+      const top = (x: number) => leafHead(cls)(pl.sOff + pl.sDir * x) - cls.sill;
       for (const way of swingsOf(d)) for (let i = 0; i <= 24; i++) for (let k = 0; k <= 10; k++) for (const f of [0, 0.5, 1]) for (const z of [zBack, 0]) {
         const a = way > 0 ? (pl.maxAngle * i) / 24 : (-pl.backAngle * i) / 24;
         const x = (pl.width * k) / 10, q = leafPoint(pl, leafSwing(pl, a), [x, f * top(x), z]), p = doorCoords(d, q);
@@ -311,7 +311,7 @@ describe('leaf geometry', () => {
       // faces a ray straight through the leaf can meet (not the edge-on sides)
       const tris: number[][] = [];
       for (let i = 0; i < g.wood.pos.length; i += 9) if (Math.abs(g.wood.nor[i + 2]) > 0.3) tris.push([0, 1, 3, 4, 6, 7].map((k) => g.wood.pos[i + k]));
-      const topO = headTop(cls.head, cls.ow, cls.oh, -GROW), top = (x: number) => topO(cls.sOff + x) - cls.sill;
+      const topO = leafHead(cls), top = (x: number) => topO(cls.sOff + x) - cls.sill;
       for (let x = 0.03; x < g.width - 0.03; x += 0.0013) for (let y = 0.05; y < Math.min(top(x - 0.03), top(x), top(x + 0.03)) - 0.03; y += 0.37) {
         checked++;
         if (!covered(tris, x, y)) { holes++; if (where.length < 5) where.push(`${pl.classKey} x=${x.toFixed(3)} y=${y.toFixed(2)}`); }

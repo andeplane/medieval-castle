@@ -38,6 +38,8 @@ export interface DoorSystem {
   request(id: string, open: boolean, by: Opener): boolean;
   /** The space a door's leaf swings into now (index into its spaces), or null for no leaf or an unknown id. */
   swingsInto(id: string): 0 | 1 | null;
+  /** A leaf's world matrix now (column-major), or null for no leaf or an unknown id. */
+  leafPose(id: string): number[] | null;
   /** Fully open (or raised). Archways (no leaf) are always open. */
   isOpen(id: string): boolean;
   /** A character (0.6 m wide) can get through now: enough gap beside the leaf, or the portcullis up past head height. */
@@ -529,6 +531,7 @@ export function buildDoors(doors: DoorSpec[], M: DoorMats, physics?: PhysicsApi,
       }
     },
     swingsInto: (id) => { const u = byId.get(id); return u ? (u.leaf.dir > 0 ? u.d.swingInto : (1 - u.d.swingInto) as 0 | 1) : null; },
+    leafPose: (id) => { const u = byId.get(id); return u ? [...u.leaf.matrix] : null; },
     state() {
       const o: Record<string, number> = {};
       for (const u of units) o[u.id] = Math.round(openness(u) * 1000) / 1000;
@@ -574,6 +577,7 @@ export function joinDoors(systems: DoorSystem[]): DoorSystem {
     state: () => Object.assign({}, ...systems.map((s) => s.state())),
     request: (id, o, by) => systems.some((s) => s.request(id, o, by)),
     swingsInto: (id) => systems.reduce<0 | 1 | null>((k, s) => k ?? s.swingsInto(id), null),
+    leafPose: (id) => systems.reduce<number[] | null>((m, s) => m ?? s.leafPose(id), null),
     isOpen: (id) => systems.some((s) => s.isOpen(id)),
     isPassable: (id) => systems.some((s) => s.isPassable(id)),
     blocksPlayer: (p) => systems.some((s) => s.blocksPlayer(p)),

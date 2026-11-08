@@ -35,7 +35,7 @@ describe('__game hooks', () => {
       stats: () => ({ extra: 1 }), tick: (dt) => { physics.step(dt); rig.update(dt); },
       physics, player, input, course: { lanes: [] }, interior: null,
       use: () => { used++; return true; },
-      doors: { state: () => ({ gate: open ? 1 : 0 }), setOpen: (_id, o) => { open = o; }, swingsInto: (id) => (id === 'gate' ? 1 : null) },
+      doors: { state: () => ({ gate: open ? 1 : 0 }), setOpen: (_id, o) => { open = o; }, swingsInto: (id) => (id === 'gate' ? 1 : null), leafPose: (id) => (id === 'gate' ? [1] : null) },
     }, w, fakeClock());
   });
 
@@ -96,6 +96,7 @@ describe('__game hooks', () => {
     game.doors!.setOpen('gate', true);
     expect(game.doors!.state()).toEqual({ gate: 1 });
     expect([game.doors!.swingsInto('gate'), game.doors!.swingsInto('nope')]).toEqual([1, null]);
+    expect([game.doors!.leafPose('gate'), game.doors!.leafPose('nope')]).toEqual([[1], null]);
     const ticks = game.physics.stats().ticks;
     expect(game.doors!.tick(0.5)).toEqual({ gate: 1 });
     expect(game.physics.stats().ticks).toBeGreaterThan(ticks); // doors advance with physics

@@ -21,8 +21,7 @@
 //   HEAD_RISE.segmental·w, flat 0. `openingOutline` gives the clear outline the shell should cut.
 import type { DoorSpec, V3 } from './types';
 import type { V2 } from '../../core/math2d';
-import { archOutline } from './geom';
-import { pointInPoly } from '../../core/math2d';
+import { archOutline, HEAD_SEG } from './geom';
 
 export const LIP = 0.08;          // rebate recess beyond the clear opening (per side and at the head)
 export const GROW = 0.05;         // leaf beyond the clear opening: how far it laps the stop
@@ -87,19 +86,12 @@ export function doorOutlines(d: DoorSpec, rise?: number): { clear: V2[]; reb: V2
   const leafy = d.leaf && d.kind !== 'gate', y = d.centre[1];
   const clear = archOutline(0, y, d.width, d.height, d.head, leafy ? headRise(d.head, d.width) : rise ?? headRise(d.head, d.width));
   if (!leafy) return { clear, reb: clear, sweep: clear };
-  // a back-swinging leaf fills its rebate: the rebate is the leaf's own outline (its size class) grown by FIT,
-  // and by as much more as its head's chords need to clear the leaf's boards (cut 1 cm under the curve)
+  // a back-swinging leaf fills its rebate: the rebate is the leaf's own outline (its size class, a polygon with
+  // the clear outline's vertex count: leafHead) grown by FIT
   const cls = leafClassFor(d, d.kind as LeafKind), back = !!d.swingsBack;
-  const rebOf = (g: number, ow: number, oh: number, w: number) => {
-    const grown = headTop(d.head, ow, oh, -g), k = (ow + 2 * g) / w;
-    return clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)]));
-  };
-  let reb = rebOf(LIP, d.width, d.height, d.width);
-  if (back) {
-    const lt = headTop(d.head, cls.ow, cls.oh, -GROW), hw = cls.ow / 2 + GROW - 0.005;
-    const boards = Array.from({ length: 41 }, (_, i): V2 => { const u = -hw + (2 * hw * i) / 40; return [u, y + lt(u) - 0.01]; });
-    for (let g = GROW + FIT; g < LIP + 1e-9; g += 0.001) { reb = rebOf(g, cls.ow, cls.oh, d.width); if (boards.every(([u, yy]) => pointInPoly(reb, u, yy))) break; }
-  }
+  const grown = headTop(d.head, d.width, d.height, -LIP), k = 1 + (2 * LIP) / d.width;
+  const reb = back ? [[-headHalf(cls, GROW + FIT), y], [headHalf(cls, GROW + FIT), y], ...headPoly(cls, GROW + FIT).map(([u, h]): V2 => [u, y + h])] as V2[]
+    : clear.map(([u, yy], i): V2 => (i < 2 ? [u * k, yy] : [u * k, y + grown(u * k)]));
   // the back sweep's recess: square-headed, LIP beyond the clear jambs, SWEEP_HEAD over the leaf's top
   const top = y + cls.sill + leafTop(cls) + SWEEP_HEAD, ks = 1 + (2 * LIP) / d.width;
   return { clear, reb, sweep: clear.map(([u, yy], i): V2 => (i < 2 ? [u * ks, yy] : [u * ks, top])) };
@@ -112,7 +104,31 @@ export const SWEEP_HEAD = 0.015;
 /** Furthest a leaf swings back. */
 export const BACK_ANGLE = Math.PI / 2;
 /** Top of a leaf of class `cls` above its bottom. */
-export const leafTop = (cls: LeafClass) => headTop(cls.head, cls.ow, cls.oh, -GROW)(0) - cls.sill;
+export const leafTop = (cls: LeafClass) => leafHead(cls)(0) - cls.sill;
+/** Half the width of a class's head outline grown by g. */
+const headHalf = (cls: LeafClass, g: number) => cls.ow / 2 + g;
+/**
+ * A class's head grown by g (above the sill) as a polygon with the clear outline's vertex count (HEAD_SEG + 1
+ * points from the right springing over to the left), its vertices on the curve at even angles (the apex of a
+ * pointed head among them). A back-swinging leaf's head follows it at GROW and its rebate at GROW + FIT, so the
+ * two run parallel, FIT apart, chord by chord.
+ */
+export function headPoly(cls: Pick<LeafClass, 'head' | 'ow' | 'oh'>, g: number): V2[] {
+  const top = headTop(cls.head, cls.ow, cls.oh, -g), R = cls.ow / 2 + g;
+  return Array.from({ length: HEAD_SEG + 1 }, (_, i): V2 => { const u = i === HEAD_SEG / 2 ? 0 : R * Math.cos((Math.PI * i) / HEAD_SEG); return [u, top(u)]; });
+}
+/** The top of a class's leaf (above the sill) at s across the opening: its head curve, or for a back-swinging
+ *  leaf (fit) the chords of headPoly at GROW. */
+export function leafHead(cls: LeafClass): (s: number) => number {
+  const curve = headTop(cls.head, cls.ow, cls.oh, -GROW);
+  if (!cls.fit) return curve;
+  const pts = headPoly(cls, GROW).reverse(); // left to right
+  return (s) => {
+    if (s <= pts[0][0]) return pts[0][1];
+    for (let i = 1; i < pts.length; i++) if (s <= pts[i][0]) { const [a, b] = [pts[i - 1], pts[i]], t = (s - a[0]) / (b[0] - a[0] || 1); return a[1] + (b[1] - a[1]) * t; }
+    return pts[pts.length - 1][1];
+  };
+}
 /** Rebate beyond the clear outline: LIP, or for a back-swinging leaf (which fills it) about GROW + FIT. */
 export const lipOf = (d: DoorSpec) => (d.swingsBack ? GROW + FIT : LIP);
 
@@ -244,6 +260,7 @@ export interface LeafClass {
   sill: number;                 // gap under the leaf (leafSill)
   ow: number; oh: number;       // opening width/height the geometry was cut for
   width: number; sOff: number; sDir: 1 | -1; // leaf in opening coordinates (for the unmirrored hinge-at-left case)
+  fit?: boolean;                // a back-swinging leaf: its head is leafHead's chords, to fill its rebate
 }
 
 export const BIN = 0.02;
@@ -251,9 +268,10 @@ export function leafClassFor(d: DoorSpec, kind: LeafKind): LeafClass {
   const ow = Math.floor(d.width / BIN + 1e-9) * BIN, oh = Math.floor(d.height / BIN + 1e-9) * BIN;
   const width = ow + 2 * GROW;
   const sill = leafSill(d, kind);
-  const key = `${kind}:${d.head}:${ow.toFixed(2)}x${oh.toFixed(2)}${sill === KIND[kind].sill ? '' : `:s${sill.toFixed(2)}`}`;
+  const fit = !!d.swingsBack;
+  const key = `${kind}:${d.head}:${ow.toFixed(2)}x${oh.toFixed(2)}${sill === KIND[kind].sill ? '' : `:s${sill.toFixed(2)}`}${fit ? ':fit' : ''}`;
   // hinge edge in the left rebate (s = -ow/2 - GROW), latch toward +s
-  return { key, kind, head: d.head, sill, ow, oh, width, sOff: -ow / 2 - GROW, sDir: 1 };
+  return { key, kind, head: d.head, sill, ow, oh, width, sOff: -ow / 2 - GROW, sDir: 1, ...(fit ? { fit } : {}) };
 }
 
 /**
@@ -274,7 +292,7 @@ export function placeLeaves(d: DoorSpec): LeafPlace[] {
   const pivot: V3 = [base[0] + f.right[0] * sHinge, d.centre[1] + sill, base[1] + f.right[1] * sHinge];
   // right-handed when eU × up = eV, i.e. eV = (−eU.z, eU.x)
   const mirrored = f.eV[0] * -eU[1] + f.eV[1] * eU[0] < 0;
-  const top = headTop(d.head, cls.ow, cls.oh, -GROW);
+  const top = leafHead(cls);
   return [{
     door: d.id, seat: d.swingInto, kind, classKey: cls.key, width: cls.width,
     height: top(0) - sill, sOff: sHinge, sDir: (hs > 0 ? -1 : 1) as 1 | -1,
