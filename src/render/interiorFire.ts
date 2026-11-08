@@ -1,13 +1,13 @@
 // Interior fire sources for the shared light system (src/light) without furniture: a few plain wall
 // torches in the halls, gate rooms, undercrofts and tunnels so the dark rooms still have firelight
-// (with ?furniture=1 the streamed rooms bring their own fires, light/roomFires.ts). Pure; main.ts puts each torch in its room's row of the
-// fire table (light/roomLight.ts) and
-// makeFlameSprites(linkFlames(flames, emitters)).
+// (with ?furniture=1 the furniture's fires instead, every room's at once: furnitureFires). Pure; main.ts
+// puts each fire in its room's row of the fire table and links the flames (light/roomLight.ts lightCastle).
 import type { InteriorPlan, RoomSpec, SpaceId } from '../castle/interior/types';
 import type { Flame, LightEmitter, V3 } from '../light/types';
 import type { TunnelSpec } from '../castle/interior/plan';
 import { FLAME_OUT, type TorchHolder } from '../castle/interior/torch';
 import { inPoly } from './interiorMath';
+import type { RoomFireList } from '../props/roomFurniture';
 
 export interface FireSources {
   emitters: LightEmitter[];
@@ -16,6 +16,21 @@ export interface FireSources {
   group: string[];
   /** Each wall torch's holder (shaft and bracket), one per flame, for the shell to build; none for furniture. */
   holders: TorchHolder[];
+}
+
+/**
+ * The furniture's fires of every room (props/roomFurniture.ts roomFireLists), owned by their room: all
+ * of them light from the first frame, whether or not the room's furniture has streamed in yet (a room
+ * whose fires came with its furniture was dark until it loaded: "off, then walk a bit, then on").
+ */
+export function furnitureFires(lists: readonly RoomFireList[], groupOf: (room: SpaceId) => string | undefined): FireSources & { owners: { room: SpaceId }[] } {
+  const out = { emitters: [] as LightEmitter[], flames: [] as Flame[], group: [] as string[], holders: [] as TorchHolder[], owners: [] as { room: SpaceId }[] };
+  for (const l of lists) {
+    const g = groupOf(l.room);
+    for (const e of l.emitters) { out.emitters.push(e); out.owners.push({ room: l.room }); if (g !== undefined) out.group.push(g); }
+    out.flames.push(...l.flames);
+  }
+  return out;
 }
 
 const TORCH_ROOMS = new Set(['hall', 'gate', 'undercroft']);

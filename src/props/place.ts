@@ -1,6 +1,7 @@
 // Placing props: merge placed props into one mesh per material, and the layout of the prop-kit
 // review page (gallery cells and four dressed room vignettes). Pure data, unit-tested.
 import { PropMesh, translate, rotY, compose, type V3 } from './geom';
+import type { Flame } from '../light/types';
 import { KIT, KIND, makeProp, type Prop, type Emitter, type PropKind } from './kit';
 
 export interface Placed { prop: Prop; at: V3; yaw: number }
@@ -10,15 +11,23 @@ export const yawXZ = (x: number, z: number, yaw: number): [number, number] => [M
 
 /** Merge placed props into one PropMesh (one draw call per material) and collect world emitters. */
 export function mergePlaced(items: Placed[]): { mesh: PropMesh; emitters: Emitter[] } {
+  const mesh = new PropMesh();
+  for (const it of items) mesh.with(compose(translate(it.at[0], it.at[1], it.at[2]), rotY(it.yaw)), () => mesh.append(it.prop.mesh));
+  return { mesh, emitters: placedFires(items).emitters };
+}
+
+/** The world emitters and flames of placed props without their triangles (the same as mergePlaced's):
+ * a room's fires, known before its furniture is built. */
+export function placedFires(items: Placed[]): { emitters: Emitter[]; flames: Flame[] } {
   const mesh = new PropMesh(), emitters: Emitter[] = [];
   for (const it of items) {
-    mesh.with(compose(translate(it.at[0], it.at[1], it.at[2]), rotY(it.yaw)), () => mesh.append(it.prop.mesh));
+    mesh.with(compose(translate(it.at[0], it.at[1], it.at[2]), rotY(it.yaw)), () => mesh.appendFlames(it.prop.mesh));
     for (const e of it.prop.meta.emitters) {
       const [x, z] = yawXZ(e.position[0], e.position[2], it.yaw);
       emitters.push({ ...e, position: [it.at[0] + x, it.at[1] + e.position[1], it.at[2] + z] });
     }
   }
-  return { mesh, emitters };
+  return { emitters, flames: mesh.flames };
 }
 
 /** World-space footprint rectangle [minX, minZ, maxX, maxZ] of a placed prop (navmesh obstacle). */
