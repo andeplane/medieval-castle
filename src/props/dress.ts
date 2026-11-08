@@ -22,7 +22,15 @@ import { KIND, makeProp, type Prop } from './kit';
 import { shutter, buildShutter } from './medieval';
 import { yawXZ, type Placed } from './place';
 
-export type Role = 'hall' | 'chapel' | 'bedchamber' | 'solar' | 'study' | 'guard' | 'kitchen' | 'store' | 'cellar' | 'gate' | 'passage' | 'empty';
+export type Role = 'hall' | 'chapel' | 'bedchamber' | 'solar' | 'study' | 'guard' | 'kitchen' | 'store' | 'cellar' | 'gate' | 'passage' | 'empty'
+  // service rooms on the ground floor
+  | 'buttery' | 'pantry' | 'brewhouse' | 'bakehouse' | 'laundry' | 'armoury'
+  // under the ground
+  | 'wine-cellar' | 'dungeon' | 'well-room'
+  // chambers above
+  | 'lord' | 'lady' | 'wardrobe' | 'garderobe' | 'nursery' | 'library' | 'steward' | 'treasury' | 'sewing' | 'physician'
+  // towers
+  | 'mews' | 'watch';
 
 /** Props come from a small pool of seeded variants per kind, so 1000+ placements build ~200 meshes. */
 export const VARIANTS = 6;
@@ -208,18 +216,89 @@ export function grow(p: V2[], d: number): V2[] {
 
 const AREA = (r: RoomSpec) => { const p = r.poly; let s = 0; for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a[0] * b[1] - b[0] * a[1]; } return Math.abs(s) / 2; };
 
-export function roleOf(r: RoomSpec, rng: Rng): Role {
+/** The role a room's kind fixes (hall, chapel, gate, passage, stairs), or null when the castle's plan
+ * deals it one (roleTable). */
+export function fixedRole(r: RoomSpec): Role | null {
   if (r.kind === 'stair' || r.kind === 'wallwalk') return 'empty';
   if (r.kind === 'hall') return 'hall';
   if (r.kind === 'chapel') return 'chapel';
   if (r.kind === 'gate') return 'gate';
   if (r.kind === 'passage') return 'passage';
-  if (r.kind === 'undercroft' || r.floor < 0) return 'cellar';
-  const a = AREA(r);
-  if (a < 7) return pick(rng, ['store', 'empty'] as Role[]);
-  if (r.floor === 0) return pick(rng, ['kitchen', 'store', 'guard', 'store'] as Role[]);
-  if (r.floor <= 2) return pick(rng, ['guard', 'study', 'bedchamber', 'store'] as Role[]);
-  return pick(rng, ['bedchamber', 'bedchamber', 'solar', 'study'] as Role[]);
+  return null;
+}
+
+/** Roles dealt round, by where a room is. One of each single, the rest from these pools (seeded). */
+export const POOLS = {
+  /** under the ground */
+  deep: ['well-room', 'wine-cellar', 'dungeon', 'cellar', 'wine-cellar', 'cellar', 'dungeon'] as Role[],
+  /** ground floor, after the two kitchens (the largest rooms) */
+  ground: ['buttery', 'pantry', 'brewhouse', 'bakehouse', 'laundry', 'armoury', 'guard', 'store', 'cellar', 'guard', 'buttery', 'armoury', 'pantry', 'store', 'laundry', 'cellar', 'brewhouse', 'guard'] as Role[],
+  /** first and second floors */
+  low: ['guard', 'study', 'library', 'steward', 'sewing', 'store', 'wardrobe', 'bedchamber', 'physician', 'guard', 'solar', 'bedchamber', 'sewing', 'wardrobe', 'study'] as Role[],
+  /** third floor and up */
+  high: ['bedchamber', 'solar', 'study', 'library', 'nursery', 'sewing', 'physician', 'wardrobe', 'bedchamber', 'solar', 'garderobe', 'study', 'bedchamber', 'library', 'solar'] as Role[],
+  /** rooms under 9 m² above the ground */
+  small: ['wardrobe', 'garderobe', 'study', 'store', 'physician', 'garderobe'] as Role[],
+};
+const TOWER_ZONES = ['ne', 'se', 'sw', 'great', 'eturret'];
+
+/** A room's role and its number among the rooms of that role (recipes vary their layout and pieces by it). */
+export interface RoleSlot { role: Role; k: number }
+const tables = new WeakMap<InteriorPlan, Map<number, Map<SpaceId, RoleSlot>>>();
+
+/**
+ * Deal every room of the castle a role (pure, seeded, cached per plan): the fixed ones by kind; under
+ * the ground wells, wine cellars, dungeons and stores; on the ground floor two kitchens (the largest
+ * rooms) and the service rooms; above, the top room of every tower is a watch room, then one lord's and
+ * one lady's chamber (the largest rooms on floors 2-4), a treasury (in the great tower when it can be),
+ * a steward's room, two mews in tower rooms, and the rest from the pools by floor and size.
+ */
+export function roleTable(P: InteriorPlan, seed = 0): Map<SpaceId, RoleSlot> {
+  let bySeed = tables.get(P);
+  if (!bySeed) { bySeed = new Map(); tables.set(P, bySeed); }
+  const hit = bySeed.get(seed);
+  if (hit) return hit;
+  const rng = mulberry32(hashSeed('roles', seed));
+  const role = new Map<SpaceId, Role>();
+  const free = P.rooms.filter((r) => { const f = fixedRole(r); if (f) role.set(r.id, f); return !f; });
+  const deal = (rooms: RoomSpec[], pool: Role[]) => { const sh = shuffle(rooms, rng); sh.forEach((r, i) => role.set(r.id, pool[i % pool.length])); };
+  const take = (rooms: RoomSpec[], r: RoomSpec | undefined, as: Role) => { if (r) { role.set(r.id, as); rooms.splice(rooms.indexOf(r), 1); } };
+  const byArea = (rs: RoomSpec[]) => [...rs].sort((a, b) => AREA(b) - AREA(a) || (a.id < b.id ? -1 : 1));
+  const deep = free.filter((r) => r.floor < 0), ground = free.filter((r) => r.floor === 0), upper = free.filter((r) => r.floor > 0);
+  deal(deep, POOLS.deep);
+  // ground floor: the two largest rooms (in different zones) are kitchens; tiny ones stores
+  const g = byArea(ground);
+  const k1 = g[0];
+  take(g, k1, 'kitchen'); take(g, g.find((r) => r.zone !== k1?.zone && AREA(r) >= 20), 'kitchen');
+  for (const r of g.filter((x) => AREA(x) < 7)) take(g, r, 'store');
+  deal(g, POOLS.ground);
+  // above: watch rooms at the top of every tower, then the singles, then the pools
+  const u = [...upper];
+  for (const z of TOWER_ZONES) { const top = byArea(u.filter((r) => r.zone === z)).sort((a, b) => b.floor - a.floor)[0]; take(u, top, 'watch'); }
+  const big = byArea(u.filter((r) => r.floor >= 2 && r.floor <= 4 && !TOWER_ZONES.includes(r.zone)));
+  const lord = big[0];
+  take(u, lord, 'lord');
+  take(u, big.find((r) => r !== lord && r.zone !== lord?.zone), 'lady');
+  take(u, byArea(u.filter((r) => r.zone === 'great' && r.floor >= 1)).reverse()[0] ?? byArea(u.filter((r) => r.floor <= 2)).reverse()[0], 'treasury');
+  take(u, byArea(u.filter((r) => r.floor === 1 && AREA(r) >= 12))[0], 'steward');
+  for (let i = 0; i < 2; i++) take(u, byArea(u.filter((r) => TOWER_ZONES.includes(r.zone) && r.floor >= 3 && AREA(r) >= 9))[0], 'mews');
+  deal(u.filter((r) => AREA(r) < 9), POOLS.small);
+  deal(u.filter((r) => AREA(r) >= 9 && r.floor <= 2), POOLS.low);
+  deal(u.filter((r) => AREA(r) >= 9 && r.floor > 2), POOLS.high);
+  const count = new Map<Role, number>(), out = new Map<SpaceId, RoleSlot>();
+  for (const r of P.rooms) { const ro = role.get(r.id)!, k = count.get(ro) ?? 0; count.set(ro, k + 1); out.set(r.id, { role: ro, k }); }
+  bySeed.set(seed, out);
+  return out;
+}
+
+/** A room's role on its own (no plan to deal from): by kind, floor and size. */
+export function roleOf(r: RoomSpec, rng: Rng): Role {
+  const f = fixedRole(r);
+  if (f) return f;
+  if (r.kind === 'undercroft' || r.floor < 0) return r.floor < 0 ? pick(rng, POOLS.deep) : pick(rng, POOLS.ground);
+  if (AREA(r) < 7) return pick(rng, ['store', 'garderobe'] as Role[]);
+  if (r.floor === 0) return pick(rng, ['kitchen', ...POOLS.ground]);
+  return pick(rng, r.floor <= 2 ? POOLS.low : POOLS.high);
 }
 
 // ------------------------------------------------------------------ placing
@@ -233,6 +312,9 @@ export class RoomDresser {
   tone: number;
   private n = 0;
   private pictures = 0;
+  /** The room's number among the rooms of its role (roleTable): recipes vary by it. */
+  k = 0;
+  role: Role = 'empty';
   /** This room's windows (WindowFace), from the shell. */
   windows: readonly WindowFace[];
   /** Whether the castle's windows were given: then any wall without a window hole is solid. */
@@ -428,6 +510,19 @@ export class RoomDresser {
 
   ceiling(kind: string, c: V2): Placed { const p: Placed = { prop: this.prop(kind), at: [c[0], this.r.y1, c[1]], yaw: 0 }; this.placed.push(p); return p; }
 
+  /** Put a piece where its kind goes: a wall piece on a solid wall, a floor piece against a wall, or
+   * (when no wall has room) free-standing near the middle. */
+  place(kind: string): Placed | null {
+    const k = KIND[kind];
+    if (k.placement === 'wall') return this.onWall(kind, kind !== 'candle-sconce' && kind !== 'sconce');
+    return this.againstWall(kind) ?? this.near(kind, this.axis().c, this.rng() * 6, 1.5);
+  }
+  /** The room's own choice of extra pieces: the ones whose bit is set in k + 1, so two rooms of one role
+   * never pick the same set (k is unique within a role). */
+  extras(list: readonly string[]) {
+    const bits = this.k + 1;
+    list.forEach((kind, i) => { if ((bits >> i) & 1) this.place(kind); });
+  }
   /** A long axis through the room (direction of its longest wall) and the centroid. */
   axis(): { c: V2; u: V2; v: V2 } {
     const w = [...this.walls].sort((a, b) => b.L - a.L)[0];
@@ -442,10 +537,16 @@ const times = (r: Rng, a: number, b: number) => a + Math.floor(r() * (b - a + 1)
 export const flat = (p: Prop) => p.kind.placement === 'floor' && p.bounds.max[1] < 0.06;
 /** Kinds whose textiles follow the room's tone (their variant seed ≡ tone mod 3). */
 export const TONED = new Set(['four-poster', 'armchair', 'sofa', 'footstool', 'round-table', 'carpet', 'pedestal-desk']);
+/** Roles with no floor to furnish: stairs, passages and the gate passages (all floor is a way through). */
+export const UNFLOORED: readonly Role[] = ['empty', 'passage', 'gate'];
+/** Every other room has at least this many pieces. */
+export const MIN_PROPS = 6;
+/** Plain pieces that suit any room, to bring a bare one up to MIN_PROPS. */
+const FILL = ['chest', 'stool', 'candle-sconce', 'bucket', 'crate', 'bench', 'tapestry', 'shelf', 'sack', 'stool', 'candle-sconce'];
 /** Roles where people live: a hearth, candles not torches, carpets, pictures. */
 export const FAMILY: readonly Role[] = ['hall', 'solar', 'bedchamber', 'study'];
 /** Roles that may burn torches (style guide: tunnels, cellars, gate rooms and passages). */
-export const TORCH_ROLES: readonly Role[] = ['passage', 'cellar', 'gate'];
+export const TORCH_ROLES: readonly Role[] = ['passage', 'cellar', 'gate', 'wine-cellar', 'dungeon', 'well-room', 'watch'];
 
 const longest = (w: Wall) => w.L;
 /** Clear space round the fireside seats and their lamp table: room to sit down, and they read as separate pieces. */
@@ -503,7 +604,12 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     for (const kind of ['stag-head', 'portrait', 'stag-head']) D.onWall(kind, false, { walls: [wall] });
     for (let i = 0; i < Math.max(1, Math.floor(len / 12)); i++) D.onWall('candle-sconce', false);
   },
-  gate: (D) => { D.againstWall('weapon-rack'); D.againstWall('bench'); D.onWall('sconce', false); },
+  gate: (D) => {
+    // the gate's guard: racks of arms, a bench, a chest and a barrel along the walls, torches
+    D.againstWall('weapon-rack'); D.againstWall('bench'); D.againstWall('chest');
+    D.onWall('sconce', false); D.onWall('sconce', false); D.onWall('weapon-trophy', false);
+    D.extras(['shackles', 'barrel', 'weapon-trophy', 'armour-stand', 'bucket', 'stool']);
+  },
   hall: (D) => {
     const { c, v } = D.axis();
     // the hearth on the long inner wall, suits of armour either side, a skin or rug before it
@@ -570,6 +676,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.againstWall('cupboard', { inner: true });
     D.onWall('portrait'); D.onWall('tapestry');
     D.onWall('candle-sconce', false);
+    D.extras(['chest', 'stool', 'prie-dieu', 'writing-desk', 'drying-rack', 'box-chair']);
   },
   solar: (D) => {
     // the drawing room: a carpet, the hearth with a sofa and armchairs facing it, a round table under
@@ -584,6 +691,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     D.onTop('candelabrum', cab, 0, 0.05);
     for (const kind of ['portrait', 'portrait', 'stag-head']) D.onWall(kind);
     D.onWall('candle-sconce', false);
+    D.extras(['loom', 'chest', 'box-chair', 'tapestry', 'stool', 'side-table']);
   },
   study: (D) => {
     // the library: bookcases on the inner walls, the hearth with a leather armchair, a desk in the room
@@ -600,6 +708,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     if (!h) D.againstWall('bookcase');
     for (const kind of ['stag-head', 'portrait', 'portrait']) D.onWall(kind);
     D.onWall('candle-sconce', false);
+    D.extras(['writing-desk', 'lectern', 'chest', 'stool', 'book-stack', 'tapestry']);
   },
   guard: (D) => {
     // kept old: a deal table and benches, arms racked and in trophies, a suit of armour, an iron ring of candles
@@ -612,6 +721,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     if (D.rng() < 0.5) D.againstWall('straw-pallet');
     if (t) D.ceiling('chandelier', [t.at[0], t.at[2]]);
     D.onWall('weapon-trophy'); D.onWall('candle-sconce', false);
+    D.extras(['brazier', 'stool', 'barrel', 'crate', 'bucket', 'armour-stand']);
   },
   kitchen: (D) => {
     // the open hearth dominates the longest inner wall: a spit on its dogs and a cauldron on the crane
@@ -627,17 +737,212 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
     for (let i = 0; i < times(D.rng, 2, 4); i++) D.againstWall('barrel');
     D.againstWall('sack'); D.againstWall('sack');
     D.onWall('stag-head'); D.onWall('candle-sconce', false);
+    D.extras(['dresser', 'chest', 'bucket', 'barrel', 'crate', 'stool']);
+  },
+  buttery: (D) => {
+    // drink: casks on stillages, barrels, jugs and cups on a table, a dresser of pewter
+    for (let i = 0; i < 1 + (D.k % 2); i++) D.againstWall('cask-rack');
+    for (let i = 0; i < 2 + (D.k % 3); i++) D.againstWall('barrel');
+    const t = D.near('trestle-table', D.axis().c, yawFacing(D.axis().v), 1);
+    D.onTop('tableware', t, 0, 0); D.onTop('candlestick', t, 0.6, 0);
+    D.onWall('candle-sconce', false);
+    D.extras(['crate', 'stool', 'chest', 'sack', 'dresser', 'bucket']);
+  },
+  pantry: (D) => {
+    // food: shelves of crocks, crates and sacks, a scrubbed table with bowls
+    D.againstWall('shelf', { inner: true }); if (D.k % 2) D.againstWall('shelf');
+    const t = D.near('work-table', D.axis().c, yawFacing(D.axis().v), 1);
+    if (!t) D.againstWall('trestle-table');
+    for (let i = 0; i < 2 + (D.k % 3); i++) D.againstWall(pick(D.rng, ['crate', 'sack']));
+    D.onWall('candle-sconce', false);
+    D.extras(['barrel', 'bucket', 'stool', 'cupboard', 'firewood', 'chest']);
+  },
+  brewhouse: (D) => {
+    // the mash tun in the middle, malt in sacks, barrels of ale, a cask on its stillage
+    const { c, v } = D.axis();
+    D.near('mash-tun', c, yawFacing(v), 1.2) ?? D.againstWall('mash-tun');
+    for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('barrel');
+    for (let i = 0; i < 2; i++) D.againstWall('sack');
+    D.againstWall('bucket');
+    D.onWall('candle-sconce', false);
+    D.extras(['cask-rack', 'crate', 'stool', 'shelf', 'firewood', 'chest']);
+  },
+  bakehouse: (D) => {
+    // the oven against a solid wall, a kneading table, flour sacks, the faggots to fire it
+    const oven = D.againstWall('bread-oven', { inner: true, centre: true, prefer: longest }) ?? D.againstWall('bread-oven');
+    if (oven) { const n = frontOf(oven), t: V2 = [n[1], -n[0]], hw = oven.prop.bounds.max[0]; D.at('firewood', [oven.at[0] + n[0] * 0.2 + t[0] * (hw + 0.5), oven.at[2] + n[1] * 0.2 + t[1] * (hw + 0.5)], oven.yaw, 0.3); }
+    const tb = D.near('work-table', D.axis().c, yawFacing(D.axis().v), 1);
+    for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('sack');
+    D.againstWall('shelf', { inner: true });
+    if (!tb) D.againstWall('trestle-table');
+    D.onWall('candle-sconce', false);
+    D.extras(['barrel', 'stool', 'crate', 'bucket', 'cupboard', 'chest']);
+  },
+  laundry: (D) => {
+    // tubs and a copper, linen drying on racks, baskets and chests of clean linen
+    const { c, v } = D.axis();
+    D.near('wash-tub', c, yawFacing(v), 1.2);
+    D.againstWall('wash-tub');
+    for (let i = 0; i < 1 + (D.k % 2); i++) D.near('drying-rack', [c[0] + v[0] * 1.5, c[1] + v[1] * 1.5], yawFacing(v) + Math.PI / 2, 1.5) ?? D.againstWall('drying-rack');
+    D.againstWall('bucket'); D.againstWall('chest');
+    D.onWall('candle-sconce', false);
+    D.extras(['cauldron', 'bucket', 'stool', 'shelf', 'firewood', 'barrel']);
+  },
+  armoury: (D) => {
+    // racks of weapons, harness on its stand, a grindstone to keep the edges, trophies on the walls
+    D.againstWall('weapon-rack', { inner: true }); D.againstWall('weapon-rack');
+    D.againstWall('armour-stand');
+    D.near('grindstone', D.axis().c, D.rng() * 6, 1.2);
+    D.againstWall('chest');
+    D.onWall('weapon-trophy'); D.onWall('candle-sconce', false);
+    D.extras(['armour', 'bench', 'crate', 'barrel', 'stool', 'weapon-rack']);
+  },
+  'wine-cellar': (D) => {
+    // casks on stillages down the walls, a candle on a barrel head
+    for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('cask-rack');
+    for (let i = 0; i < 2; i++) D.againstWall('barrel');
+    const b = D.againstWall('barrel'); D.onTop('candlestick', b);
+    D.onWall('sconce', false);
+    D.extras(['crate', 'shelf', 'stool', 'sack', 'chest', 'cask-rack']);
+  },
+  dungeon: (D) => {
+    // chains on the walls, straw on the floor, a bucket, the gaoler's bench and a torch
+    D.onWall('shackles'); D.onWall('shackles');
+    D.near('straw-heap', D.axis().c, D.rng() * 6, 1.2);
+    D.againstWall('straw-pallet'); D.againstWall('bucket'); D.againstWall('bench');
+    D.onWall('sconce', false);
+    D.extras(['stool', 'shackles', 'barrel', 'crate', 'chest', 'straw-heap']);
+  },
+  'well-room': (D) => {
+    // the well head in the middle with its windlass, buckets and casks of water round the walls
+    D.near('well', D.axis().c, D.rng() * 6, 1.0);
+    D.againstWall('bucket'); D.againstWall('bucket');
+    for (let i = 0; i < 2; i++) D.againstWall('barrel');
+    D.againstWall('bench');
+    D.onWall('sconce', false);
+    D.extras(['crate', 'sack', 'stool', 'wash-tub', 'chest', 'cask-rack']);
+  },
+  lord: (D) => {
+    // the lord's chamber: the great bed, the hearth with his box chair by it, a chest at the bed's foot,
+    // tapestries, a cupboard of plate
+    const bed = D.againstWall('four-poster', { inner: true, corner: true }) ?? D.againstWall('four-poster');
+    if (bed) { const n = frontOf(bed), b = bed.prop.bounds; D.near('chest', [bed.at[0] + n[0] * (b.max[2] + 0.4), bed.at[2] + n[1] * (b.max[2] + 0.4)], bed.yaw + Math.PI / 2, 0.3); }
+    const h = hearthGroup(D, { chairs: 0 });
+    if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('box-chair', [h.at[0] + n[0] * (f + 1.3) + t[0] * 1.0, h.at[2] + n[1] * (f + 1.3) + t[1] * 1.0], h.yaw + Math.PI - 0.5, 0.3, SEAT_GAP); } else D.againstWall('box-chair');
+    D.againstWall('cupboard', { inner: true });
+    D.onWall('tapestry'); D.onWall('tapestry'); D.onWall('candle-sconce', false);
+    D.extras(['writing-desk', 'prie-dieu', 'stool', 'weapon-trophy', 'stag-head', 'side-table']);
+  },
+  lady: (D) => {
+    // the lady's chamber: the bed, her prie-dieu, a loom or a chest of linen, the hearth, tapestries
+    const bed = D.againstWall('four-poster', { inner: true, corner: true }) ?? D.againstWall('four-poster');
+    if (bed) { const n = frontOf(bed), t: V2 = [n[1], -n[0]], b = bed.prop.bounds; const st = D.at('side-table', [bed.at[0] + t[0] * (b.max[0] + 0.35) + n[0] * (b.min[2] + 0.35), bed.at[2] + t[1] * (b.max[0] + 0.35) + n[1] * (b.min[2] + 0.35)], bed.yaw, 0.1); D.onTop('candlestick', st); }
+    hearthGroup(D, { chairs: 0, lamp: false, stool: false });
+    D.againstWall('prie-dieu'); D.againstWall(D.k % 2 ? 'loom' : 'chest');
+    D.onWall('tapestry'); D.onWall('tapestry'); D.onWall('candle-sconce', false);
+    D.extras(['stool', 'loom', 'drying-rack', 'chest', 'cupboard', 'rug']);
+  },
+  wardrobe: (D) => {
+    // the wardrobe: gowns on a rail, chests and presses of clothes and stuffs
+    D.againstWall('drying-rack') ?? D.near('drying-rack', D.axis().c, 0, 1);
+    for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('chest');
+    D.againstWall('cupboard', { inner: true });
+    D.onWall('candle-sconce', false);
+    D.extras(['tapestry', 'stool', 'candle-sconce', 'shelf', 'crate', 'sack']);
+  },
+  garderobe: (D) => {
+    // the privy on its wall, water, a candle, a shelf; small rooms keep small things
+    D.againstWall('privy', { inner: true }) ?? D.againstWall('privy');
+    D.againstWall('bucket'); D.againstWall('stool');
+    D.onWall('candle-sconce', false); D.onWall('candle-sconce', false);
+    D.extras(['chest', 'sack', 'crate', 'drying-rack', 'shelf', 'bucket']);
+  },
+  nursery: (D) => {
+    // the cradle by the fire, the nurse's bed and stool, a chest of swaddling, a rug
+    const h = hearthGroup(D, { chairs: 0, lamp: false, stool: false });
+    if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('cradle', [h.at[0] + n[0] * (f + 1.4) + t[0] * 0.9, h.at[2] + n[1] * (f + 1.4) + t[1] * 0.9], h.yaw + Math.PI / 2, 0.4); } else D.near('cradle', D.axis().c, 0, 1);
+    D.againstWall('bed'); D.againstWall('chest'); D.againstWall('stool');
+    D.onWall('tapestry'); D.onWall('candle-sconce', false);
+    D.extras(['rug', 'stool', 'cupboard', 'chair', 'drying-rack', 'chest']);
+  },
+  library: (D) => {
+    // the library and scriptorium: presses of books, a scribe's desk, a lectern with a great book
+    for (let i = 0; i < 2 + (D.k % 2); i++) D.againstWall('bookcase', { inner: true });
+    const { c, v } = D.axis();
+    const desk = D.near('writing-desk', [c[0] + v[0] * 0.6, c[1] + v[1] * 0.6], yawFacing(v), 1);
+    if (desk) { const n = frontOf(desk); D.at('stool', [desk.at[0] + n[0] * 0.55, desk.at[2] + n[1] * 0.55], 0, 0.15); }
+    D.near('lectern', [c[0] - v[0] * 1.2, c[1] - v[1] * 1.2], yawFacing(v), 1);
+    const ch = D.againstWall('chest'); D.onTop('book-stack', ch);
+    D.onWall('candle-sconce', false);
+    D.extras(['chair', 'shelf', 'rug', 'portrait', 'candle-sconce', 'book-stack']);
+  },
+  steward: (D) => {
+    // the counting room: the chequered table with its coin and scales, the steward's chair, chests and rolls
+    const { c, v } = D.axis();
+    const t = D.near('counting-table', c, yawFacing(v), 1);
+    if (t) { const n = frontOf(t); D.at(D.k % 2 ? 'box-chair' : 'chair', [t.at[0] - n[0] * 0.75, t.at[2] - n[1] * 0.75], t.yaw, 0.15); }
+    for (let i = 0; i < 2; i++) D.againstWall('chest');
+    D.againstWall('shelf', { inner: true });
+    D.againstWall('writing-desk');
+    D.onWall('candle-sconce', false);
+    D.extras(['cupboard', 'stool', 'tapestry', 'crate', 'book-stack', 'chest']);
+  },
+  treasury: (D) => {
+    // the strong room: iron-bound chests, the counting table, arms to guard it
+    for (let i = 0; i < 3 + (D.k % 2); i++) D.againstWall('chest');
+    D.near('counting-table', D.axis().c, yawFacing(D.axis().v), 1);
+    D.againstWall('weapon-rack');
+    D.onWall('candle-sconce', false); D.onWall('weapon-trophy');
+    D.extras(['armour', 'stool', 'crate', 'shelf', 'cupboard', 'chest']);
+  },
+  sewing: (D) => {
+    // the women's work room: a loom against the wall, a table of cloth, stools, a chest of thread
+    D.againstWall('loom', { inner: true }) ?? D.againstWall('loom');
+    const t = D.near('trestle-table', D.axis().c, yawFacing(D.axis().v), 1);
+    if (t) { const n = frontOf(t); for (const s of [-0.7, 0.7]) D.at('stool', [t.at[0] + n[0] * s, t.at[2] + n[1] * s], 0, 0.2); }
+    D.againstWall('chest'); D.againstWall('drying-rack');
+    D.onWall('candle-sconce', false);
+    D.extras(['shelf', 'sack', 'tapestry', 'bench', 'rug', 'cupboard']);
+  },
+  physician: (D) => {
+    // the physician's room: a bed for the sick, a table of jars and bowls, shelves of simples, his desk
+    D.againstWall('bed');
+    const t = D.near('work-table', D.axis().c, yawFacing(D.axis().v), 1);
+    if (!t) D.againstWall('trestle-table');
+    D.againstWall('shelf', { inner: true }); D.againstWall('writing-desk'); D.againstWall('stool');
+    D.onWall('candle-sconce', false);
+    D.extras(['chest', 'cupboard', 'bucket', 'drying-rack', 'lectern', 'shelf']);
+  },
+  mews: (D) => {
+    // the falconer's mews: hawks hooded on their perches, straw, water, the falconer's chest
+    const { c, v } = D.axis();
+    D.near('perch', c, yawFacing(v), 1);
+    D.againstWall('perch');
+    D.near('straw-heap', [c[0] + v[0] * 1.2, c[1] + v[1] * 1.2], 0, 1);
+    D.againstWall('bucket'); D.againstWall('chest'); D.againstWall('stool');
+    D.onWall('candle-sconce', false);
+    D.extras(['bench', 'barrel', 'sack', 'crate', 'weapon-rack', 'shelf']);
+  },
+  watch: (D) => {
+    // the watch room at the top of a tower: a brazier to keep warm, a bench under the slits, arms
+    D.near('brazier', D.axis().c, 0, 1);
+    D.againstWall('bench'); D.againstWall('weapon-rack');
+    D.againstWall('chest'); D.againstWall('stool');
+    D.onWall('sconce', false);
+    D.extras(['barrel', 'armour-stand', 'crate', 'bucket', 'straw-pallet', 'bench']);
   },
   store: (D) => {
     for (let i = 0; i < times(D.rng, 3, 7); i++) D.againstWall(pick(D.rng, ['barrel', 'barrel', 'crate', 'crate', 'sack', 'sack', 'chest']));
     if (D.rng() < 0.5) D.againstWall('shelf', { inner: true });
     if (D.rng() < 0.4) D.againstWall('firewood');
-    if (D.rng() < 0.5) D.onWall('candle-sconce', false);
+    D.onWall('candle-sconce', false);
+    D.extras(['cask-rack', 'stool', 'bucket', 'shelf', 'firewood', 'chest']);
   },
   cellar: (D) => {
     for (let i = 0; i < times(D.rng, 4, 9); i++) D.againstWall(pick(D.rng, ['barrel', 'barrel', 'barrel', 'crate', 'sack', 'firewood']));
     if (D.rng() < 0.5) D.near('straw-heap', D.axis().c, D.rng() * 6, 1.5);
     D.onWall('sconce', false);
+    D.extras(['cask-rack', 'crate', 'straw-heap', 'bucket', 'chest', 'stool']);
   },
 };
 
@@ -645,11 +950,15 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
 export function dressRoom(r: RoomSpec, P: InteriorPlan, deps: DressDeps = {}): RoomDressing {
   const seed = deps.seed ?? 0, make = deps.make ?? variantPool();
   const rng = mulberry32(hashSeed(`dress:${r.id}`, seed));
-  const role = roleOf(r, rng);
+  const slot = roleTable(P, seed).get(r.id) ?? { role: roleOf(r, rng), k: 0 };
+  const role = slot.role;
   const keepOut = keepOutFor(r, P);
   const D = new RoomDresser(r, P, keepOut, rng, make, seed, deps.windows);
+  D.k = slot.k; D.role = role;
   if (role !== 'empty') D.shutters();
   RECIPES[role](D);
+  // a floor on how bare a room may be: top it up with plain things that suit any room
+  if (!UNFLOORED.includes(role)) for (const kind of FILL) { if (D.placed.length >= MIN_PROPS) break; D.place(kind); }
   // every family room gets something soft underfoot: a rug laid along the room where a carpet would not fit
   if (FAMILY.includes(role) && !D.placed.some((p) => flat(p.prop))) {
     const { c, u, v } = D.axis();
