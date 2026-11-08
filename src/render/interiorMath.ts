@@ -168,8 +168,12 @@ export function windowsToApertures(rooms: RoomSpec[], windows: WindowInput[], ma
 /** Doors become apertures: to the outside/courtyard (daylight) or portals between rooms (bounce). */
 export function doorsToApertures(plan: InteriorPlan, index: Map<SpaceId, number>): Aperture[] {
   const out: Aperture[] = [];
+  // the natural openings between two cave rooms carry no daylight worth a portal, and the portal's box (its
+  // embrasure, with a hard edge) cut lighter patches into the rock round them: the caves are firelit
+  const cave = new Set(plan.rooms.filter((r) => r.zone === 'cave').map((r) => r.id));
   for (const d of plan.doors) {
     const [s0, s1] = d.spaces;
+    if (cave.has(s0) && cave.has(s1)) continue;
     const i0 = index.get(s0) ?? -1, i1 = index.get(s1) ?? -1;
     const kind = d.kind === 'grille' ? 'grille' : OUTSIDE.has(s0) || OUTSIDE.has(s1) ? 'open' : 'portal';
     const open = d.leaf && d.kind !== 'grille' ? 0 : 1;
