@@ -18,7 +18,7 @@ export const PCLOTH: Record<string, RGB> = {
 export const METAL: Record<string, RGB> = {
   brass: [0.95, 0.7, 0.36], gilt: [0.85, 0.62, 0.26], copper: [0.9, 0.46, 0.26], steel: [0.66, 0.67, 0.7], mirror: [0.5, 0.52, 0.55],
 };
-export const STONE: Record<string, RGB> = { lime: [1, 0.98, 0.94], grey: [0.78, 0.8, 0.82], sand: [1.05, 0.82, 0.66], marble: [0.2, 0.19, 0.19] };
+export const STONE: Record<string, RGB> = { lime: [1, 0.98, 0.94], grey: [0.86, 0.85, 0.82], sand: [1.02, 0.86, 0.72], marble: [0.4, 0.38, 0.38] }; // warm greys, never blue
 /** One dominant textile per room (style guide §2): the variant seed picks it, v % 3. */
 export const TONES: readonly RGB[] = [PCLOTH.crimson, PCLOTH.green, PCLOTH.blue];
 /** Upholstery: velvet in the room's tone, or oxblood leather for tone 2 (libraries and studies). */

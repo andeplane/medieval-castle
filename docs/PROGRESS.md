@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-11-08: no zebra grain, darker prop stone, terrain drawn in culling tiles (branch `claude/project-thread-ns4g2v-furn3`)
+
+Anders, on his Mac (WebGPU, `?furniture=1`) after #70/#71: the hall's tables and benches showed harsh black-and-white grain; the hall's hooded chimneypiece read as white plaster with a grey-blue hood; frame triangles 4.10 M (hall), 3.76 M (chamber), 3.93 M (tower room) against the brief's 1–3 M.
+
+**Wood** (`props/textures.ts woodTex`, the one wood texture of every prop): growth rings 48 → 22 per metre, nearly straight (quarter-sawn), ring contrast 0.22·ring³ → 0.1·ring², ring relief 0.25 → 0.08, pores smooth instead of a stepped −0.2 height (the step drew a hard line every few pixels in the normal map), normal strength 2.5 → 1.5. Scrubbed oak at walking distance; the close capture (`hall-table-close`, about 1 m from the top) shows soft straight grain and the knots.
+
+**Stone** (`props/textures.ts stoneTex`, every prop's stone: hearths, chimneypieces, altar, well, oven): albedo halved to the castle walls' own (linear ≈ 0.3, `texgen.ts LITH_COL`); the `grey` tint warm instead of blue. The hall hood measured 254 → 202 (sRGB, clipped before), the stone wall beside it 120. It is still about 2.5× the wall's light: the hood and the armour standing by the hearth (iron, near black) both read near white in the hall, the same hood in the kitchen is dark. That is light on those props, not their albedo; not changed here (src/light, #71).
+
+**Triangles: where they go.** `scripts/drawcalls.mjs` now also counts triangles per pass, group and mesh. Hall on main (headless WebGL2, `?furniture=1`): AO pre-pass 1.36 M, scene 1.36 M, water reflection 1.15 M, sun shadow 0.36 M. By group over all passes: terrain 2.47 M (the near grid 352k and the far mesh 224k per pass, each one mesh, so three's frustum culling never dropped any of it), castle 0.50 M, 3D stones 0.38 M, vegetation 0.33 M, doors 0.30 M, interior shell and furniture 0.17 M. All furniture together is under 5% of the frame (hall furniture 62k triangles), so cutting props could not reach 3 M; the props with the most triangles are shelves (3.5k each), bookcases (1.7k) and candle sconces (0.45k). Jugs and bowls lost their hidden foot discs and two segments (12 → 10); nothing else on props.
+
+**Terrain tiles** (`world/terrain.ts cullTiles`): the near grid is drawn as 6 × 6 tiles and the far mesh as 8 sectors × 3 bands, sharing the whole meshes' vertex buffers (no copy), each tile bounded by its own vertices. The whole meshes stay, on a layer no camera draws (`UNDRAWN_LAYER`), for the height grid, physics and ground cover that read them by name. Culling only: the same ground is drawn wherever any camera can see it. Tried and dropped: rocks in quarters round the castle (−80k triangles at the hall for +70 draw calls); finer tiles (8 × 8, 10 × 10, 16 far sectors: under 10% fewer triangles, many more draws).
+
+Furniture shadows: at the hall the sun shadow pass draws 363k triangles, of which the interior (shell and furniture together) is 40k; the rest is rocks, castle and doors. Turning off small pieces' `castShadow` would save at most part of that 40k, so it is not changed (no before/after capture).
+
+`__game.state()` (headless WebGL2, 1280×720, `?furniture=1`), main → branch: hall 4.24 M / 398 draws → 3.28 M / 473; chamber 3.81 M / 295 → 2.78 M / 361; tower room 3.95 M / 346 → 2.91 M / 412; kitchen (`great-0`, close to its hearth) 3.10 M / 510.
+
+Tests: `terrain.test.ts` (every triangle of the near and far meshes in exactly one tile; tiles share the vertex buffers, are bounded by their own vertices and keep receiveShadow; the whole meshes undrawn; a camera looking away culls most near tiles and keeps some).
+
+Captures (`castle-plan/furnishing/captures/furn3/`, `before-*` main 4805ede, `after-*` branch): hall, chamber, tower room, hall-table-close, hall-hearth, kitchen.
+
+Not checked: WebGPU and the Mac (headless WebGL2 only; the Mac counted 4.10 M where headless counts 4.24 M at the hall); the hall is still 3.28 M: what is left there is outdoor geometry seen through the hall's windows and drawn three times (AO pre-pass, scene, reflection): castle trim 0.38 M, 3D stones 0.38 M, vegetation 0.33 M, doors 0.30 M, terrain 1.43 M. Cutting those means changing their meshes or the reflection pass, which this branch does not do.
+
 ## 2026-11-08: the caves read as broken stone; the lantern no longer burns out the near wall (branch `claude/project-thread-ns4g2v-caves2`)
 
 Follow-up to #69, from my own captures there: the lantern washed the near walls flat orange, the cavern read as smooth rock, the fungi were pale flakes, the great tower cellar was black at the way out, the rock was meshed on the main thread, and there were no captures of the finds.
