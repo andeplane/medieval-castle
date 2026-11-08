@@ -14,12 +14,13 @@ Now (one owner: the door model in `castle/interior/doorGeom.ts`, the plan's `fit
 Result: 239 of 241 doors swing away from whoever opens them, from either side. One way only: `sallyport-grille` (locked, never opens) and `N0-3>N-cellarstair` (its back sweep into the undercroft N0-3 crosses the sweep of `N0-3>N0-4`, on either jamb). Furniture is not in the way of any of them: `props/dress.ts keepOutFor` already keeps a strip `w/2 + 0.35` wide and `max(1.3, w + 0.5)` deep clear in front of every doorway on both sides, which holds a leaf's arc either way; furniture is placed after the plan and never moves a door.
 
 Tests (all through the same door code the player uses):
-- `doors.test.ts` "opens every castle door away from whoever opens it, from either side, and never moves it out of its seat": all 241 doors, opened by a character 1 m off each side and closed again; the leaf's turning edge never leaves its seat, it opens away (its collider moves half a leaf toward the far side) for 480 of 482 openings, and shut again its matrix is identical to before. On main the leaf shuts in the far seat (see below).
+- `doors.test.ts` "opens every castle door away from whoever opens it, from either side, and never moves it out of its seat": all 241 doors, opened by a character 1 m off each side and closed again; the leaf's turning edge never leaves its seat, it opens away (its collider moves half a leaf toward the far side) for 480 of 482 openings, and shut again its matrix and its collider are identical to before. Checked on main (#64) with the same open/close from both sides: 189 of the 241 doors' colliders came to rest in the other seat, up to 2.8 m from where they were.
 - "never moves a shut leaf except to swing it": standing about near and far, walking through, a request while open, E in the door's plane.
 - `doorswing.test.ts` "walks deep-wall doors from either side": 8 doors in 2.5–3 m walls, the player's motor and camera with `createInteraction` (E): walks up until the crosshair is on the leaf, presses E, the leaf turns about a fixed edge and its latch edge goes ≥ 0.5 m away from the player; the player walks through the open doorway and back (W only) and the leaf does not move; shut, it is where it was. Also the existing "a leaf opened onto a character never overlaps it", now for both ways of every leaf.
 - `world.test.ts` rule 7 checks every leaf both ways (in the doorway or its room, under the ceiling, off the treads, clear of every other sweep both ways); the outdoor-face, seal and "hangs over its own hole" rules read `doorCuts`.
 - `doors.test.ts`: every leaf all through its swing either way stays inside its doorway at every depth; a back-swinging leaf fills its rebate; `swingAwayFrom`.
-- Key paths unchanged and passing.
+- Key paths pass. Their helper now opens each door on the way from the side the path comes from (as a player's E would), so a leaf swings away instead of always forward. A leaf that swings back fills its rebate rather than lapping a stop, so its forward swing stops at about 92° rather than 100° (`lipOf`). Opened forward, `gate2>S2-1` then stood across the route to the windlass.
+- Cost: `fitHinges` takes about 160 ms (it was 55 ms), with the spiral steps filtered to the leaf's height and one matrix per angle. A plan takes about 0.9 s cold; the interior seed tests take about 3.5 s per 16 seeds.
 
 ## 2026-11-08: door batches drawn in one call each; courtyard under the 1000 draw-call budget on WebGPU (branch `claude/project-thread-ns4g2v-court`)
 
@@ -248,7 +249,8 @@ Tests (all through the code the player and NPCs use):
 - `world.test.ts` rule 7 over every seat of every door: in its room or doorway (or, out into the courtyard, clear of every building and with the paving and ground under its bottom edge), under the ceiling, off the spiral steps, out of every other seat's sweep; "reports what it is for" adds a courtyard door with its sill sunk into the paving.
 - `doorswing.test.ts` (#49, Rapier): every seat of every leaf, opened by someone on the other side onto a character in its arc, never overlaps them and they can walk away; the NPC case likewise.
 - `doorLight.test.ts`: every leaf face lit as the space it looks into, shut and open, in both seats, including the edges of a shut leaf (the room's light).
-- Key paths unchanged and passing.
+- Key paths pass. Their helper now opens each door on the way from the side the path comes from (as a player's E would), so a leaf swings away instead of always forward. A leaf that swings back fills its rebate rather than lapping a stop, so its forward swing stops at about 92° rather than 100° (`lipOf`). Opened forward, `gate2>S2-1` then stood across the route to the windlass.
+- Cost: `fitHinges` takes about 160 ms (it was 55 ms), with the spiral steps filtered to the leaf's height and one matrix per angle. A plan takes about 0.9 s cold; the interior seed tests take about 3.5 s per 16 seeds.
 
 Not checked: WebGPU; the `?test=doors` review scene still builds one-way doors (its own wall cut); NPC navigation does not yet use `seat()`; with a thick wall the far seat is ~1 m in, so you walk into the doorway to reach it (reach 2.2 m).
 
