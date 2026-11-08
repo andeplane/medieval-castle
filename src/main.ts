@@ -31,13 +31,13 @@ import { interiorViews } from './camera/interiorViews';
 import { installHooks, type HookWindow } from './debug/hooks';
 import { pointInPoly } from './core/math2d';
 import { Builder } from './castle/builder';
-import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins } from './render/interiorLight';
+import { makeInteriorMaterials, bakeInteriorLight, createInteriorLight, bvhOccluder, sunStateOf, buildShadowSkins, syncFires as syncFireTextures } from './render/interiorLight';
 import { createAutoExposure, gpuLumaReader } from './render/exposure';
 import { createVisibility, shadowInView } from './world/visibility';
 import { wallTorches, type FireSources } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
-import { LightRig } from './light/rig';
-import { threeLightFactory, makeFlameSprites } from './light/three';
+import { FireTable, roomFires } from './light/roomLight';
+import { makeFlameSprites } from './light/three';
 import { linkFlames, flameBrightness, type FlameInstance } from './light/flames';
 import { createRoomFires } from './light/roomFires';
 import type { WorkerPort, FurnitureJobs } from './props/furnishWorker';
@@ -149,7 +149,7 @@ async function main() {
   // furniture (src/props): off until Anders approves it in the castle; ?furniture=1 turns it on.
   // Streamed: a small pool of workers furnishes rooms on demand (props/furnishWorker.ts) and makes the
   // prop textures; the rooms near the camera come in during the first frames (createFurnitureStreamer below)
-  const interiorLight = createInteriorLight();
+  const interiorLight = createInteriorLight(1024, iplan?.rooms ?? []);
   let furnitureJobs: FurnitureJobs | null = null;
   let propTextures: Promise<import('./props/furnishWorker').PropTexSet> | null = null;
   if (interior && params.get('furniture') === '1') {
@@ -379,11 +379,16 @@ async function main() {
   // (?test=room brings its own plan: its torches have no holders)
   // (streamed furniture brings its fires room by room, below)
   const fire: FireSources = furnMats ? { emitters: [], flames: [], group: [], holders: [] } : torches && lit.plan === iplan ? torches : wallTorches(lit.plan, (id) => groupOf.get(id));
-  const fireLights = threeLightFactory(scene);
-  // no shadow-casting fire lights: one cube shadow redraws everything near it six times (+700 calls)
-  const fireRig = new LightRig(fireLights, { shadows: 0, lights: 8 });
-  fireRig.setEmitters(fire.emitters);
-  IM.setDynamicLights(fireLights.lights); IMu.setDynamicLights(fireLights.lights);
+  // each room's fires light that room, every one of them, wherever the camera is (light/roomLight.ts):
+  // one row per room in a table the interior shader sums per pixel; no point lights, so nothing is picked
+  // by distance and nothing shines through a wall into the next room
+  const fireTable = new FireTable(interiorLight.maxRooms), fireSeen = { version: -1 };
+  const roomBox = (id: string) => { const row = bake.roomIndex.get(id), r = lit.plan.rooms.find((x) => x.id === id); return row === undefined || !r ? undefined : { row, box: r }; };
+  {
+    const byRoom = new Map<string, typeof fire.emitters>();
+    fire.holders.forEach((h, i) => { if (!byRoom.has(h.room)) byRoom.set(h.room, []); byRoom.get(h.room)!.push(fire.emitters[i]); });
+    for (const [id, es] of byRoom) { const r = roomBox(id); if (r) fireTable.set(r.row, roomFires(r.box, es)); }
+  }
   let flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
   const sprites = makeFlameSprites(flames, furnMats ? 256 : 0);
   scene.add(sprites.group);
@@ -405,7 +410,7 @@ async function main() {
     const [{ createFurnitureStreamer }, { createRoomSink }] = await Promise.all([import('./props/streamer'), import('./props/roomMeshes')]);
     const groupByKey = new Map(interior.groups.map((g) => [g.key, g]));
     const roomOrder = new Map(interior.plan.rooms.map((r, i) => [r.id, i]));
-    const fires = createRoomFires(fireRig, (fs: FlameInstance[]) => { flames = fs; flameK = new Float32Array(fs.length); sprites.set(fs); });
+    const fires = createRoomFires(fireTable, roomBox, (fs: FlameInstance[]) => { flames = fs; flameK = new Float32Array(fs.length); sprites.set(fs); });
     syncFires = fires.sync;
     const fm = furnMats;
     furnStream = createFurnitureStreamer({
@@ -462,9 +467,8 @@ async function main() {
     syncDoorVis();
     fireT += dt;
     winFlags.set(vis.state.visible, fireGroups);
-    // lights are picked by distance only, never by which rooms are drawn: a torch must not go out
-    // because the camera stepped through a doorway (tests/world.test.ts walks every doorway)
-    fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z]);
+    // every room's fires flicker; nothing depends on where the camera is (tests/world.test.ts)
+    fireTable.update(fireT); syncFireTextures(interiorLight, fireTable, fireSeen);
     sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);
   };
   const exposure = createAutoExposure({ target: renderer, reader: gpuLumaReader(renderer, scenePass.getTexture('output')), fixed: params.has('exposure') ? Number(params.get('exposure')) : null, shot: params.has('shot') });
@@ -550,7 +554,7 @@ async function main() {
         bakeMs: Math.round(bake.ms * 10) / 10, bvhMs: Math.round(bvhMs * 10) / 10, apertures: bake.apertures.length,
       },
       windowsSeeThrough: winTagged,
-      fire: { ...fireRig.stats(), flames: flames.length, source: furnStream ? 'furniture' : 'wall torches' },
+      fire: { ...fireTable.stats(), flames: flames.length, source: furnStream ? 'furniture' : 'wall torches' },
       physics: { ...physics.stats(), ...play.timings },
     }),
   }, window as unknown as HookWindow, systemClock);

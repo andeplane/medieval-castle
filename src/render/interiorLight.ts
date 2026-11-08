@@ -12,16 +12,17 @@
 // the castle (three-mesh-bvh), solve the room fluxes and pack the per-room table into one float
 // texture. It re-runs when the sun moves or a door opens. Pure parts live in interiorMath.ts.
 import * as THREE from 'three/webgpu';
-import { IrradianceNode } from 'three/webgpu';
+import { LightingNode } from 'three/webgpu';
 import * as T3 from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix } from 'three/tsl';
-import { interiorIrradiance, paneGlow } from './interiorShader';
+import { uniform, lights, uv, vec2, fract, min, float, smoothstep, mix, isolate } from 'three/tsl';
+import { interiorIrradiance, paneGlow, fireIrradiance } from './interiorShader';
+import { FIRE_W, MAX_FIRES, type FireTable } from '../light/roomLight';
 import { tagBoxes } from '../world/visibility';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import {
-  type Aperture, type Daylight, type WindowInput, AP_TEXELS, apertureFrame, ceilingSkins, doorsToApertures, passageSkins, packTable, skinQuads, solveRooms, tagTriangles, windowsToApertures,
+  type Aperture, type Daylight, type WindowInput, type RoomGrid, AP_TEXELS, apertureFrame, ceilingSkins, doorsToApertures, fillRoomGrid, passageSkins, packTable, roomGridFor, skinQuads, solveRooms, tagTriangles, windowsToApertures,
 } from './interiorMath';
 
 import { MAX_AP } from './interiorShader';
@@ -52,12 +53,49 @@ export interface InteriorLight {
   gain: THREE.UniformNode<'float', number>;
   /** glow multiplier for the inside of the panes */
   glow: THREE.UniformNode<'float', number>;
+  /** each room's fires (light/roomLight.ts FireTable.data), one row per room */
+  fires: THREE.DataTexture;
+  /** this frame's flicker of every fire (FireTable.flick), MAX_FIRES per row */
+  flick: THREE.DataTexture;
+  /** which room a point is in, for surfaces with no room tag (door leaves); filled by the bake */
+  grid: { texture: THREE.Data3DTexture; origin: THREE.UniformNode<'vec3', THREE.Vector3>; cell: THREE.UniformNode<'vec3', THREE.Vector3>; size: THREE.UniformNode<'vec3', THREE.Vector3>; model: RoomGrid };
 }
 
-export function createInteriorLight(maxRooms = 1024): InteriorLight {
-  const table = new THREE.DataTexture(new Float32Array(TEX_W * maxRooms * 4), TEX_W, maxRooms, THREE.RGBAFormat, THREE.FloatType);
-  table.minFilter = table.magFilter = THREE.NearestFilter; table.generateMipmaps = false; table.needsUpdate = true;
-  return { table, maxRooms, floor: uniform(new THREE.Vector3(0.145, 0.145, 0.155)), gain: uniform(12), glow: uniform(1) };
+const nearest = <T extends THREE.Texture>(t: T) => { t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
+
+/** `rooms`: the plan the bake will light (its bounds size the room grid; the bake fills it). */
+export function createInteriorLight(maxRooms = 1024, rooms: InteriorPlan['rooms'] = []): InteriorLight {
+  const table = nearest(new THREE.DataTexture(new Float32Array(TEX_W * maxRooms * 4), TEX_W, maxRooms, THREE.RGBAFormat, THREE.FloatType));
+  const fires = nearest(new THREE.DataTexture(new Float32Array(FIRE_W * maxRooms * 4), FIRE_W, maxRooms, THREE.RGBAFormat, THREE.FloatType));
+  const flick = nearest(new THREE.DataTexture(new Float32Array(MAX_FIRES * maxRooms).fill(1), MAX_FIRES, maxRooms, THREE.RedFormat, THREE.FloatType));
+  const model = roomGridFor(rooms.slice(0, maxRooms));
+  const tex = nearest(new THREE.Data3DTexture(model.data, model.size[0], model.size[1], model.size[2]));
+  tex.format = THREE.RedFormat; tex.type = THREE.FloatType;
+  const v = (a: number[]) => uniform(new THREE.Vector3(a[0], a[1], a[2]));
+  return {
+    table, maxRooms, floor: uniform(new THREE.Vector3(0.145, 0.145, 0.155)), gain: uniform(12), glow: uniform(1), fires, flick,
+    grid: { texture: tex, origin: v(model.origin), cell: v(model.cell), size: v(model.size), model },
+  };
+}
+
+/** Copy a FireTable into the light's textures: the rows when they changed, the flicker every call. */
+export function syncFires(light: InteriorLight, t: FireTable, seen: { version: number }) {
+  if (seen.version !== t.version) { (light.fires.image.data as Float32Array).set(t.data); light.fires.needsUpdate = true; seen.version = t.version; }
+  (light.flick.image.data as Float32Array).set(t.flick); light.flick.needsUpdate = true;
+}
+
+/** Daylight (irradiance only, as before) plus firelight: diffuse irradiance, and for metals (brass, iron)
+ * a rough reflection of it, so a candlestick catches the fire it stands by. */
+class InteriorEnvNode extends LightingNode {
+  constructor(private day: THREE.Node, private fire: THREE.Node) { super(); }
+  setup(builder: THREE.NodeBuilder) {
+    const ctx = builder.context as unknown as Record<'irradiance' | 'radiance' | 'iblIrradiance', THREE.Node & { addAssign(n: unknown): void }>;
+    const fire = isolate(this.fire) as unknown as THREE.Node<'vec3'>;
+    ctx.irradiance.addAssign((this.day as THREE.Node<'vec3'>).add(fire));
+    ctx.radiance.addAssign(fire.mul(1 / Math.PI));
+    ctx.iblIrradiance.addAssign(fire);
+    return null;
+  }
 }
 
 /**
@@ -69,12 +107,12 @@ export function createInteriorLight(maxRooms = 1024): InteriorLight {
 export function makeInteriorMaterials(M: Record<InteriorKey, THREE.MeshStandardNodeMaterial>, sun: THREE.Light | null, light: InteriorLight): InteriorMaterialSet {
   const base = sun ? [sun] : [];
   const sunOnly = lights(base);
-  const irr = interiorIrradiance(light);
+  const irr = interiorIrradiance(light), fire = fireIrradiance(light);
   const mk = (src: THREE.MeshStandardNodeMaterial, name: string) => {
     const m = src.clone() as THREE.MeshStandardNodeMaterial;
     m.name = sun ? `interior-${name}` : `interior-under-${name}`;
     m.lightsNode = sunOnly;
-    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new IrradianceNode(irr);
+    (m as unknown as { setupEnvironment: () => unknown }).setupEnvironment = () => new InteriorEnvNode(irr, fire);
     return m;
   };
   const glass = mk(M.glass, 'glass');
@@ -235,6 +273,7 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
   const rooms = opts.plan.rooms.slice(0, opts.light.maxRooms);
   const index = new Map(rooms.map((r, i) => [r.id, i] as [SpaceId, number]));
   const triangles = tagGroups(groups, rooms, index, opts.maxWall ?? 4.5);
+  fillRoomGrid(opts.light.grid.model, rooms); opts.light.grid.texture.needsUpdate = true;
   const t1 = now();
   const aps: (Aperture & { group?: string })[] = [...windowsToApertures(rooms, opts.windows), ...doorsToApertures({ ...opts.plan, rooms }, index)];
   const groupOf = new Map<number, string>();

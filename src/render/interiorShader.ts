@@ -113,7 +113,7 @@ export function fireIrradiance(light: InteriorLight) {
     If(r.lessThan(0), () => {
       const g = light.grid;
       const q = P.add(N.mul(0.3)).sub(g.origin).div(g.cell).floor();
-      const c = clamp(ivec3(q), ivec3(0, 0, 0), ivec3(g.size).sub(1));
+      const c = ivec3(clamp(q, vec3(0), g.size.sub(1)));
       r.assign(int(texture3DLoad(g.texture, c).x.add(0.5)).sub(1));
     });
     const E = vec3(0).toVar();
