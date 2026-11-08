@@ -37,7 +37,6 @@ import { pointInPoly, type V2 } from '../src/core/math2d';
 import { bakeInteriorLight, createInteriorLight } from '../src/render/interiorLight';
 import type { WindowInput } from '../src/render/interiorMath';
 import { createVisibility, drawnSpaces, roomGraph } from '../src/world/visibility';
-import { MeshBVH, SAH } from 'three-mesh-bvh';
 import * as T3 from 'three';
 import { buildTerrain } from '../src/world/terrain';
 import { PAVE_Y } from '../src/castle/paving';
@@ -51,6 +50,7 @@ import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight'
 import { OUTDOOR_TAG } from '../src/render/interiorMath';
 import type { LightEmitter } from '../src/light/types';
 import { triGrid } from './helpers/triGrid';
+import { rayIndex } from './helpers/rays';
 
 type V3 = [number, number, number];
 const OUTDOOR = new Set(['courtyard', 'outside']);
@@ -69,14 +69,8 @@ function trianglesOf(B: Builder): Tri[] {
   return out;
 }
 const mkTri = (a: V3, b: V3, c: V3): Tri => ({ a, b, c, lo: [0, 1, 2].map((j) => Math.min(a[j], b[j], c[j])) as V3, hi: [0, 1, 2].map((j) => Math.max(a[j], b[j], c[j])) as V3 });
-/** A BVH over triangles, for rays (three-mesh-bvh). */
-function bvhOf(tris: Tri[]): MeshBVH {
-  const list = tris.length ? tris : [mkTri([0, -1e4, 0], [1e-3, -1e4, 0], [0, -1e4, 1e-3])];
-  const a = new Float32Array(list.length * 9);
-  list.forEach((t, i) => { a.set(t.a, i * 9); a.set(t.b, i * 9 + 3); a.set(t.c, i * 9 + 6); });
-  const g = new T3.BufferGeometry(); g.setAttribute('position', new T3.BufferAttribute(a, 3));
-  return new MeshBVH(g, { strategy: SAH });
-}
+/** A BVH over triangles, for rays: `hits(ray, near, far)` as three-mesh-bvh's raycastFirst (helpers/rays.ts, ~4× faster under coverage). */
+const bvhOf = (tris: Tri[]) => rayIndex(tris);
 /** World positions of every mesh under an object, as one non-indexed soup. */
 function meshPositions(root: THREE.Object3D): number[] {
   const out: number[] = [];
@@ -703,7 +697,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
           const dv = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]], dist = Math.hypot(dv[0], dv[1], dv[2]);
           if (dist > 220 || dist < 0.05) continue;
           ray.origin.set(eye[0], eye[1], eye[2]); ray.direction.set(dv[0] / dist, dv[1] / dist, dv[2] / dist);
-          if (occ.raycastFirst(ray, T3.DoubleSide, 0, dist - 0.02)) continue;
+          if (occ.hits(ray, 0, dist - 0.02)) continue;
           seen++;
           for (const s of undrawn) faults.set(`${op.id}:${s}`, `${op.id}: ${s} not drawn, seen from ${label}${open ? ' (doors open)' : ''}`);
         }
@@ -839,7 +833,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
             const p = on(d, u, leaf.t), tgt = new T3.Vector3(p[0], y, p[1]), dist = tgt.distanceTo(eye);
             ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
             rays++;
-            if (!sets.some((b) => b.raycastFirst(ray, T3.DoubleSide, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
+            if (!sets.some((b) => b.hits(ray, 0, dist + 3))) { bad++; if (!first) first = `${across} aside, ${back} m back, gap at (${u.toFixed(2)}, ${(y - y0).toFixed(2)})`; }
           }
         }
         if (bad) faults.push(`${d.id}: open past its shut leaf from ${s} (${bad} rays, e.g. ${first})`);
@@ -891,7 +885,7 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
           ray.origin.copy(eye); ray.direction.copy(tgt).sub(eye).normalize();
           rays++;
           // the ray runs on 7 m past the doorway: well down into the ground on either side
-          if (!occ.raycastFirst(ray, T3.DoubleSide, 0, 12)) { bad++; if (!first) first = `${back} m ${sg < 0 ? 'before' : 'past'} it, at ${t.toFixed(2)} through, ${(y - d.centre[1]).toFixed(2)} up`; }
+          if (!occ.hits(ray, 0, 12)) { bad++; if (!first) first = `${back} m ${sg < 0 ? 'before' : 'past'} it, at ${t.toFixed(2)} through, ${(y - d.centre[1]).toFixed(2)} up`; }
         }
       }
       if (bad) faults.push(`${d.id}: ${bad} rays to the sky through the threshold (e.g. from ${first})`);
