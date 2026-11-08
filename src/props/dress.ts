@@ -517,6 +517,11 @@ export class RoomDresser {
     if (k.placement === 'wall') return this.onWall(kind, kind !== 'candle-sconce' && kind !== 'sconce');
     return this.againstWall(kind) ?? this.near(kind, this.axis().c, this.rng() * 6, 1.5);
   }
+  /** A room's focal piece: free-standing near the middle, else against any wall, else anywhere it fits. */
+  focal(kind: string, yaw = 0): Placed | null {
+    const { c } = this.axis();
+    return this.near(kind, c, yaw, 1.2) ?? this.againstWall(kind) ?? this.near(kind, c, yaw + Math.PI / 2, 3);
+  }
   /** The room's own choice of extra pieces: the ones whose bit is set in k + 1, so two rooms of one role
    * never pick the same set (k is unique within a role). */
   extras(list: readonly string[]) {
@@ -815,7 +820,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
   },
   'well-room': (D) => {
     // the well head in the middle with its windlass, buckets and casks of water round the walls
-    D.near('well', D.axis().c, D.rng() * 6, 1.0);
+    D.focal('well', D.rng() * 6);
     D.againstWall('bucket'); D.againstWall('bucket');
     for (let i = 0; i < 2; i++) D.againstWall('barrel');
     D.againstWall('bench');
@@ -860,7 +865,8 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
   nursery: (D) => {
     // the cradle by the fire, the nurse's bed and stool, a chest of swaddling, a rug
     const h = hearthGroup(D, { chairs: 0, lamp: false, stool: false });
-    if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('cradle', [h.at[0] + n[0] * (f + 1.4) + t[0] * 0.9, h.at[2] + n[1] * (f + 1.4) + t[1] * 0.9], h.yaw + Math.PI / 2, 0.4); } else D.near('cradle', D.axis().c, 0, 1);
+    if (h) { const n = frontOf(h), t: V2 = [n[1], -n[0]], f = h.prop.bounds.max[2]; D.at('cradle', [h.at[0] + n[0] * (f + 1.4) + t[0] * 0.9, h.at[2] + n[1] * (f + 1.4) + t[1] * 0.9], h.yaw + Math.PI / 2, 0.4); }
+    if (!D.placed.some((p) => p.prop.kind.name === 'cradle')) D.focal('cradle');
     D.againstWall('bed'); D.againstWall('chest'); D.againstWall('stool');
     D.onWall('tapestry'); D.onWall('candle-sconce', false);
     D.extras(['rug', 'stool', 'cupboard', 'chair', 'drying-rack', 'chest']);
@@ -925,7 +931,7 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
   },
   watch: (D) => {
     // the watch room at the top of a tower: a brazier to keep warm, a bench under the slits, arms
-    D.near('brazier', D.axis().c, 0, 1);
+    D.focal('brazier');
     D.againstWall('bench'); D.againstWall('weapon-rack');
     D.againstWall('chest'); D.againstWall('stool');
     D.onWall('sconce', false);
@@ -950,7 +956,9 @@ const RECIPES: Record<Role, (D: RoomDresser) => void> = {
 export function dressRoom(r: RoomSpec, P: InteriorPlan, deps: DressDeps = {}): RoomDressing {
   const seed = deps.seed ?? 0, make = deps.make ?? variantPool();
   const rng = mulberry32(hashSeed(`dress:${r.id}`, seed));
-  const slot = roleTable(P, seed).get(r.id) ?? { role: roleOf(r, rng), k: 0 };
+  const fixed = fixedRole(r), dealt = roleTable(P, seed).get(r.id);
+  // a room the plan does not hold as given (tests): its kind's role, or one of its own
+  const slot = dealt && (!fixed || dealt.role === fixed) ? dealt : { role: fixed ?? roleOf(r, rng), k: 0 };
   const role = slot.role;
   const keepOut = keepOutFor(r, P);
   const D = new RoomDresser(r, P, keepOut, rng, make, seed, deps.windows);

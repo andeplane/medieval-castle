@@ -4,7 +4,7 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { dressPlan, dressRoom, roleOf, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { dressPlan, dressRoom, roleOf, roleTable, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
@@ -84,15 +84,16 @@ describe('dressing helpers', () => {
     expect(roleOf(room('x', R.poly, 'gate'), r)).toBe('gate');
     expect(roleOf(room('x', R.poly, 'passage'), r)).toBe('passage');
     expect(roleOf(room('x', R.poly, 'stair'), r)).toBe('empty');
-    expect(roleOf(room('x', R.poly, 'undercroft', 0), r)).toBe('cellar');
-    expect(roleOf(room('x', R.poly, 'tower', -1), r)).toBe('cellar');
-    expect(['store', 'empty']).toContain(roleOf(room('x', [[0, 0], [2, 0], [2, 2], [0, 2]]), r));
     for (let i = 0; i < 20; i++) {
-      expect(['kitchen', 'store', 'guard']).toContain(roleOf(room('x', R.poly, 'chamber', 0), r));
-      expect(['guard', 'study', 'bedchamber', 'store']).toContain(roleOf(room('x', R.poly, 'chamber', 1), r));
-      expect(['bedchamber', 'solar', 'study']).toContain(roleOf(room('x', R.poly, 'chamber', 5), r));
+      expect(POOLS.ground).toContain(roleOf(room('x', R.poly, 'undercroft', 0), r));
+      expect(POOLS.deep).toContain(roleOf(room('x', R.poly, 'tower', -1), r));
+      expect(['store', 'garderobe']).toContain(roleOf(room('x', [[0, 0], [2, 0], [2, 2], [0, 2]]), r));
+      expect(['kitchen', ...POOLS.ground]).toContain(roleOf(room('x', R.poly, 'chamber', 0), r));
+      expect(POOLS.low).toContain(roleOf(room('x', R.poly, 'chamber', 1), r));
+      expect(POOLS.high).toContain(roleOf(room('x', R.poly, 'chamber', 5), r));
     }
   });
+
 });
 
 const front = (p: Placed): V2 => [Math.sin(p.yaw), Math.cos(p.yaw)];
@@ -156,7 +157,7 @@ describe('dressing a small plan', () => {
     const P: InteriorPlan = { rooms: [U], doors: [door('w', ['outside', 'A'], -0.5, 1.5, [1, 0], [0, 1]), door('e', ['A', 'x'], 7.5, 1.5, [1, 0], [0, 1])], stairs: [] };
     for (let seed = 0; seed < 6; seed++) {
       const d = dressRoom(U, P, { seed, make });
-      expect(d.placed.filter((p) => p.prop.kind.blocksNav)).toHaveLength(0);
+      expect(d.placed.filter((p) => p.prop.kind.blocksNav).map((p) => p.prop.kind.name)).toEqual([]);
       expect(d.placed.some((p) => p.prop.kind.name === 'tapestry')).toBe(false);
     }
     expect(dressRoom({ ...U, kind: 'stair' }, P, { make }).placed).toHaveLength(0);
@@ -208,7 +209,7 @@ describe('dressing the castle plan', () => {
     const furnished = D.rooms.filter((r) => r.placed.length > 0).length;
     expect(furnished).toBeGreaterThan(P.rooms.length * 0.85);
     const tris = D.rooms.reduce((s, r) => s + r.placed.reduce((t, p) => t + p.prop.mesh.triangles, 0), 0);
-    expect(tris).toBeLessThan(1_200_000); // 19th-century rooms ~960k; + medieval sets, shutters and hangings on windowless outer walls ~1.14M; culling shows a few groups at a time
+    expect(tris).toBeLessThan(1_250_000); // 19th-century rooms ~960k; + medieval sets, shutters, room roles ~1.19M; culling shows a few groups at a time
     for (const [, placed] of D.byGroup) expect(placed.reduce((t, p) => t + p.prop.mesh.triangles, 0)).toBeLessThan(60_000);
     const rooms = new Map(P.rooms.map((r) => [r.id, r]));
     for (const d of D.rooms) {
@@ -389,5 +390,44 @@ describe('dressing the castle plan', () => {
       }
     }
     expect(bad).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------- roles
+  it('deals the castle its medieval household: every role, two kitchens, far fewer bedchambers', () => {
+    const T = roleTable(P), n = (role: string) => [...T.values()].filter((x) => x.role === role).length;
+    for (const role of ['kitchen', 'buttery', 'pantry', 'brewhouse', 'bakehouse', 'laundry', 'armoury', 'guard', 'wine-cellar', 'dungeon', 'well-room',
+      'lord', 'lady', 'wardrobe', 'garderobe', 'nursery', 'library', 'steward', 'treasury', 'sewing', 'physician', 'mews', 'watch', 'hall', 'chapel']) expect(n(role), role).toBeGreaterThan(0);
+    expect(n('kitchen')).toBeGreaterThanOrEqual(2);
+    for (const one of ['lord', 'lady', 'treasury', 'hall', 'chapel']) expect(n(one), one).toBe(1);
+    expect(n('bedchamber')).toBeLessThan(35);
+    expect(roleTable(P)).toBe(T); // dealt once per plan and seed
+    expect(roleTable(P, 7)).not.toBe(T);
+    // the k numbers count the rooms of each role from 0
+    const ks = new Map<string, number[]>();
+    for (const x of T.values()) ks.set(x.role, [...(ks.get(x.role) ?? []), x.k]);
+    for (const [, v] of ks) expect([...v].sort((a, b) => a - b)).toEqual(v.map((_, i) => i));
+    for (const d of D.rooms) expect(d.role).toBe(T.get(d.room)!.role);
+  });
+  it('furnishes no two rooms of one role with the same set of pieces', () => {
+    const seen = new Map<string, string>(), dup: string[] = [];
+    for (const d of D.rooms) {
+      if (d.role === 'empty' || d.role === 'passage') continue;
+      const sig = `${d.role}|${d.placed.map((p) => p.prop.kind.name).sort().join(',')}`;
+      if (seen.has(sig)) dup.push(`${seen.get(sig)}=${d.room}`); else seen.set(sig, d.room);
+    }
+    expect(dup).toEqual([]);
+  });
+  it('gives every room with a floor at least MIN_PROPS pieces', () => {
+    const low = D.rooms.filter((d) => !UNFLOORED.includes(d.role) && d.placed.length < MIN_PROPS).map((d) => `${d.room} ${d.role} ${d.placed.length}`);
+    expect(low).toEqual([]);
+    expect(D.rooms.find((d) => d.role === 'chapel')!.placed.length).toBeGreaterThanOrEqual(MIN_PROPS);
+  });
+  it('builds each role round its focal piece', () => {
+    const focal: Record<string, string[]> = { kitchen: ['spit-hearth'], buttery: ['cask-rack'], 'wine-cellar': ['cask-rack'], brewhouse: ['mash-tun'], bakehouse: ['bread-oven'], laundry: ['wash-tub'], armoury: ['weapon-rack'],
+      dungeon: ['shackles'], 'well-room': ['well'], lord: ['four-poster'], lady: ['four-poster'], garderobe: ['privy'], nursery: ['cradle'], library: ['bookcase', 'writing-desk'], steward: ['counting-table'],
+      treasury: ['chest'], sewing: ['loom'], mews: ['perch'], watch: ['brazier'], wardrobe: ['drying-rack', 'chest'] };
+    const miss: string[] = [];
+    for (const d of D.rooms) { const f = focal[d.role]; if (f && !d.placed.some((p) => f.includes(p.prop.kind.name))) miss.push(`${d.room} ${d.role}`); }
+    expect(miss).toEqual([]);
   });
 });
