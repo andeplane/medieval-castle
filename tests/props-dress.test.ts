@@ -4,7 +4,7 @@ import type { InteriorPlan, RoomSpec, DoorSpec } from '../src/castle/interior/ty
 import { convexOverlap } from '../src/castle/interior/geom';
 import { pointInPoly, type V2 } from '../src/core/math2d';
 import { mulberry32 } from '../src/core/rng';
-import { dressPlan, dressRoom, roleOf, roleTable, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
+import { RoomDresser, dressPlan, dressRoom, roleOf, roleTable, POOLS, MIN_PROPS, UNFLOORED, walkable, grow, keepOutFor, doorEntry, wallsOf, footRect, strip, groupKey, variantPool, yawFacing, VARIANTS, FAMILY, TORCH_ROLES, TONED, SEAT_GAP, flat, type Dressing, type RoomDressing } from '../src/props/dress';
 import { tone } from '../src/props/period';
 import type { Placed } from '../src/props/place';
 import { makeProp } from '../src/props/kit';
@@ -70,6 +70,17 @@ describe('dressing helpers', () => {
       const g = grow(sq, 0.5), xs = g.map((p) => p[0]), zs = g.map((p) => p[1]);
       expect(Math.min(...xs)).toBeCloseTo(-0.5); expect(Math.max(...xs)).toBeCloseTo(2.5); expect(Math.min(...zs)).toBeCloseTo(-0.5); expect(Math.max(...zs)).toBeCloseTo(1.5);
     }
+  });
+  it('a wall is solid unless a window opens in it (or in a facet just off it, as in a round room)', () => {
+    const win = (c: V2, n: V2): WindowFace => ({ room: 'A', c, n, t: [n[1], -n[0]], w: 1, y0: 11, ys: 12.5, y1: 13, slit: false });
+    const mk = (ws: WindowFace[]) => new RoomDresser(R, plan, [], mulberry32(1), variantPool(), 0, ws);
+    const south = (D: RoomDresser) => D.walls.find((w) => w.n[0] < -0.9)!; // the east wall, x = 6, facing -x
+    expect(mk([]).solid(south(mk([])))).toBe(false); // windows unknown: only inner walls are solid
+    const on = mk([win([6, 2.5], [-1, 0])]), off = mk([win([5.7, 2.5], [-1, 0])]), other = mk([win([0, 2.5], [1, 0])]);
+    expect(on.solid(south(on))).toBe(false);
+    expect(off.solid(south(off))).toBe(false);
+    expect(other.solid(south(other))).toBe(true);
+    expect(off.wallAt(off.windows[0])).toBeNull();
   });
   it('variant pool reuses meshes', () => {
     let built = 0;
