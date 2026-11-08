@@ -66,6 +66,9 @@ import { createStatsOverlay } from './ui/statsOverlay';
 import { FrameStats, pixelRatio, gpuFrameTimes } from './render/perf';
 import { ResolutionGovernor, startRatio, gtaoSizeFor } from './render/resolution';
 import { runBench, benchTable, BENCH_STEPS, type BenchRow } from './debug/bench';
+import { CAVE_ZONE } from './castle/interior/caves';
+import { caveFires } from './castle/interior/caveGeom';
+import { CARRIED_LANTERN, lanternAt, lanternLit } from './player/lantern';
 
 const params = new URLSearchParams(location.search);
 /** Doors that never open: the sally-port grille on the far bank (the moat tunnel is a dead end). */
@@ -130,13 +133,18 @@ async function main() {
     revetment = revetmentPlan({ island: ISLAND, groundAt: heightAt, rng: rngFor('revetment'), exclude: (x, z) => pointInPoly(bridge!.footprint, x, z) });
     revetmentTriangles = buildRevetment(builder, revetment, rngFor('revetment-stones'));
   }
-  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave };
+  const mats = { old: M.old, new: M.new, trim: M.trim, slate: M.slate, lead: M.lead, wood: M.wood, iron: M.iron, void: M.void, glass: M.glass, pave: M.pave, rock: M.rock, pool: M.pool, glow: M.glow };
   // interiors: rooms, doorways, embrasures, stairs, cellars and tunnels; carves the exterior bins in place
   // wall torches (render/interiorFire.ts) when there is no furniture: placed on the plan, their holders
   // built by the shell into each room's group, their flames and lights fed to the light rig below
   await breathe();
   const iplan = params.get('interior') === '0' || test === 'stairs' ? null : planInterior();
   const torches = iplan && params.get('furniture') !== '1' ? wallTorches(iplan, (id) => groupKey(iplan.rooms.find((r) => r.id === id)!)) : null;
+  // the caves' own fire: the smugglers' lantern on its crate (its body is cave geometry, not a torch holder)
+  if (torches && iplan?.caves) {
+    const cf = caveFires(iplan.caves, groupKey(iplan.rooms.find((r) => r.zone === CAVE_ZONE)!));
+    torches.emitters.push(...cf.emitters); torches.flames.push(...cf.flames); torches.group.push(...cf.group);
+  }
   const interior = iplan ? buildInterior(mats, builder, { heightAt, plan: iplan, torches: torches?.holders }) : null;
   // every stone of the castle (D.1) is laid out in a worker while the land, trees and floors are made
   // (castle/stones/offThread.ts); the faces are final once the interior has carved its doorways
@@ -189,6 +197,7 @@ async function main() {
   const keys = ['old', 'new', 'trim', 'wood', 'iron', 'glass'] as const;
   const swap = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IM[k]]));
   const swapUnder = new Map<THREE.Material, THREE.Material>(keys.map((k) => [M[k], IMu[k]]));
+  for (const k of ['rock', 'pool', 'glow'] as const) swapUnder.set(M[k], IMu.adopt(M[k])); // the caves: underground only
   let lit: { groups: InteriorGroup[]; plan: InteriorPlan; windows: WindowInput[] } = { groups: [], plan: { rooms: [], doors: [], stairs: [] }, windows: [] };
   const shells: THREE.Object3D[] = [castle];
   if (interior) {
@@ -383,6 +392,10 @@ async function main() {
   // no shadow-casting fire lights: one cube shadow redraws everything near it six times (+700 calls)
   const fireRig = new LightRig(fireLights, { shadows: 0, lights: 8 });
   fireRig.setEmitters(fire.emitters);
+  // the lantern the player carries in the caves (player/lantern.ts): one more mobile source of the rig
+  const caveRooms = new Set(lit.plan.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id));
+  const lamp = caveRooms.size ? fireRig.add(CARRIED_LANTERN, true) : -1;
+  const lookDir = new THREE.Vector3();
   IM.setDynamicLights(fireLights.lights); IMu.setDynamicLights(fireLights.lights);
   let flames = linkFlames(fire.flames, fire.emitters), flameK = new Float32Array(flames.length);
   const sprites = makeFlameSprites(flames, furnMats ? 256 : 0);
@@ -464,6 +477,11 @@ async function main() {
     winFlags.set(vis.state.visible, fireGroups);
     // lights are picked by distance only, never by which rooms are drawn: a torch must not go out
     // because the camera stepped through a doorway (tests/world.test.ts walks every doorway)
+    if (lamp >= 0) {
+      camera.getWorldDirection(lookDir);
+      fireRig.move(lamp, lanternAt([camera.position.x, camera.position.y, camera.position.z], [lookDir.x, lookDir.y, lookDir.z]));
+      fireRig.setScale(lamp, lanternLit(vis.state.from, caveRooms) ? 1 : 0);
+    }
     fireRig.update(fireT, dt, [camera.position.x, camera.position.y, camera.position.z]);
     sprites.update(flameBrightness(flames, fireT, 1, flameK), fireT);
   };

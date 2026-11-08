@@ -4,7 +4,8 @@
 // from the landing you saw the outdoor-lit ground and, under it, the water's sky reflection, never a step.
 // Over the whole castle: vertical rays through every room, from just under its ceiling to just over its
 // floor, may not meet the rendered terrain, the water or the courtyard paving. A tunnel's room is the box
-// round its whole sloping run, so there the rays run from its own crown down to its own floor.
+// round its whole sloping run, so there the rays run from its own crown down to its own floor; so do the
+// caves' (castle/interior/caves.ts caveSpan: a chamber's dome, a passage's floor line), which run under the moat.
 import { describe, expect, test } from 'vitest';
 import * as THREE from 'three/webgpu';
 import { MeshBVH } from 'three-mesh-bvh';
@@ -15,6 +16,7 @@ import { buildCastle } from '../src/castle/castle';
 import { buildInterior } from '../src/castle/interior/index';
 import { pointInPoly, edgeDist, type V2 } from '../src/core/math2d';
 import { floorAlong } from '../src/render/interiorFire';
+import { caveSpan } from '../src/castle/interior/caves';
 import { mats } from './world';
 
 /** World-space triangle soup of a mesh as a BVH (position only). */
@@ -57,7 +59,8 @@ describe('outdoor surfaces stay out of the rooms', () => {
       const tunnel = plan.tunnels.find((t) => t.room === r.id);
       for (const [x, z] of samples(r.poly, 0.2, 0.03)) {
         rays++;
-        const y0 = tunnel ? floorAlong(tunnel.path, [x, z]) : r.y0, y1 = tunnel ? y0 + tunnel.crown : r.y1;
+        const cave = plan.caves ? caveSpan(plan.caves, r.id, [x, z]) : null;
+        const y0 = tunnel ? floorAlong(tunnel.path, [x, z]) : cave ? cave.floor : r.y0, y1 = tunnel ? y0 + tunnel.crown : cave ? cave.ceil : r.y1;
         ray.origin.set(x, y1 - 0.02, z); ray.direction.copy(down);
         for (const [name, bvh] of surfaces) {
           const h = bvh.raycastFirst(ray, T3.DoubleSide, 0, y1 - y0 - 0.04);

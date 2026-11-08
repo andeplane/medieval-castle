@@ -219,7 +219,7 @@ const AREA = (r: RoomSpec) => { const p = r.poly; let s = 0; for (let i = 0; i <
 /** The role a room's kind fixes (hall, chapel, gate, passage, stairs), or null when the castle's plan
  * deals it one (roleTable). */
 export function fixedRole(r: RoomSpec): Role | null {
-  if (r.kind === 'stair' || r.kind === 'wallwalk') return 'empty';
+  if (r.kind === 'stair' || r.kind === 'wallwalk' || r.zone === 'cave') return 'empty'; // the caves bring their own finds (castle/interior/caveGeom.ts)
   if (r.kind === 'hall') return 'hall';
   if (r.kind === 'chapel') return 'chapel';
   if (r.kind === 'gate') return 'gate';
