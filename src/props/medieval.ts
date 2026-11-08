@@ -530,7 +530,7 @@ export const basket: PropKind = {
   build(m, r) {
     const R = range(r, 0.2, 0.3), H = range(r, 0.22, 0.4), ph = r() * 6;
     m.tinted(jitterTint(r, WICKER, 0.1), () => {
-      m.lathe('straw', [[R * 0.78, 0.004], [R * 0.95, H * 0.5], [R, H]], 10, { capBottom: true, wobble: (th, y) => 1 + Math.sin(th * 5 + ph + y * 8) * 0.02 });
+      m.lathe('straw', [[R * 0.78, 0], [R * 0.95, H * 0.5], [R, H]], 10, { capBottom: true, wobble: (th, y) => 1 + Math.sin(th * 5 + ph + y * 8) * 0.02 });
       m.tube('straw', Array.from({ length: 11 }, (_, i) => { const a = (i / 10) * Math.PI * 2; return [Math.cos(a) * R, H, Math.sin(a) * R] as V3; }), 0.014, 4, [false, false]);
       if (r() < 0.4) m.tube('straw', Array.from({ length: 7 }, (_, i) => { const a = (i / 6) * Math.PI; return [Math.cos(a) * R * 0.95, H + Math.sin(a) * R * 0.9, 0] as V3; }), 0.012, 4, [false, false]);
     });
