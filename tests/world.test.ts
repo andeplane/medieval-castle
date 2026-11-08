@@ -47,6 +47,7 @@ import { courtyard, stairTowerPoly } from '../src/castle/layout';
 import { StoneSet } from '../src/castle/stones/set';
 import { wallTorches } from '../src/render/interiorFire';
 import { FireTable, roomFires, fireAt, MAX_FIRES } from '../src/light/roomLight';
+import { OUTDOOR_TAG } from '../src/render/interiorMath';
 import type { LightEmitter } from '../src/light/types';
 
 type V3 = [number, number, number];
@@ -878,6 +879,36 @@ describe('every opening in the castle: one owner, one outline, room to open', ()
     expect(poses).toBeGreaterThan(1000);
     expect(checked).toBeGreaterThan(5000);
     expect([...faults.values()]).toEqual([]);
+  }, 120_000);
+
+  // Anders, 2026-11-08 (live, WebGPU): the reveal of a courtyard door rendered pitch black beside the daylit
+  // wall. Its outer half was tagged to the room behind, so it got that room's daylight through the shut
+  // door (none) and no sun (the outdoor doorways use the underground set). Over every outdoor door of the
+  // castle: the interior stone in the outer half of the passage takes the sky (OUTDOOR_TAG), the inner
+  // half its room.
+  it('lights the outer half of every outdoor doorway from the sky, the inner half from its room', () => {
+    baked();
+    const faults: string[] = [];
+    let outer = 0, inside = 0;
+    const outdoorDoors = P.doors.filter((d) => OUTDOOR.has(d.spaces[0]) !== OUTDOOR.has(d.spaces[1]));
+    for (const g of inner.groups) g.object.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const pos = m.geometry.getAttribute('position'), tag = m.geometry.getAttribute('interiorRoom');
+      for (let i = 0; i < pos.count; i += 3) {
+        const c: V3 = [0, 1, 2].map((k) => (pos.getComponent(i, k) + pos.getComponent(i + 1, k) + pos.getComponent(i + 2, k)) / 3) as V3;
+        for (const d of outdoorDoors) {
+          const s = OUTDOOR.has(d.spaces[0]) ? -1 : 1, dx = c[0] - d.centre[0], dz = c[2] - d.centre[2];
+          const through = (dx * d.normal[0] + dz * d.normal[1]) * s, across = dx * d.along[0] + dz * d.along[1];
+          if (Math.abs(across) > d.width / 2 + 0.05 || c[1] < d.centre[1] + 0.05 || c[1] > d.centre[1] + d.height) continue;
+          if (through > 0.1 && through < d.wall / 2 - 0.02) { outer++; if (tag.getX(i) !== OUTDOOR_TAG) faults.push(`${d.id}: outer reveal tagged ${tag.getX(i)}`); }
+          if (through < -0.1 && through > -d.wall / 2 + 0.02) { inside++; if (tag.getX(i) < 0) faults.push(`${d.id}: inner reveal tagged ${tag.getX(i)}`); }
+        }
+      }
+    });
+    expect(faults.slice(0, 10)).toEqual([]);
+    expect(outer).toBeGreaterThan(30);
+    expect(inside).toBeGreaterThan(30);
   }, 120_000);
 
   it('lays no real stone, at any level of detail, in a doorway', () => {

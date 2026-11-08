@@ -22,7 +22,7 @@ import { tagBoxes } from '../world/visibility';
 import { Builder, type MatKey } from '../castle/builder';
 import type { InteriorGroup, InteriorPlan, SpaceId, V3 } from '../castle/interior/types';
 import {
-  type Aperture, type Daylight, type WindowInput, type RoomGrid, AP_TEXELS, apertureFrame, ceilingSkins, doorsToApertures, fillRoomGrid, passageSkins, packTable, roomGridFor, skinQuads, solveRooms, tagTriangles, windowsToApertures,
+  type Aperture, type Daylight, type WindowInput, type RoomGrid, AP_TEXELS, apertureFrame, outdoorRevealTest, ceilingSkins, doorsToApertures, fillRoomGrid, passageSkins, packTable, roomGridFor, skinQuads, solveRooms, tagTriangles, windowsToApertures,
 } from './interiorMath';
 
 import { MAX_AP } from './interiorShader';
@@ -55,9 +55,18 @@ export interface InteriorLight {
   fires: THREE.DataTexture;
   /** this frame's flicker of every fire (FireTable.flick), MAX_FIRES per row */
   flick: THREE.DataTexture;
+  /** daylight on the outer half of an outdoor doorway (OUTDOOR_TAG), as the courtyard wall beside it gets
+   * it from the hemisphere light and the sky: sky colour facing up, ground colour facing down; the bake
+   * scales it with the sun's height */
+  outdoor: { sky: THREE.UniformNode<'vec3', THREE.Vector3>; ground: THREE.UniformNode<'vec3', THREE.Vector3> };
   /** which room a point is in, for surfaces with no room tag (door leaves); filled by the bake */
   grid: { texture: THREE.Data3DTexture; origin: THREE.UniformNode<'vec3', THREE.Vector3>; cell: THREE.UniformNode<'vec3', THREE.Vector3>; size: THREE.UniformNode<'vec3', THREE.Vector3>; model: RoomGrid };
 }
+
+/** The outdoor ambient at full daylight (world/sky.ts): the hemisphere light (0xcfd0cb over 0x5d6446 at
+ * 0.75) plus the sky environment at 0.5 (≈ π × 0.27 sky radiance × 0.5 from above). */
+export const OUTDOOR_SKY = [0.81 * 0.75 + 0.42, 0.82 * 0.75 + 0.44, 0.8 * 0.75 + 0.47];
+export const OUTDOOR_GROUND = [0.36 * 0.75 + 0.1, 0.39 * 0.75 + 0.1, 0.27 * 0.75 + 0.1];
 
 const nearest = <T extends THREE.Texture>(t: T) => { t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
 
@@ -72,6 +81,7 @@ export function createInteriorLight(maxRooms = 1024, rooms: InteriorPlan['rooms'
   const v = (a: number[]) => uniform(new THREE.Vector3(a[0], a[1], a[2]));
   return {
     table, maxRooms, floor: uniform(new THREE.Vector3(0.145, 0.145, 0.155)), gain: uniform(12), glow: uniform(1), fires, flick,
+    outdoor: { sky: v(OUTDOOR_SKY), ground: v(OUTDOOR_GROUND) },
     grid: { texture: tex, origin: v(model.origin), cell: v(model.cell), size: v(model.size), model },
   };
 }
@@ -223,7 +233,7 @@ export interface InteriorBake {
  * same walk, each mesh is frustum culled by its rooms' boxes instead of one sphere round the group
  * (world/visibility.ts tagBoxes); which groups are drawn stays the room graph's.
  */
-export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'], index: Map<SpaceId, number>, maxWall: number) {
+export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'], index: Map<SpaceId, number>, maxWall: number, outdoor?: (p: V3) => boolean) {
   let tris = 0;
   for (const g of groups) {
     const prefer = new Set(g.rooms.map((id) => index.get(id)).filter((i): i is number => i !== undefined));
@@ -240,7 +250,7 @@ export function tagGroups(groups: InteriorGroup[], rooms: InteriorPlan['rooms'],
         _v.fromBufferAttribute(pos as THREE.BufferAttribute, i).applyMatrix4(mesh.matrixWorld); wp.set([_v.x, _v.y, _v.z], i * 3);
         if (wn) { _n.fromBufferAttribute(nor as THREE.BufferAttribute, i).applyMatrix3(_nm); wn.set([_n.x, _n.y, _n.z], i * 3); }
       }
-      const tags = tagTriangles(wp, wn, rooms, maxWall, prefer);
+      const tags = tagTriangles(wp, wn, rooms, maxWall, prefer, outdoor);
       geo.setAttribute('interiorRoom', new THREE.BufferAttribute(tags, 1));
       const boxes = tagBoxes(wp, tags).map((b) => new THREE.Box3(new THREE.Vector3(...b.min), new THREE.Vector3(...b.max)));
       mesh.userData.roomBoxes = boxes; // world space: the groups never move
@@ -260,7 +270,7 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
   const t0 = now();
   const rooms = opts.plan.rooms.slice(0, opts.light.maxRooms);
   const index = new Map(rooms.map((r, i) => [r.id, i] as [SpaceId, number]));
-  const triangles = tagGroups(groups, rooms, index, opts.maxWall ?? 4.5);
+  const triangles = tagGroups(groups, rooms, index, opts.maxWall ?? 4.5, outdoorRevealTest(opts.plan.doors));
   fillRoomGrid(opts.light.grid.model, rooms); opts.light.grid.texture.needsUpdate = true;
   const t1 = now();
   const aps: (Aperture & { group?: string })[] = [...windowsToApertures(rooms, opts.windows), ...doorsToApertures({ ...opts.plan, rooms }, index)];
@@ -296,6 +306,8 @@ export function bakeInteriorLight(groups: InteriorGroup[], occluder: SunOccluder
     day.sunDir = sun.dir; day.sunE = sun.irradiance;
     const dayK = Math.min(1, Math.max(0.04, (sun.dir[1] + 0.05) / 0.35));
     day.skyL = [skyBase[0] * dayK, skyBase[1] * dayK, skyBase[2] * dayK];
+    opts.light.outdoor.sky.value.set(OUTDOOR_SKY[0] * dayK, OUTDOOR_SKY[1] * dayK, OUTDOOR_SKY[2] * dayK);
+    opts.light.outdoor.ground.value.set(OUTDOOR_GROUND[0] * dayK, OUTDOOR_GROUND[1] * dayK, OUTDOOR_GROUND[2] * dayK);
     sunVis = aps.map(sunVisibility);
     solved = solveRooms(rooms, aps, day, sunVis, links);
     write();

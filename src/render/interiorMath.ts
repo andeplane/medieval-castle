@@ -324,7 +324,24 @@ export function meanLog2(px: ArrayLike<number>, w: number, h: number, stride = 4
 
 /** Room index per vertex for a non-indexed, world-space triangle soup: each triangle steps 0.25 m off
  * its face along its normal and takes the nearest room within maxWall; all three vertices share it. */
-export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | null, rooms: RoomSpec[], maxWall: number, prefer?: Set<number>) {
+/** Tag of a surface on the courtyard or outer side of an outdoor doorway: lit by the sky, not by a room. */
+export const OUTDOOR_TAG = -2;
+
+/**
+ * Is a point in the outer half of an outdoor doorway's passage (from the wall's mid plane out to its outer
+ * face, the jambs and the soffit)? That stone faces the courtyard, so it takes the sky's light; tagged
+ * to the room behind, it got that room's daylight through a shut door (none) and rendered black.
+ */
+export function outdoorRevealTest(doors: DoorSpec[]): (p: V3) => boolean {
+  const out = doors.filter((d) => OUTSIDE.has(d.spaces[0]) !== OUTSIDE.has(d.spaces[1])).map((d) => ({ d, s: OUTSIDE.has(d.spaces[0]) ? -1 : 1 }));
+  return (p) => out.some(({ d, s }) => {
+    const dx = p[0] - d.centre[0], dz = p[2] - d.centre[2];
+    const through = (dx * d.normal[0] + dz * d.normal[1]) * s, across = dx * d.along[0] + dz * d.along[1];
+    return through > 0.01 && through <= d.wall / 2 + 0.3 && Math.abs(across) <= d.width / 2 + 0.6 && p[1] >= d.centre[1] - 0.3 && p[1] <= d.centre[1] + d.height + d.width * 0.6 + 0.6;
+  });
+}
+
+export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | null, rooms: RoomSpec[], maxWall: number, prefer?: Set<number>, outdoor?: (p: V3) => boolean) {
   const n = Math.floor(pos.length / 3), out = new Float32Array(n).fill(-1);
   for (let t = 0; t + 2 < n; t += 3) {
     const p: V3 = [0, 0, 0];
@@ -335,7 +352,7 @@ export function tagTriangles(pos: ArrayLike<number>, nor: ArrayLike<number> | nu
       q = cross3(e1, e2);
     }
     q = norm3(q);
-    const room = nearestRoom(rooms, [p[0] + q[0] * 0.25, p[1] + q[1] * 0.25, p[2] + q[2] * 0.25], maxWall, prefer);
+    const room = outdoor?.(p) ? OUTDOOR_TAG : nearestRoom(rooms, [p[0] + q[0] * 0.25, p[1] + q[1] * 0.25, p[2] + q[2] * 0.25], maxWall, prefer);
     out[t] = out[t + 1] = out[t + 2] = room;
   }
   return out;

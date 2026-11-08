@@ -7,7 +7,7 @@ import {
 } from 'three/tsl';
 import type { Node } from 'three/webgpu';
 import type { InteriorLight } from './interiorLight';
-import { AP_TEXELS } from './interiorMath';
+import { AP_TEXELS, OUTDOOR_TAG } from './interiorMath';
 import { MAX_FIRES, FIRE_TEXELS } from '../light/roomLight';
 
 export const MAX_AP = 8;          // apertures per room the shader integrates
@@ -31,6 +31,8 @@ export function interiorIrradiance(light: InteriorLight) {
     const r = row().toVar();
     const P = positionWorld, N = normalWorld.toVar();
     const E = vec3(light.floor).toVar();
+    // the outer half of an outdoor doorway: the courtyard's sky and ground, as on the wall beside it
+    If(r.equal(OUTDOOR_TAG), () => { E.assign(mix(light.outdoor.ground, light.outdoor.sky, N.y.mul(0.5).add(0.5))); });
     If(r.greaterThanEqual(0), () => {
       const head = tex(int(0), r);
       E.addAssign(head.yzw.mul(light.gain));
@@ -110,7 +112,7 @@ export function fireIrradiance(light: InteriorLight) {
   return Fn(() => {
     const r = row().toVar();
     const P = positionWorld, N = normalWorld.toVar();
-    If(r.lessThan(0), () => {
+    If(r.equal(-1), () => {
       const g = light.grid;
       const q = P.add(N.mul(0.3)).sub(g.origin).div(g.cell).floor();
       const c = ivec3(clamp(q, vec3(0), g.size.sub(1)));

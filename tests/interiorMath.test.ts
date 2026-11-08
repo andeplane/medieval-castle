@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   EXPOSURE, adaptStops, apertureFrame, apertureRadiance, ceilingSkins, doorsToApertures, inPoly, meanLog2, nearestRoom, packTable, polyArea, polyDist,
-  passageSkins, polyPerimeter, roomGridFor, fillRoomGrid, gridRoom, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
+  passageSkins, polyPerimeter, outdoorRevealTest, OUTDOOR_TAG, roomGridFor, fillRoomGrid, gridRoom, rayEnterPoly, roomAt, skinQuads, solveRooms, sunThrough, tagTriangles, targetStops, windowsToApertures, type Aperture, type Daylight,
 } from '../src/render/interiorMath';
 import type { DoorSpec, InteriorPlan, RoomSpec } from '../src/castle/interior/types';
 import type { V2 } from '../src/core/math2d';
@@ -240,5 +240,26 @@ describe('room grid', () => {
     const none = roomGridFor([]);
     expect(none.size).toEqual([1, 1, 1]);
     expect(gridRoom(fillRoomGrid(none, []), [0, 0, 0])).toBe(-1);
+  });
+});
+
+describe('outdoor doorway reveals', () => {
+  test('the outer half of an outdoor doorway is the sky\'s, the inner half its room\'s', () => {
+    // a courtyard door in the hall's east wall: the courtyard (spaces[0]) east of it, the normal points west into the hall
+    const d = door({ id: 'court>H', spaces: ['courtyard', 'H'], centre: [12.7, 0, 5], normal: [-1, 0], along: [0, 1], wall: 1.4 });
+    const out = outdoorRevealTest([d, door({})]);
+    expect(out([13.2, 1, 5])).toBe(true);      // courtyard half, jamb height
+    expect(out([13.3, 2.6, 5.4])).toBe(true);  // soffit
+    expect(out([12.2, 1, 5])).toBe(false);     // hall half
+    expect(out([13.2, 1, 9])).toBe(false);     // beside the door, in the wall
+    expect(out([13.2, 6, 5])).toBe(false);     // above the head
+    // tagging: a jamb triangle facing across the passage, on each half
+    const tri = (x: number) => new Float32Array([x, 0.5, 4.4, x + 0.2, 0.5, 4.4, x, 1.5, 4.4]);
+    expect(tagTriangles(tri(13.1), null, rooms, 4.5, undefined, out)[0]).toBe(OUTDOOR_TAG);
+    expect(tagTriangles(tri(12.1), null, rooms, 4.5, undefined, out)[0]).toBe(0);
+    // the other way round (spaces[1] outdoors) and an indoor door: never the sky's
+    const d2 = door({ id: 'H>court', spaces: ['H', 'courtyard'], centre: [12.7, 0, 5], normal: [1, 0], along: [0, 1], wall: 1.4 });
+    expect(outdoorRevealTest([d2])([13.2, 1, 5])).toBe(true);
+    expect(outdoorRevealTest([door({})])([13.2, 1, 5])).toBe(false);
   });
 });
