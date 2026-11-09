@@ -5,7 +5,7 @@
 // ?test=stairs (stair test scene instead of the castle; &cut for a cutaway drum),
 // ?test=room (no castle: a test hall + chamber for the interior light, debug/roomtest.ts).
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView } from 'three/tsl';
+import { pass, mrt, output, normalView, builtinAOContext, screenUV, renderOutput, luminance, mix, vec3, vec4, float, clamp, smoothstep, positionView, perspectiveDepthToViewZ, reference, uniform, select, renderGroup } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { makeMaterials } from './render/materials';
 import { buildCastle } from './castle/castle';
@@ -40,7 +40,7 @@ import { wallTorches, furnitureFires } from './render/interiorFire';
 import { createWindowFlags, makeWindowGlass, triFrames, groupIndexOfRooms, tagWindowGroups, nightOf } from './render/windowGlass';
 import { lightCastle } from './light/roomLight';
 import { PROFILES, flicker } from './light/flicker';
-import { makeFlameSprites } from './light/three';
+import { makeFlameSprites, type SceneDepth } from './light/three';
 import { flameBrightness } from './light/flames';
 import type { WorkerPort, FurnitureJobs } from './props/furnishWorker';
 import type { FurnitureStreamer, WantedRooms } from './props/streamer';
@@ -280,6 +280,7 @@ async function main() {
   const scenePass = pass(scene, camera);
   let aoTex: THREE.Node | null = null;
   let prePass: ReturnType<typeof pass> | null = null;
+  let flameDepth: SceneDepth | null = null;
   if (params.get('ao') !== '0') {
     // the pre-pass sees no further than the AO can show (aoFar below fades it out by AO_FADE): its camera is the
     // view's with a nearer far plane, so whatever lies wholly beyond is not drawn into it (render/aoCamera.ts)
@@ -306,6 +307,14 @@ async function main() {
     // half-res AO turns to noise far away; fade it out with distance (the textures carry their own AO)
     const aoFar = smoothstep(110, AO_FADE, positionView.z.negate());
     scenePass.contextNode = builtinAOContext(mix(aoNode.sample(screenUV).r, float(1), aoFar));
+    // the same depth lets the flame sprites meet the stone round them softly (light/three.ts SceneDepth); only
+    // while the view camera draws (the water's reflection has its own camera, for which this depth is wrong)
+    const d = pre.getTextureNode('depth').sample(screenUV).r;
+    const far = perspectiveDepthToViewZ(d, reference('near', 'float', preCamera), reference('far', 'float', preCamera)).negate();
+    flameDepth = {
+      distance: select(d.lessThan(1), far, float(1e6)),
+      on: uniform(0).setGroup(renderGroup).onRenderUpdate(({ camera: c }) => (c === camera ? 1 : 0)),
+    };
   }
   if (params.get('grade') !== '0') {
     // after tone mapping: a touch less saturation (candy greens and blues read as CG), a gentle
@@ -426,7 +435,7 @@ async function main() {
   const caveRooms = new Set(lit.plan.rooms.filter((r) => r.zone === CAVE_ZONE).map((r) => r.id));
   const lookDir = new THREE.Vector3();
   const flameK = new Float32Array(flames.length);
-  const sprites = makeFlameSprites(flames);
+  const sprites = makeFlameSprites(flames, 0, flameDepth);
   for (const m of sprites.group.children) m.layers.set(FX_LAYER); // not into the AO pre-pass (render/passLayers.ts)
   scene.add(sprites.group);
   let fireT = 0;

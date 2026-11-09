@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three/webgpu';
-import { threeLightFactory, makeFlameSprites } from '../../src/light/three';
+import { threeLightFactory, makeFlameSprites, glowInFront, haloSigma } from '../../src/light/three';
+import { float, uniform } from 'three/tsl';
+import { LOOKS } from '../../src/light/flames';
 import { linkFlames } from '../../src/light/flames';
 import { LightRig } from '../../src/light/rig';
 
@@ -75,5 +77,22 @@ describe('three.js light adapter', () => {
     S.set([]);
     expect(S.count).toBe(0);
     expect(S.group.children.every((c) => !c.visible)).toBe(true);
+  });
+
+  it('the halo fades smoothly into surfaces near the flame instead of being cut in a line', () => {
+    // a torch's glow (0.24 m flame × haloSize) is a gaussian ~13 cm wide; its stick runs through it
+    const s = haloSigma(0.24 * LOOKS.torch.haloSize);
+    expect(s).toBeGreaterThan(0.1); expect(s).toBeLessThan(0.16);
+    expect(glowInFront(5, 5, s)).toBeCloseTo(0.5, 5); // a surface through the flame's centre gets the front half
+    expect(glowInFront(5 + 4 * s, 5, s)).toBeGreaterThan(0.99); // well behind: all of it
+    expect(glowInFront(5 - 4 * s, 5, s)).toBeLessThan(0.01); // well in front: none
+    // no step anywhere: across the stick (a few cm either side of the centre) it changes gradually
+    for (let d = -3 * s; d < 3 * s; d += 0.01) expect(Math.abs(glowInFront(5 + d + 0.01, 5, s) - glowInFront(5 + d, 5, s))).toBeLessThan(0.06);
+    // the sprites take the scene depth: same meshes, the depth only shapes their shaders
+    const fl = linkFlames([{ kind: 'torch', base: [0, 1, 0], height: 0.24 }], []);
+    const S = makeFlameSprites(fl, 0, { distance: float(3), on: uniform(1) });
+    expect(S.group.children.map((c) => c.name)).toEqual(['flame-smoke', 'flame-body', 'flame-halo']);
+    const halo = (S.group.children[2] as THREE.Mesh).material as THREE.MeshBasicNodeMaterial;
+    expect(halo.vertexNode).toBeTruthy(); expect(halo.colorNode).toBeTruthy();
   });
 });
