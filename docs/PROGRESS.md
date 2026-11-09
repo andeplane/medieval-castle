@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-11-09: no hard line across a torch's stick (branch `claude/project-thread-03wevl`)
+
+Anders: on a wall torch the lower half of the stick was light and the upper half dark, split by a straight line that moved up and down. Cause: the flame's halo (light/three.ts) is one flat camera-facing quad through the flame centre, additive and depth-tested, so it lit only what lay behind that plane; the stick leans out from the wall through the glow, so the plane cut it in a hard line that slid along it as the camera moved. The same held for any surface through a halo, flame body or smoke column (a hearth's logs, a tunnel vault over a torch's smoke).
+
+Fix, in the one flame-sprite system: the sprites read the view's opaque depth (the AO pre-pass's depth, already drawn every frame; `SceneDepth` from main.ts, only while the view camera draws, not the water's reflection). The halo is treated as the glow of the air round the flame, a gaussian: a pixel gets the part in front of the surface it meets, Φ((surface − flame centre) / σ) (`glowInFront`), and its quad stands 3σ in front of the flame so the depth test no longer cuts it. Flame bodies and smoke fade out over their own half-width before a surface instead of being cut. Without the pre-pass (`?ao=0`, props.html, lights.html) the sprites draw as before.
+
+Checked: tests/light/three.test.ts (Φ has no step across the stick; sprites build with depth). Headless WebGL2 captures of tunnel-4's torch from three poses, main vs branch: the difference is the halo on the stick's upper part, which main cut off in a straight edge; the branch has it fading smoothly. Not checked: WebGPU on Anders's Mac before merge (to do on the live build). `__game.setPose` is now unclamped so poses can be underground.
+
 ## 2026-11-08: fireplace rooms checked over the whole castle: not washed out; no rug on a carpet (branch `claude/project-thread-ns4g2v-hearthroom`)
 
 Anders (`?furniture=1`): a room with a fireplace looked washed out and flickering. #71 measured 1.5 m from the hall's (N1-2) and a study's (N2-0) hearth: scene-pass HDR mean ≈ 1.1, p99 6.6–9.8, exposure pinned at its 0.72 floor, 21–23 % of pixels over white. #71 (hearths 14 → 6 cd, caps per room, one stop lower indoors), #76 (hearth light in the fire) and #78 (fire loop unrolled) followed. This round checks every such room on main, not two.
